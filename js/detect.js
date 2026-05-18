@@ -1,4 +1,7 @@
 var ipc = require("electron").ipcRenderer;
+var workspace = require("./workspace");
+var project = require("./project");
+project.tryRestoreActiveProject();
 var run = document.getElementById("run");
 var indir = document.getElementById("indir");
 var outdir = document.getElementById("outdir");
@@ -145,29 +148,7 @@ ipc.on("updateLoad", function (event, response) {
   loadmessage.innerHTML = response[1];
 });
 
-indir.addEventListener("click", function () {
-  ipc.once("returnPath", function (event, response) {
-    if (response[1] == "indir") {
-      indir.value = response[0];
-    }
-  });
-  ipc.send("openDialog", "indir");
-});
-
-outdir.addEventListener("click", function () {
-  ipc.once("returnPath", function (event, response) {
-    if (response[1] == "outdir") {
-      outdir.value = response[0];
-    }
-  });
-  ipc.send("openDialog", "outdir");
-});
-
-model.addEventListener("click", function () {
-  ipc.once("returnPath", function (event, response) {
-    if (response[1] == "model") {
-      model.value = response[0];
-    }
-  });
-  ipc.send("openFileDialog", "model");
-});
+workspace.applyPreset("detect");
+workspace.bindPathPicker(indir, "indir", "max");
+workspace.bindPathPicker(outdir, "outdir", "predictions");
+workspace.bindPathPicker(model, "model", null, true);

@@ -8,9 +8,27 @@ JSON project file.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+LAYOUT_MASONJAR_V1 = "masonjar_v1"
+LAYOUT_BELLJAR_V1 = "belljar_v1"
+LAYOUT_IDS = (LAYOUT_MASONJAR_V1, LAYOUT_BELLJAR_V1)
+PROJECT_VERSION_V1 = "1.0"
+
+# Canonical relative role paths inside a masonjar_v1 / belljar_v1 bundle.
+CANONICAL_ROLE_PATHS: dict[str, str] = {
+    "original_scans": "data/original_scans",
+    "dapi": "data/counting/00_dapi",
+    "slices": "data/counting/01_slices",
+    "max": "data/counting/03_max",
+    "predictions": "data/counting/05_predictions",
+    "quantification": "data/counting/06_quantification",
+    "pkls": "data/counting/07_pkls",
+    "dual": "data/counting/08_dual",
+}
 
 
 @dataclass
@@ -70,22 +88,69 @@ class BelljarProject:
 
     Large arrays (annotation maps) are stored as .npy files in the output directory
     and referenced by path — not embedded in the project file.
+
+    v1 bundle fields (layout ``masonjar_v1`` or ``belljar_v1``):
+    - ``roles``: logical role → relative path inside bundle (or absolute when reference-only)
+    - ``sources``: original user paths at import (audit / re-sync)
+    - ``settings``: per-step defaults
+    - ``pipeline``: optional step completion metadata
     """
 
-    version: str = "2.0"
+    version: str = PROJECT_VERSION_V1
     name: str = ""
+    layout: str = LAYOUT_MASONJAR_V1
+    created: str = ""
+    modified: str = ""
+    roles: dict[str, str] = field(default_factory=dict)
+    sources: dict[str, str] = field(default_factory=dict)
+    settings: dict[str, Any] = field(default_factory=dict)
+    pipeline: dict[str, Any] = field(default_factory=dict)
+    reference_only: bool = False
+    # Legacy / pipeline fields retained for older projects and modern CLI steps.
     input_path: str = ""
     output_path: str = ""
     atlas_name: str = "allen_mouse_10um"
     config_overrides: dict[str, Any] = field(default_factory=dict)
     alignments: dict[str, dict[str, Any]] = field(default_factory=dict)
 
+    def touch_modified(self) -> None:
+        self.modified = datetime.now(timezone.utc).isoformat()
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
     def save(self, path: Path) -> None:
-        with open(path, "w") as f:
-            json.dump(self.__dict__, f, indent=2, default=str)
+        self.touch_modified()
+        if not self.created:
+            self.created = self.modified
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, indent=2, default=str)
 
     @classmethod
     def load(cls, path: Path) -> BelljarProject:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        return cls(**data)
+        known = {f.name for f in fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in known}
+        return cls(**filtered)
+
+    @classmethod
+    def new_v1_bundle(
+        cls,
+        name: str,
+        *,
+        reference_only: bool = False,
+        roles: dict[str, str] | None = None,
+        sources: dict[str, str] | None = None,
+    ) -> BelljarProject:
+        now = datetime.now(timezone.utc).isoformat()
+        return cls(
+            version=PROJECT_VERSION_V1,
+            name=name,
+            layout=LAYOUT_MASONJAR_V1,
+            created=now,
+            modified=now,
+            roles=dict(roles or CANONICAL_ROLE_PATHS),
+            sources=dict(sources or {}),
+            reference_only=reference_only,
+        )

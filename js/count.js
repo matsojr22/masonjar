@@ -1,4 +1,7 @@
 var ipc = require('electron').ipcRenderer;
+var workspace = require('./workspace');
+var project = require('./project');
+project.tryRestoreActiveProject();
 var run = document.getElementById('run');
 var preddir = document.getElementById('preddir');
 var annodir = document.getElementById('annodir');
@@ -58,29 +61,7 @@ ipc.on('updateLoad', function (event, response) {
     loadmessage.innerHTML = response[1];
 });
 
-preddir.addEventListener('click', function(){
-    ipc.once('returnPath', function(event, response){
-        if (response[1] == 'preddir') {
-            preddir.value = response[0];
-        }
-    })
-    ipc.send('openDialog', 'preddir');
-});
-
-annodir.addEventListener('click', function(){
-    ipc.once('returnPath', function(event, response){
-        if (response[1] == 'annodir') {
-            annodir.value = response[0];
-        }
-    })
-    ipc.send('openDialog', 'annodir');
-});
-
-outdir.addEventListener('click', function(){
-    ipc.once('returnPath', function(event, response){
-        if (response[1] == 'outdir') {
-            outdir.value = response[0];
-        }
-    })
-    ipc.send('openDialog', 'outdir');
-});
+workspace.applyPreset('count');
+workspace.bindPathPicker(preddir, 'preddir', 'predictions');
+workspace.bindPathPicker(annodir, 'annodir', 'slices');
+workspace.bindPathPicker(outdir, 'outdir', 'quantification');

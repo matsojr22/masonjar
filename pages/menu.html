@@ -9,7 +9,7 @@
       integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC"
       crossorigin="anonymous"
     />
-    <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+    <link rel="stylesheet" href="../css/theme.css" />
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net/; font-src 'self' https://fonts.gstatic.com;"
@@ -18,7 +18,7 @@
       http-equiv="X-Content-Security-Policy"
       content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net/; font-src 'self' https://fonts.gstatic.com;"
     />
-    <title>Bell Jar</title>
+    <title>Mason Jar</title>
   </head>
   <body>
     <div id="parent" class="container h-100">
@@ -26,48 +26,99 @@
         <div class="col">
           <h1>Menu</h1>
           <p>
-            <br />
-            Here are the tools offered by Bell Jar. Select one to begin.
-            <br />
+            Open a <code>.masonjar</code> project or a legacy brain folder. Legacy
+            <code>.belljar</code> projects still supported. Tools pre-fill paths from
+            the project or standard <code>counting/</code> layout.
           </p>
         </div>
       </div>
-      <div class="row align-items-center">
-        <div class="col d-grid gap-2">
-          <h5 class="text-center">Preprocessing</h5>
-          <a role="button" class="btn btn-primary" href="./max.html"
-            >Max Projection</a
-          >
-          <a role="button" class="btn btn-primary" href="./sharpen.html"
-            >Sharpen</a
-          >
-        </div>
-        <div class="col d-grid gap-2">
-          <h5 class="text-center">Prediction</h5>
-          <a role="button" class="btn btn-primary" href="./detect.html"
-            >Cell Detection</a
-          >
-          <a role="button" class="btn btn-primary" href="./align.html"
-            >Align Sections</a
-          >
-          <a role="button" class="btn btn-primary" href="./adjust.html"
-            >Viewer</a
-          >
-        </div>
-        <div class="col d-grid gap-2">
-          <h5 class="text-center">Analysis</h5>
-          <a role="button" class="btn btn-primary" href="./count.html"
-            >Count Brain</a
-          >
-          <a role="button" class="btn btn-primary" href="./intensity.html"
-            >Isolate Regions</a
-          >
 
-          <a role="button" class="btn btn-secondary" href="./collate.html"
-            >Collate Counts</a
-          >
+      <div class="row align-items-center m-2 workspace-block">
+        <div class="col">
+          <h5>Project</h5>
+          <div class="d-flex flex-wrap gap-2 mb-2">
+            <a class="btn btn-primary" href="./project_wizard.html?mode=new">New project</a>
+            <button type="button" class="btn btn-outline-primary" id="openProject">
+              Open project
+            </button>
+            <a class="btn btn-outline-secondary" href="./project_wizard.html?mode=migrate"
+              >Migrate to .masonjar</a
+            >
+            <button type="button" class="btn btn-outline-secondary" id="closeProject">
+              Close project
+            </button>
+          </div>
+          <p id="projectStatus" class="workspace-status text-muted">No project open.</p>
+          <h6 class="mt-3">Recent projects</h6>
+          <ul id="recentProjects" class="list-group list-group-flush small"></ul>
         </div>
       </div>
+
+      <div class="row align-items-center m-2 workspace-block">
+        <div class="col">
+          <h5>Legacy brain workspace</h5>
+          <div class="input-group mb-2">
+            <input
+              type="text"
+              id="brainRoot"
+              class="form-control"
+              placeholder="M### brain folder (parent of counting/)"
+              readonly
+            />
+            <button type="button" class="btn btn-outline-primary" id="chooseBrain">
+              Open legacy folder
+            </button>
+            <button type="button" class="btn btn-outline-secondary" id="rescanBrain">
+              Rescan
+            </button>
+          </div>
+          <p id="workspaceStatus" class="workspace-status text-muted"></p>
+        </div>
+      </div>
+
+      <div class="row align-items-stretch m-2 g-3 menu-categories">
+        <div class="col-md-6 col-lg-3 d-grid">
+          <a
+            role="button"
+            class="btn btn-primary menu-card"
+            href="./menu_category.html?cat=preprocess"
+          >
+            <span class="menu-card-title">Image preprocessing</span>
+            <span class="menu-card-sub">Max projection, Sharpen</span>
+          </a>
+        </div>
+        <div class="col-md-6 col-lg-3 d-grid">
+          <a
+            role="button"
+            class="btn btn-primary menu-card"
+            href="./menu_category.html?cat=alignment"
+          >
+            <span class="menu-card-title">Atlas alignment</span>
+            <span class="menu-card-sub">Align sections, Viewer/Editor</span>
+          </a>
+        </div>
+        <div class="col-md-6 col-lg-3 d-grid">
+          <a
+            role="button"
+            class="btn btn-primary menu-card"
+            href="./menu_category.html?cat=detection"
+          >
+            <span class="menu-card-title">Cell detection</span>
+            <span class="menu-card-sub">Detection, Count, Collate</span>
+          </a>
+        </div>
+        <div class="col-md-6 col-lg-3 d-grid">
+          <a
+            role="button"
+            class="btn btn-primary menu-card"
+            href="./menu_category.html?cat=exports"
+          >
+            <span class="menu-card-title">Image &amp; atlas exports</span>
+            <span class="menu-card-sub">Isolate regions, Dual-channel TIFs</span>
+          </a>
+        </div>
+      </div>
+
       <div class="row align-items-center m-4">
         <div class="col d-grid gap-2">
           <a role="button" class="btn btn-warning" href="./index.html">Back</a>
@@ -79,5 +130,8 @@
       integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p"
       crossorigin="anonymous"
     ></script>
+    <script src="../js/workspace.js"></script>
+    <script src="../js/project.js"></script>
+    <script src="../js/menu.js"></script>
   </body>
 </html>

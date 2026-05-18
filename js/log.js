@@ -1,75 +1,88 @@
-var ipc = require('electron').ipcRenderer;
+var ipc = require("electron").ipcRenderer;
 
-var log = document.getElementById('log');
+var log = document.getElementById("log");
 
+/** Max (br+span) pairs kept in the log DOM to bound renderer memory. */
+var MAX_LOG_LINES = 8000;
 
-function makeSpan(text){
-    // Make lines separeted by <br> and add span
-    return `<br></br><span>${text}</span>`;
+/** Do not persist more than this many characters to localStorage. */
+var MAX_LOG_STORAGE_CHARS = 400000;
+
+function appendLogChunk(text) {
+  var lines = text.split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var br = document.createElement("br");
+    var span = document.createElement("span");
+    span.textContent = lines[i];
+    log.appendChild(br);
+    log.appendChild(span);
+  }
+  trimLogDom();
+  window.scrollTo(0, document.body.scrollHeight);
 }
 
-function cacheLog(){
-    // store log between refreshes
-    var log = document.getElementById('log');
-    var logText = log.innerHTML;
-    localStorage.setItem('log', logText);
+function trimLogDom() {
+  var maxNodes = MAX_LOG_LINES * 2;
+  while (log.childNodes.length > maxNodes) {
+    log.removeChild(log.firstChild);
+    log.removeChild(log.firstChild);
+  }
 }
 
-function loadLog(){
-    // load log from cache
-    var log = document.getElementById('log');
-    var logText = localStorage.getItem('log');
-    log.innerHTML = logText;
+function cacheLog() {
+  var el = document.getElementById("log");
+  var logText = el.innerHTML;
+  if (logText.length > MAX_LOG_STORAGE_CHARS) {
+    logText = logText.slice(logText.length - MAX_LOG_STORAGE_CHARS);
+  }
+  localStorage.setItem("log", logText);
 }
 
-function clearCache(){
-    // clear log cache
-    localStorage.removeItem('log');
+function loadLog() {
+  var el = document.getElementById("log");
+  var logText = localStorage.getItem("log");
+  el.innerHTML = logText || "";
+  trimLogDom();
 }
 
-function checkLogExpiry(){
-    var expiry = new Date();
-    expiry.setDate(expiry.getDate() - 1);
-    var expiryTime = expiry.getTime();
-    var logTime = localStorage.getItem('logTime');
-    if (logTime == null){
-        cacheLogTime();
-        clearCache();
-        loadLog();
-    }
-
-    if(logTime < expiryTime){
-        clearCache();
-    } else {
-        loadLog();
-    }
+function clearCache() {
+  localStorage.removeItem("log");
 }
 
-function cacheLogTime(){
-    // store log time
-    var logTime = new Date().getTime();
-    localStorage.setItem('logTime', logTime);
-}
-
-// on load
-window.onload = function(){
-    checkLogExpiry();
-}
-
-ipc.on('savelogs', function(event, response){
-    cacheLog();
+function checkLogExpiry() {
+  var expiry = new Date();
+  expiry.setDate(expiry.getDate() - 1);
+  var expiryTime = expiry.getTime();
+  var logTimeRaw = localStorage.getItem("logTime");
+  if (logTimeRaw == null) {
     cacheLogTime();
+    clearCache();
+    loadLog();
+    return;
+  }
+  var logTime = Number(logTimeRaw);
+  if (logTime < expiryTime) {
+    clearCache();
+  } else {
+    loadLog();
+  }
+}
+
+function cacheLogTime() {
+  var logTime = new Date().getTime();
+  localStorage.setItem("logTime", String(logTime));
+}
+
+window.onload = function () {
+  checkLogExpiry();
+};
+
+ipc.on("savelogs", function (event, response) {
+  cacheLog();
+  cacheLogTime();
 });
 
-ipc.on('log', function(event, response){
-    console.log(response);
-    // Insert log message as span in log
-    // Split response text by newlines
-    let lines = response.split('\n');
-    // Make each line a span
-    lines.forEach(function(line){
-        log.innerHTML += makeSpan(line);
-    });
-    // Scroll to bottom of log
-    window.scrollTo(0,document.body.scrollHeight);
+ipc.on("log", function (event, response) {
+  console.log(response);
+  appendLogChunk(response);
 });

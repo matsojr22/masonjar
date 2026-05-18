@@ -24,6 +24,58 @@ var appDir = app.getAppPath();
 var win = null;
 var logWin = null;
 var isQuitting = false;
+/** Batch console mirroring to the log window to avoid IPC/DOM floods. */
+const LOG_UI_FLUSH_MS = 150;
+const LOG_UI_MAX_QUEUE = 4000;
+const LOG_UI_CHUNK_LINES = 350;
+let logUiQueue = [];
+let logUiFlushTimer = null;
+function flushLogUiQueue() {
+    logUiFlushTimer = null;
+    if (!logWin || !logWin.webContents || logUiQueue.length === 0) {
+        return;
+    }
+    try {
+        const take = Math.min(LOG_UI_CHUNK_LINES, logUiQueue.length);
+        const chunk = logUiQueue.splice(0, take);
+        logWin.webContents.send("log", chunk.join("\n"));
+    }
+    catch (_error) {
+        // log window was closed
+    }
+    if (logUiQueue.length > 0) {
+        logUiFlushTimer = setTimeout(flushLogUiQueue, LOG_UI_FLUSH_MS);
+    }
+}
+function queueLogLineForUi(line) {
+    logUiQueue.push(line);
+    if (logUiQueue.length > LOG_UI_MAX_QUEUE) {
+        logUiQueue.splice(0, logUiQueue.length - LOG_UI_MAX_QUEUE);
+    }
+    if (!logUiFlushTimer) {
+        logUiFlushTimer = setTimeout(flushLogUiQueue, LOG_UI_FLUSH_MS);
+    }
+}
+function drainLogUiQueueForQuit() {
+    if (logUiFlushTimer) {
+        clearTimeout(logUiFlushTimer);
+        logUiFlushTimer = null;
+    }
+    if (!logWin || !logWin.webContents) {
+        logUiQueue = [];
+        return;
+    }
+    while (logUiQueue.length > 0) {
+        try {
+            const chunk = logUiQueue.splice(0, LOG_UI_CHUNK_LINES);
+            logWin.webContents.send("log", chunk.join("\n"));
+        }
+        catch (_error) {
+            logUiQueue = [];
+            return;
+        }
+    }
+}
 var log = console.log;
 console.log = function () {
     var args = Array.from(arguments);
@@ -32,14 +84,38 @@ console.log = function () {
     let message = [prefix, ...args];
     log.apply(console, message);
     try {
-        logWin.webContents.send("log", message.join(" "));
+        queueLogLineForUi(message.join(" "));
     }
-    catch (error) {
-        // do nothing window was closed
+    catch (_error) {
+        // ignore
     }
 };
+app.on("before-quit", () => {
+    drainLogUiQueueForQuit();
+});
+const BRANDING = {
+    PRODUCT_NAME: "Mason Jar",
+    HOME_DIR: ".masonjar",
+    LEGACY_HOME_DIR: ".belljar",
+    LOG_FILE: "masonjar.log",
+    GITHUB_REPO: "matsojr22/masonjar",
+};
+function resolveHomeDir() {
+    const masonDir = path.join(app.getPath("home"), BRANDING.HOME_DIR);
+    const legacyDir = path.join(app.getPath("home"), BRANDING.LEGACY_HOME_DIR);
+    if (fs.existsSync(masonDir)) {
+        return masonDir;
+    }
+    const legacyHasEnv = fs.existsSync(path.join(legacyDir, "python")) ||
+        fs.existsSync(path.join(legacyDir, "benv"));
+    if (legacyHasEnv) {
+        console.log("Using legacy Bell Jar data directory:", legacyDir);
+        return legacyDir;
+    }
+    return masonDir;
+}
 // Path variables for easy management of execution
-const homeDir = path.join(app.getPath("home"), ".belljar");
+const homeDir = resolveHomeDir();
 // Mod is the proper path to the python/pip binary
 var mod = process.platform === "win32" ? "python/" : "python/bin/";
 var envMod = process.platform === "win32" ? "Scripts/" : "bin/";
@@ -52,7 +128,7 @@ var pyCommand = process.platform === "win32" ? "python.exe" : "./python3";
 // Path to our python files
 const pyScriptsPath = path.join(appDir, "/py");
 const CURRENT_VERSION_TAG = getVersion();
-const GITHUB_API_RELEASES = "https://api.github.com/repos/asoronow/belljar/releases/latest";
+const GITHUB_API_RELEASES = `https://api.github.com/repos/${BRANDING.GITHUB_REPO}/releases/latest`;
 function checkForUpdates() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
@@ -99,7 +175,7 @@ function move(o, t) {
     });
 }
 function createLogFile(message) {
-    const logPath = path.join(homeDir, "belljar.log");
+    const logPath = path.join(homeDir, BRANDING.LOG_FILE);
     fs.appendFileSync(logPath, message);
 }
 // Get files asynchonously
@@ -251,7 +327,7 @@ function setupPython(win) {
 // Download the required tar files from the bucket
 function downloadResources(win, fresh) {
     // Download the tar files into the homeDir and extract them to their respective folders
-    const current_versions = {
+    const currnet_versions = {
         nrrd: "v91",
         models: "v952",
         embeddings: "v6",
@@ -271,7 +347,7 @@ function downloadResources(win, fresh) {
             // Make sure the manifest exists and if not lets make one and then delte all these dirs and redownload
             if (!fs.existsSync(manifestPath)) {
                 // Create manifest from current versions
-                fs.writeFileSync(manifestPath, JSON.stringify(current_versions, null, 2));
+                fs.writeFileSync(manifestPath, JSON.stringify(currnet_versions, null, 2));
                 // Delete existing
                 downloading.push("models");
                 downloading.push("embeddings");
@@ -289,7 +365,7 @@ function downloadResources(win, fresh) {
                     }
                 }
             }
-            for (const [key, value] of Object.entries(current_versions)) {
+            for (const [key, value] of Object.entries(currnet_versions)) {
                 if (manifest[key] !== value) {
                     downloading.push(key);
                 }
@@ -306,7 +382,7 @@ function downloadResources(win, fresh) {
             }
             // Delete and update manifest
             if (downloading.length > 0) {
-                fs.writeFileSync(manifestPath, JSON.stringify(current_versions, null, 2));
+                fs.writeFileSync(manifestPath, JSON.stringify(currnet_versions, null, 2));
             }
             downloading.reduce((promiseChain, dir, i) => {
                 return promiseChain
@@ -363,7 +439,7 @@ function downloadResources(win, fresh) {
                 }
             });
             // Creat the manifest
-            fs.writeFileSync(path.join(homeDir, "manifest.json"), JSON.stringify(current_versions, null, 2));
+            fs.writeFileSync(path.join(homeDir, "manifest.json"), JSON.stringify(currnet_versions, null, 2));
             if (!allDirsExist) {
                 // Something is missing, delete everything and download again
                 requiredDirs.forEach((dir) => {
@@ -551,8 +627,8 @@ app.on("ready", () => {
         const choice = dialog.showMessageBoxSync(win, {
             type: "question",
             buttons: ["Yes", "Cancel"],
-            title: "Confrim Quit",
-            message: "Are you sure you want to quit? Quitting will kill all running processes.",
+            title: `Quit ${BRANDING.PRODUCT_NAME}?`,
+            message: `Are you sure you want to quit ${BRANDING.PRODUCT_NAME}? Quitting will kill all running processes.`,
         });
         if (choice === 1) {
             e.preventDefault();
@@ -608,20 +684,37 @@ app.on("window-all-closed", function () {
 ipcMain.on("getVersion", (event) => {
     event.sender.send("version", getVersion());
 });
+function parseDialogArg(data) {
+    if (typeof data === "string") {
+        return { tag: data };
+    }
+    if (data && typeof data === "object") {
+        const tag = data.tag != null ? String(data.tag) : String(data);
+        const defaultPath = typeof data.defaultPath === "string" ? data.defaultPath : undefined;
+        return { tag, defaultPath };
+    }
+    return { tag: String(data) };
+}
+function openDialogOptions(properties, defaultPath) {
+    const options = { properties };
+    if (defaultPath && fs.existsSync(defaultPath)) {
+        options.defaultPath = defaultPath;
+    }
+    return options;
+}
 // Handlers
 // Directories
 ipcMain.on("openDialog", function (event, data) {
     let window = BrowserWindow.getFocusedWindow();
+    const { tag, defaultPath } = parseDialogArg(data);
     dialog
-        .showOpenDialog(window, {
-        properties: ["openDirectory"],
-    })
+        .showOpenDialog(window, openDialogOptions(["openDirectory"], defaultPath))
         .then((result) => {
         // Check for a valid result
         if (!result.canceled) {
             // console.log(result.filePaths)
             // Send back the dir and whether this is input or output
-            event.sender.send("returnPath", [result.filePaths[0], data]);
+            event.sender.send("returnPath", [result.filePaths[0], tag]);
         }
     })
         .catch((err) => {
@@ -631,16 +724,15 @@ ipcMain.on("openDialog", function (event, data) {
 // Files
 ipcMain.on("openFileDialog", function (event, data) {
     let window = BrowserWindow.getFocusedWindow();
+    const { tag, defaultPath } = parseDialogArg(data);
     dialog
-        .showOpenDialog(window, {
-        properties: ["openFile"],
-    })
+        .showOpenDialog(window, openDialogOptions(["openFile"], defaultPath))
         .then((result) => {
         // Check for a valid result
         if (!result.canceled) {
             // console.log(result.filePaths)
             // Send back the dir and whether this is input or output
-            event.sender.send("returnPath", [result.filePaths[0], data]);
+            event.sender.send("returnPath", [result.filePaths[0], tag]);
         }
     })
         .catch((err) => {
@@ -661,6 +753,53 @@ function openPDF(relativePath) {
 ipcMain.on("openGuide", function (event, data) {
     openPDF("docs/belljar_guide.pdf");
 });
+function cleanupPythonKillListener(killChannel) {
+    ipcMain.removeAllListeners(killChannel);
+}
+/** Drop orphaned kill-* IPC listeners on Python child error or exit. Scoped to this process only (no single-instance lock). */
+function attachPythonShellKillCleanup(pyshell, killChannel) {
+    const dropKillListener = () => {
+        cleanupPythonKillListener(killChannel);
+    };
+    pyshell.on("error", function (err) {
+        log(err);
+        dropKillListener();
+    });
+    pyshell.on("close", function () {
+        dropKillListener();
+    });
+}
+/** When Python exits non-zero, python-shell passes a truthy err — never throw from IPC handlers. */
+function describePythonShellFailure(err, code, signal) {
+    var _a;
+    const c = typeof code === "number" ? code : null;
+    const hasErr = err != null && err !== false;
+    const badExit = c != null && c !== 0;
+    if (!hasErr && !badExit) {
+        return null;
+    }
+    let msg = "";
+    if (hasErr && typeof err === "object" && err !== null) {
+        const m = err.message;
+        if (typeof m === "string" && m.length > 0) {
+            msg = m;
+        }
+    }
+    if (!msg && hasErr) {
+        msg = String((_a = err === null || err === void 0 ? void 0 : err.message) !== null && _a !== void 0 ? _a : err);
+    }
+    const bits = [];
+    if (badExit) {
+        bits.push(`Python exited with code ${c}`);
+    }
+    if (msg) {
+        bits.push(msg);
+    }
+    if (typeof signal === "string" && signal.length > 0) {
+        bits.push(`signal: ${signal}`);
+    }
+    return bits.join(" · ") || "Python reported an error.";
+}
 // Max Projection
 ipcMain.on("runMax", function (event, data) {
     let options = {
@@ -676,6 +815,7 @@ ipcMain.on("runMax", function (event, data) {
         ],
     };
     let pyshell = new PythonShell("max.py", options);
+    attachPythonShellKillCleanup(pyshell, "killMax");
     var total = 0;
     var current = 0;
     pyshell.on("message", (message) => {
@@ -684,17 +824,21 @@ ipcMain.on("runMax", function (event, data) {
         }
         else if (message == "Done!") {
             pyshell.end((err, code, signal) => {
-                if (err)
-                    throw err;
-                console.log("The exit code was: " + code);
-                console.log("The exit signal was: " + signal);
+                const pyFail = describePythonShellFailure(err, code, signal);
+                if (pyFail) {
+                    queueLogLineForUi(pyFail);
+                    console.error(pyFail, err);
+                }
+                else {
+                    console.log("The exit code was: " + code);
+                    console.log("The exit signal was: " + signal);
+                }
                 event.sender.send("maxResult");
                 ipcMain.removeAllListeners("killMax");
             });
         }
         else {
             current++;
-            console.log(message);
             event.sender.send("updateLoad", [
                 Math.round((current / total) * 100),
                 message,
@@ -715,10 +859,11 @@ ipcMain.on("runAdjust", function (event, data) {
         args: [`-i ${data[0]}`, `-s ${structPath}`, `-a ${data[1]}`],
     };
     let pyshell = new PythonShell("adjust.py", options);
+    attachPythonShellKillCleanup(pyshell, "killAdjust");
     var total = 0;
     var current = 0;
     pyshell.on("stderr", function (stderr) {
-        console.log(stderr);
+        queueLogLineForUi(stderr);
     });
     pyshell.on("message", (message) => {
         if (total === 0) {
@@ -726,17 +871,21 @@ ipcMain.on("runAdjust", function (event, data) {
         }
         else if (message == "Done!") {
             pyshell.end((err, code, signal) => {
-                if (err)
-                    throw err;
-                console.log("The exit code was: " + code);
-                console.log("The exit signal was: " + signal);
+                const pyFail = describePythonShellFailure(err, code, signal);
+                if (pyFail) {
+                    queueLogLineForUi(pyFail);
+                    console.error(pyFail, err);
+                }
+                else {
+                    console.log("The exit code was: " + code);
+                    console.log("The exit signal was: " + signal);
+                }
                 event.sender.send("adjustResult");
                 ipcMain.removeAllListeners("killAdjust");
             });
         }
         else {
             current++;
-            console.log(message);
             event.sender.send("updateLoad", [
                 Math.round((current / total) * 100),
                 message,
@@ -768,23 +917,28 @@ ipcMain.on("runAlign", function (event, data) {
         ],
     };
     let pyshell = new PythonShell("map.py", options);
+    attachPythonShellKillCleanup(pyshell, "killAlign");
     var total = 0;
     var current = 0;
     pyshell.on("stderr", function (stderr) {
-        console.log(stderr);
+        queueLogLineForUi(stderr);
     });
     pyshell.on("message", (message) => {
-        console.log(message);
         if (total === 0) {
             total = Number(message);
         }
         else if (message == "Done!") {
             pyshell.end((err, code, signal) => {
-                if (err)
-                    throw err;
+                const pyFail = describePythonShellFailure(err, code, signal);
+                if (pyFail) {
+                    queueLogLineForUi(pyFail);
+                    console.error(pyFail, err);
+                }
+                else {
+                    console.log("The exit code was: " + code);
+                    console.log("The exit signal was: " + signal);
+                }
                 event.sender.send("alignResult");
-                console.log("The exit code was: " + code);
-                console.log("The exit signal was: " + signal);
                 ipcMain.removeAllListeners("killAlign");
             });
         }
@@ -803,36 +957,49 @@ ipcMain.on("runAlign", function (event, data) {
 // Intensity by Region
 ipcMain.on("runIntensity", function (event, data) {
     const structPath = path.join(appDir, "csv/structure_map.pkl");
+    const args = [
+        `-i ${data[0]}`,
+        `-o ${data[1]}`,
+        `-a ${data[2]}`,
+        `-w ${data[3]}`,
+        `-m ${structPath}`,
+    ];
+    const dapiDir = data.length > 4 && data[4] != null ? String(data[4]).trim() : "";
+    if (dapiDir.length > 0) {
+        args.push(`-d ${dapiDir}`);
+    }
     let options = {
         mode: "text",
         pythonPath: path.join(envPythonPath, pyCommand),
         scriptPath: pyScriptsPath,
-        args: [
-            `-i ${data[0]}`,
-            `-o ${data[1]}`,
-            `-a ${data[2]}`,
-            `-w ${data[3]}`,
-            `-m ${structPath}`,
-        ],
+        args,
     };
     let pyshell = new PythonShell("region.py", options);
+    attachPythonShellKillCleanup(pyshell, "killIntensity");
     var total = 0;
     var current = 0;
     pyshell.on("stderr", function (stderr) {
-        console.log(stderr);
+        queueLogLineForUi(stderr);
     });
     pyshell.on("message", (message) => {
-        console.log(message);
         if (total === 0) {
             total = Number(message);
         }
         else if (message == "Done!") {
             pyshell.end((err, code, signal) => {
-                if (err)
-                    throw err;
-                console.log("The exit code was: " + code);
-                console.log("The exit signal was: " + signal);
+                const pyFail = describePythonShellFailure(err, code, signal);
+                if (pyFail) {
+                    queueLogLineForUi(pyFail);
+                    console.error(pyFail, err);
+                }
+                else {
+                    console.log("The exit code was: " + code);
+                    console.log("The exit signal was: " + signal);
+                }
                 event.sender.send("intensityResult");
+                if (pyFail) {
+                    event.sender.send("intensityError", [pyFail]);
+                }
                 ipcMain.removeAllListeners("killIntensity");
             });
         }
@@ -845,6 +1012,52 @@ ipcMain.on("runIntensity", function (event, data) {
         }
     });
     ipcMain.once("killIntensity", function (event, data) {
+        pyshell.kill();
+    });
+});
+// Export dual-channel ROI TIFs (DAPI + signal PKLs)
+ipcMain.on("runExportDualTif", function (event, data) {
+    let options = {
+        mode: "text",
+        pythonPath: path.join(envPythonPath, pyCommand),
+        scriptPath: pyScriptsPath,
+        args: [String.raw `-i ${data[0]}`, String.raw `-o ${data[1]}`],
+    };
+    let pyshell = new PythonShell("export_roi_dual_tif.py", options);
+    attachPythonShellKillCleanup(pyshell, "killExportDualTif");
+    var total = 0;
+    var current = 0;
+    pyshell.on("stderr", function (stderr) {
+        queueLogLineForUi(stderr);
+    });
+    pyshell.on("message", (message) => {
+        if (total === 0) {
+            total = Number(message);
+        }
+        else if (message == "Done!") {
+            pyshell.end((err, code, signal) => {
+                const pyFail = describePythonShellFailure(err, code, signal);
+                if (pyFail) {
+                    queueLogLineForUi(pyFail);
+                    console.error(pyFail, err);
+                }
+                else {
+                    console.log("The exit code was: " + code);
+                    console.log("The exit signal was: " + signal);
+                }
+                event.sender.send("exportDualTifResult", pyFail !== null && pyFail !== void 0 ? pyFail : undefined);
+                ipcMain.removeAllListeners("killExportDualTif");
+            });
+        }
+        else {
+            current++;
+            event.sender.send("updateLoad", [
+                Math.round((current / total) * 100),
+                message,
+            ]);
+        }
+    });
+    ipcMain.once("killExportDualTif", function (event, data) {
         pyshell.kill();
     });
 });
@@ -867,22 +1080,27 @@ ipcMain.on("runCount", function (event, data) {
         args: custom_args,
     };
     let pyshell = new PythonShell("count.py", options);
+    attachPythonShellKillCleanup(pyshell, "killCount");
     var total = 0;
     var current = 0;
     pyshell.on("stderr", function (stderr) {
-        console.log(stderr);
+        queueLogLineForUi(stderr);
     });
     pyshell.on("message", (message) => {
-        console.log(message);
         if (total === 0) {
             total = Number(message);
         }
         else if (message == "Done!") {
             pyshell.end((err, code, signal) => {
-                if (err)
-                    throw err;
-                console.log("The exit code was: " + code);
-                console.log("The exit signal was: " + signal);
+                const pyFail = describePythonShellFailure(err, code, signal);
+                if (pyFail) {
+                    queueLogLineForUi(pyFail);
+                    console.error(pyFail, err);
+                }
+                else {
+                    console.log("The exit code was: " + code);
+                    console.log("The exit signal was: " + signal);
+                }
                 event.sender.send("countResult");
                 ipcMain.removeAllListeners("killCount");
             });
@@ -914,11 +1132,18 @@ ipcMain.on("runCollate", function (event, data) {
         ],
     };
     let pyshell = new PythonShell("collate.py", options);
+    attachPythonShellKillCleanup(pyshell, "killCollate");
     pyshell.end((err, code, signal) => {
-        if (err)
-            throw err;
-        console.log("The exit code was: " + code);
-        console.log("The exit signal was: " + signal);
+        cleanupPythonKillListener("killCollate");
+        const pyFail = describePythonShellFailure(err, code, signal);
+        if (pyFail) {
+            queueLogLineForUi(pyFail);
+            console.error(pyFail, err);
+        }
+        else {
+            console.log("The exit code was: " + code);
+            console.log("The exit signal was: " + signal);
+        }
         event.sender.send("collateResult");
     });
     ipcMain.once("killCollate", function (event, data) {
@@ -943,19 +1168,24 @@ ipcMain.on("runSharpen", function (event, data) {
         args: custom,
     };
     let pyshell = new PythonShell("sharpen.py", options);
+    attachPythonShellKillCleanup(pyshell, "killSharpen");
     var total = 0;
     var current = 0;
     pyshell.on("message", (message) => {
-        console.log(message);
         if (total === 0) {
             total = Number(message);
         }
         else if (message == "Done!") {
             pyshell.end((err, code, signal) => {
-                if (err)
-                    throw err;
-                console.log("The exit code was: " + code);
-                console.log("The exit signal was: " + signal);
+                const pyFail = describePythonShellFailure(err, code, signal);
+                if (pyFail) {
+                    queueLogLineForUi(pyFail);
+                    console.error(pyFail, err);
+                }
+                else {
+                    console.log("The exit code was: " + code);
+                    console.log("The exit signal was: " + signal);
+                }
                 event.sender.send("sharpenResult");
                 ipcMain.removeAllListeners("killSharpen");
             });
@@ -1006,22 +1236,27 @@ ipcMain.on("runDetection", function (event, data) {
         args: custom_args,
     };
     let pyshell = new PythonShell("find_neurons.py", options);
+    attachPythonShellKillCleanup(pyshell, "killDetect");
     var total = 0;
     var current = 0;
     pyshell.on("stderr", function (stderr) {
-        console.log(stderr);
+        queueLogLineForUi(stderr);
     });
     pyshell.on("message", (message) => {
-        console.log(message);
         if (total === 0) {
             total = Number(message);
         }
         else if (message == "Done!") {
             pyshell.end((err, code, signal) => {
-                if (err)
-                    throw err;
-                console.log("The exit code was: " + code);
-                console.log("The exit signal was: " + signal);
+                const pyFail = describePythonShellFailure(err, code, signal);
+                if (pyFail) {
+                    queueLogLineForUi(pyFail);
+                    console.error(pyFail, err);
+                }
+                else {
+                    console.log("The exit code was: " + code);
+                    console.log("The exit signal was: " + signal);
+                }
                 event.sender.send("detectResult");
                 ipcMain.removeAllListeners("killDetect");
             });

@@ -1,0 +1,29 @@
+"use strict";
+
+/** Shared Mason Jar branding and dual Bell Jar compatibility constants. */
+module.exports = {
+	PRODUCT_NAME: "Mason Jar",
+	LEGACY_PRODUCT_NAME: "Bell Jar",
+	HOME_DIR: ".masonjar",
+	LEGACY_HOME_DIR: ".belljar",
+	LOG_FILE: "masonjar.log",
+	LEGACY_LOG_FILE: "belljar.log",
+	BUNDLE_SUFFIX: ".masonjar",
+	LEGACY_BUNDLE_SUFFIX: ".belljar",
+	PROJECT_FILENAME: "project.masonjar",
+	LEGACY_PROJECT_FILENAME: "project.belljar",
+	PROJECT_FILENAMES: ["project.masonjar", "project.belljar"],
+	META_DIR: ".masonjar",
+	LEGACY_META_DIR: ".belljar",
+	META_DIRS: [".masonjar", ".belljar"],
+	LAYOUT_ID: "masonjar_v1",
+	LEGACY_LAYOUT_ID: "belljar_v1",
+	LAYOUT_IDS: ["masonjar_v1", "belljar_v1"],
+	RECENT_KEY: "masonjar.recentProjects",
+	LEGACY_RECENT_KEY: "belljar.recentProjects",
+	ACTIVE_KEY: "masonjar.activeProject",
+	LEGACY_ACTIVE_KEY: "belljar.activeProject",
+	WORKSPACE_KEY: "masonjar.workspace",
+	LEGACY_WORKSPACE_KEY: "belljar.workspace",
+	GITHUB_REPO: "matsojr22/masonjar",
+};

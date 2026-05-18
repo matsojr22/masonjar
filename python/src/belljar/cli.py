@@ -257,6 +257,33 @@ def _build_parser() -> argparse.ArgumentParser:
     # ── server ────────────────────────────────────────────────────────
     subparsers.add_parser("server", help="Start the JSON-RPC server (for Electron frontend).")
 
+    # ── project ───────────────────────────────────────────────────────
+    proj = subparsers.add_parser("project", help="Create, validate, or import .belljar bundles.")
+    proj_sub = proj.add_subparsers(dest="project_command")
+
+    proj_val = proj_sub.add_parser("validate", help="Validate a project bundle.")
+    proj_val.add_argument(
+        "bundle",
+        type=Path,
+        help="Bundle directory or project.belljar file.",
+    )
+
+    proj_imp = proj_sub.add_parser("import", help="Import a role from a source path into a bundle.")
+    proj_imp.add_argument("bundle", type=Path, help="Bundle directory.")
+    proj_imp.add_argument("--role", required=True, help="Role key (e.g. dapi, max).")
+    proj_imp.add_argument("--source", type=Path, required=True, help="Source file or directory.")
+    proj_imp.add_argument(
+        "--mode",
+        choices=["copy", "symlink", "reference"],
+        default="copy",
+        help="Import mode (default: copy).",
+    )
+    proj_imp.add_argument(
+        "--manifest",
+        action="store_true",
+        help="Rebuild manifest after import.",
+    )
+
     return parser
 
 
@@ -277,11 +304,70 @@ def main() -> int:
     if args.command == "server":
         return _run_server(args)
 
+    if args.command == "project":
+        return _run_project_command(args)
+
     if args.command == "run":
         return _run_full_pipeline(args)
 
     # Single step commands
     return _run_step(args.command, args)
+
+
+def _run_project_command(args: argparse.Namespace) -> int:
+    """Handle belljar project validate|import."""
+    from belljar.io import project as project_io
+    from belljar.types import CANONICAL_ROLE_PATHS
+
+    if args.project_command is None:
+        logger.error("Specify a project subcommand: validate, import")
+        return 1
+
+    if args.project_command == "validate":
+        errors = project_io.validate_project(args.bundle)
+        if errors:
+            for err in errors:
+                logger.error("%s", err)
+            return 1
+        logger.info("Project bundle is valid: %s", args.bundle)
+        return 0
+
+    if args.project_command == "import":
+        root = project_io.bundle_root_from_path(args.bundle)
+        project_io.ensure_bundle_layout(root)
+        proj_path = project_io.project_file_path(root)
+        if proj_path.is_file():
+            project = project_io.load_project(root)
+            roles = dict(project.roles or CANONICAL_ROLE_PATHS)
+        else:
+            from belljar.types import BelljarProject
+
+            project = BelljarProject.new_v1_bundle(root.name)
+            roles = dict(project.roles)
+        entry = project_io.import_role(
+            root,
+            args.role,
+            args.source,
+            mode=args.mode,
+            roles=roles,
+        )
+        if entry.get("error"):
+            logger.error("%s", entry["error"])
+            return 1
+        project.roles = roles
+        project_io.save_project(project, proj_path)
+        project_io.write_import_log(
+            root,
+            mode=args.mode,
+            entries=[entry],
+        )
+        if args.manifest:
+            project_io.build_manifest(root, roles=roles)
+        logger.info("Imported %s → %s", args.source, entry.get("dest"))
+        return 0
+
+    logger.error("Unknown project subcommand: %s", args.project_command)
+    return 1
 
 
 if __name__ == "__main__":

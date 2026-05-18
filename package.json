@@ -1,13 +1,14 @@
 {
-  "name": "belljar",
+  "name": "masonjar",
   "description": "A tool for mouse neurohistology",
-  "version": "10.2.1",
+  "version": "1.0.0",
   "main": "main.js",
-  "repository": "asoronow/belljar",
-  "author": "Alec <a.soronow@gmail.com>",
+  "repository": "matsojr22/masonjar",
+  "author": "matsojr22",
   "license": "MIT",
   "private": false,
   "scripts": {
+    "postinstall": "patch-package",
     "compile": "tsc",
     "start": "electron-forge start",
     "package": "electron-forge package",
@@ -36,11 +37,12 @@
     "dotenv": "^16.3.1",
     "electron": "18.1.0",
     "eslint": "^7.32.0",
+    "patch-package": "^8.0.1",
     "prettier": "^2.7.1",
     "typescript": "^4.6.3"
   },
   "build": {
-    "appId": "com.belljar.app",
-    "productName": "Bell Jar"
+    "appId": "com.matsojr22.masonjar",
+    "productName": "Mason Jar"
   }
 }

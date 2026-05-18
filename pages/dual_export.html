@@ -14,7 +14,6 @@
       crossorigin="anonymous"
     />
     <link rel="stylesheet" href="../css/theme.css" />
-    <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'  https://cdn.jsdelivr.net/; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net/; font-src 'self' https://fonts.gstatic.com;"
@@ -29,102 +28,67 @@
     <div id="parent" class="container h-100">
       <div class="row align-items-center">
         <div class="col">
-          <h1>Viewer/Editor</h1>
-          <p >
+          <h1>Export dual-channel ROI TIFs</h1>
+          <p>
             <br />
-            View your annotations alongside or on top of any 2D images you specify. 
-            <br> You may also adjust your annotations to improve the accuracy of your results in specfic regions.
-            <br> Input images should have the same naming scheme used in alignment to ensure proper matching or annotation to image.
-            <br> <b>NOTE:</b> Adjustments will permenantly alter the annotations, a backup is recommended.
+            Reads ROI <code>.pkl</code> files from <strong>Isolate Regions</strong> that include
+            <code>dapi_roi</code> (run that tool with DAPI enabled). Writes ImageJ-friendly two-channel
+            TIFs: channel 1 = DAPI, channel 2 = signal. RSAT alignment: see
+            <code>vendor/rsat</code> submodule and <code>AGENTS.md</code>.
+            <br />
           </p>
         </div>
       </div>
       <div class="row align-items-center m-1">
         <div class="col d-grid justify-content-start">
           <h5>
-            Images Path
+            ROI PKL directory
             <i
               class="fas fa-circle-question fa-fw fa-xs"
               data-bs-toggle="tooltip"
               data-bs-placement="right"
-              title="Path to cell stain images"
+              title="Folder containing *.pkl from Isolate Regions (with DAPI)"
             ></i>
           </h5>
-        </div>
-        <div class="row align-items-center">
-          <div class="col d-grid">
-            <input
-              type="url"
-              id="imdir"
-              placeholder="Click to select directory or cancel to enter manually"
-            />
-          </div>
         </div>
       </div>
-    
-      <div class="row align-items-center m-1 mt-2">
+      <div class="row align-items-center m-1">
+        <div class="col d-grid">
+          <input
+            type="url"
+            id="indir"
+            placeholder="Click to select directory or cancel to enter manually"
+          />
+        </div>
+      </div>
+      <div class="row align-items-center m-1">
         <div class="col d-grid justify-content-start">
           <h5>
-            Annotations Path
+            Output directory
             <i
               class="fas fa-circle-question fa-fw fa-xs"
               data-bs-toggle="tooltip"
               data-bs-placement="right"
-              title="Path to annotations from alignment"
+              title="Where to write *_dual.tif files"
             ></i>
           </h5>
         </div>
-        <div class="row align-items-center">
-          <div class="col d-grid">
-            <input
-              type="url"
-              id="annodir"
-              placeholder="Click to select directory or cancel to enter manually"
-            />
-          </div>
+      </div>
+      <div class="row align-items-center m-1">
+        <div class="col d-grid">
+          <input
+            type="url"
+            id="outdir"
+            placeholder="Click to select directory or cancel to enter manually"
+          />
         </div>
-    </div> 
+      </div>
       <div class="row align-items-center m-4">
         <div class="col d-grid gap-2">
-          <a role="button" class="btn btn-warning" id="back" href="./menu_category.html?cat=alignment"
-            >Back</a
-          >
+          <a role="button" class="btn btn-warning" id="back" href="./menu_category.html?cat=exports">Back</a>
         </div>
         <div class="col d-grid">
           <button type="button" class="btn btn-primary" id="run">Run</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Error Modal -->
-    <div
-      class="modal"
-      id="error"
-      tabindex="-1"
-      role="dialog"
-      aria-labelledby="processing"
-      data-bs-backdrop="static"
-      aria-hidden="true"
-    >
-      <div class="modal-dialog modal-dialog-centered" role="document">
-        <div class="modal-content">
-          <div class="modal-header text-center">
-            <p class="modal-title fw-bold fs-5 w-100" id="processingTitle">
-              Error
-            </p>
-          </div>
-          <div class="modal-body fa-3x">
-            <i class="fas fa-times"></i>
-          </div>
-          <div class="modal-footer">
-            <button
-              type="button"
-              class="btn btn-danger"
-              data-bs-dismiss="modal"
-            >
-              Exit
-            </button>
-          </div>
         </div>
       </div>
     </div>
@@ -135,6 +99,6 @@
       integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p"
       crossorigin="anonymous"
     ></script>
-    <script type="module" src="../js/adjust.js"></script>
+    <script src="../js/dual_export.js"></script>
   </body>
 </html>

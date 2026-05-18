@@ -1,4 +1,7 @@
 var ipc = require('electron').ipcRenderer;
+var workspace = require('./workspace');
+var project = require('./project');
+project.tryRestoreActiveProject();
 var run = document.getElementById('run');
 var indir = document.getElementById('indir');
 var outdir = document.getElementById('outdir');
@@ -31,7 +34,7 @@ run.addEventListener('click', function(){
 back.addEventListener('click', function (event){
     if (back.classList.contains('btn-danger')){
         event.preventDefault();
-        ipc.send('killDetect', []);
+        ipc.send('killCollate', []);
         back.classList.add('btn-warning');
         back.classList.remove('btn-danger')
         back.innerHTML = "Back";
@@ -62,20 +65,6 @@ ipc.on('updateLoad', function (event, response) {
     loadmessage.innerHTML = response[1];
 });
 
-indir.addEventListener('click', function(){
-    ipc.once('returnPath', function(event, response){
-        if (response[1] == 'indir') {
-            indir.value = response[0];
-        }
-    })
-    ipc.send('openFileDialog', 'indir');
-});
-
-outdir.addEventListener('click', function(){
-    ipc.once('returnPath', function(event, response){
-        if (response[1] == 'outdir') {
-            outdir.value = response[0];
-        }
-    })
-    ipc.send('openDialog', 'outdir');
-});
+workspace.applyPreset('collate');
+workspace.bindPathPicker(indir, 'indir', 'quantification', true);
+workspace.bindPathPicker(outdir, 'outdir', 'quantification');
