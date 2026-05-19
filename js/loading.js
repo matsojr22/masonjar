@@ -1,24 +1,32 @@
-var ipc = require("electron").ipcRenderer;
-var guide = document.getElementById("guide");
-let lastUpdateTimestamp = 0;
+"use strict";
 
-ipc.on("updateStatus", function (event, response) {
+var ipc = require("electron").ipcRenderer;
+var lastUpdateTimestamp = 0;
+
+ipc.on("updateStatus", function (_event, response) {
 	if (!response.timestamp || response.timestamp > lastUpdateTimestamp) {
 		if (response.timestamp) {
 			lastUpdateTimestamp = response.timestamp;
 		}
 		var status = document.getElementById("status");
-		status.innerHTML = response.message || response;
+		if (status) {
+			status.innerHTML = response.message || response;
+		}
 	}
 });
 
-// get version from ipc
 ipc.send("getVersion");
-ipc.on("version", function (event, response) {
+ipc.on("version", function (_event, response) {
 	var version = document.getElementById("version");
-	version.innerHTML = response;
+	if (version) {
+		version.textContent = response;
+	}
 });
 
-guide.addEventListener("click", function () {
-	ipc.send("openGuide");
-});
+var guide = document.getElementById("guide");
+if (guide) {
+	guide.addEventListener("click", function (event) {
+		event.preventDefault();
+		ipc.send("openGuide");
+	});
+}

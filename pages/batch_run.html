@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="../css/style.css" />
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC"
+      crossorigin="anonymous"
+    />
+    <link rel="stylesheet" href="../css/theme.css" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net/; font-src 'self' https://fonts.gstatic.com;"
+    />
+    <title>Mason Jar — Batch run</title>
+  </head>
+  <body>
+    <div class="container py-3">
+      <p class="text-muted mb-1">
+        <a href="./menu.html">Menu</a> / <a href="./batch_select.html">Batch</a> / Run
+      </p>
+      <h1>Batch — run</h1>
+
+      <div id="runSummary" class="small mb-2"></div>
+      <p class="mb-1">
+        <strong>Elapsed:</strong> <span id="elapsed">0:00:00</span>
+        &nbsp;|&nbsp;
+        <strong>Status:</strong> <span id="statusLine">Ready</span>
+      </p>
+
+      <div class="progress mb-2" style="height: 1.25rem">
+        <div
+          id="loadbar"
+          class="progress-bar loading"
+          role="progressbar"
+          style="width: 0%"
+        ></div>
+      </div>
+      <p id="loadmessage" class="loadmessage small text-muted mb-2"></p>
+
+      <table class="table table-sm batch-log-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Event</th>
+          </tr>
+        </thead>
+        <tbody id="logBody"></tbody>
+      </table>
+
+      <div id="errorSummary" class="alert alert-danger d-none small"></div>
+
+      <div class="d-flex justify-content-between mt-3">
+        <a class="btn btn-warning" id="backLink" href="./batch_params.html">Back</a>
+        <div class="d-flex gap-2">
+          <button type="button" class="btn btn-danger d-none" id="cancelBatch">Cancel</button>
+          <button type="button" class="btn btn-primary" id="startBatch">Start batch</button>
+        </div>
+      </div>
+    </div>
+    <script src="../js/run.js" data-entry="batch_registry.js,batch_run.js"></script>
+  </body>
+</html>

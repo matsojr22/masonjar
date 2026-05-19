@@ -1,8 +1,27 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
-const { promisify } = require("util");
-const { PythonShell } = require("python-shell");
+/** Ensure packaged / relocated app roots can resolve production dependencies. */
 const path = require("path");
 const fs = require("fs");
+const Module = require("module");
+(function ensureAppNodeModulePaths() {
+  const roots: string[] = [__dirname];
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string })
+    .resourcesPath;
+  if (resourcesPath) {
+    roots.push(path.join(resourcesPath, "app"));
+  }
+  const globalPaths = Module.globalPaths as string[];
+  for (const root of roots) {
+    const nodeModules = path.join(root, "node_modules");
+    if (fs.existsSync(nodeModules) && !globalPaths.includes(nodeModules)) {
+      globalPaths.unshift(nodeModules);
+    }
+  }
+})();
+
+const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
+import type { BatchPlan } from "./batch_queue";
+const { promisify } = require("util");
+const { PythonShell } = require("python-shell");
 const tar = require("tar");
 const mv = promisify(fs.rename);
 const exec = promisify(require("child_process").exec);
@@ -138,39 +157,49 @@ const GITHUB_API_RELEASES = `https://api.github.com/repos/${BRANDING.GITHUB_REPO
 async function checkForUpdates() {
   try {
     const response = await serverFetch(GITHUB_API_RELEASES);
+    // No published releases yet — normal for a new fork; do not alarm the user.
+    if (response.status === 404) {
+      console.log("No GitHub releases published yet; skipping update check.");
+      return;
+    }
     if (!response.ok) {
-      throw new Error(`GitHub API response status: ${response.status}`);
+      console.warn(
+        `Update check: GitHub API returned ${response.status}; skipping.`
+      );
+      return;
     }
 
     const data = await response.json();
-    const latestVersionTag = data.tag_name;
+    const latestVersionTag = data.tag_name as string | undefined;
+    const latestCoerced = latestVersionTag
+      ? semver.coerce(latestVersionTag)
+      : null;
+    const currentCoerced = semver.coerce(CURRENT_VERSION_TAG);
 
     if (
-      semver.valid(latestVersionTag) &&
-      semver.gt(latestVersionTag, CURRENT_VERSION_TAG)
+      latestCoerced &&
+      currentCoerced &&
+      semver.gt(latestCoerced, currentCoerced)
     ) {
       const userResponse = await dialog.showMessageBox({
         type: "info",
         title: "Update Available",
-        message: "A new version of the application is available.",
-        detail: `The latest version is ${latestVersionTag}. Would you like to download it?`,
+        message: "A new version of Mason Jar is available.",
+        detail: `The latest version is ${latestCoerced.version}. Would you like to download it?`,
         buttons: ["Yes", "No"],
         defaultId: 0,
         cancelId: 1,
       });
 
-      if (userResponse.response === 0) {
-        shell.openExternal(data.html_url); // URL to the latest release page
+      if (userResponse.response === 0 && data.html_url) {
+        shell.openExternal(data.html_url);
       }
     } else {
       console.log("No updates available.");
     }
   } catch (error) {
-    console.error("Failed to check for updates:", error);
-    dialog.showErrorBox(
-      "Update Check Failed",
-      "There was an error checking for updates. Please try again later."
-    );
+    // Network or parse errors should not block launch with a modal dialog.
+    console.warn("Failed to check for updates:", error);
   }
 }
 
@@ -636,7 +665,7 @@ function setupEnvironment(win: typeof BrowserWindow) {
       .then(({ stdout, stderr }) => {
         console.log(stdout);
         win.webContents.send("updateStatus", "Setup complete!");
-        win.loadFile("pages/index.html");
+        win.loadFile("pages/menu.html");
       })
       .catch((error) => {
         console.log("An error occurred during setup:", error);
@@ -790,7 +819,7 @@ app.on("ready", () => {
             // Check for new patch
             // Check if any directories are missing
             fixMissingDirectories(win).then(() => {
-              win.loadFile("pages/index.html");
+              win.loadFile("pages/menu.html");
             });
           });
         }
@@ -843,34 +872,117 @@ function openDialogOptions(
   return options;
 }
 
+/** Prefer the BrowserWindow that sent the IPC (menu/tools), not getFocusedWindow() (often the log). */
+function dialogParentWindow(event: { sender: any }): typeof BrowserWindow | null {
+  const fromSender = BrowserWindow.fromWebContents(event.sender);
+  if (fromSender && !fromSender.isDestroyed()) {
+    return fromSender;
+  }
+  if (win && !win.isDestroyed()) {
+    return win;
+  }
+  const focused = BrowserWindow.getFocusedWindow();
+  return focused && !focused.isDestroyed() ? focused : null;
+}
+
+function directoryDialogOptions(
+  tag: string,
+  defaultPath?: string,
+): {
+  properties: ("openDirectory" | "openFile")[];
+  defaultPath?: string;
+  title?: string;
+  message?: string;
+} {
+  const options = openDialogOptions(["openDirectory"], defaultPath) as {
+    properties: ("openDirectory" | "openFile")[];
+    defaultPath?: string;
+    title?: string;
+    message?: string;
+  };
+  if (tag === "projectBundle") {
+    options.title = `Open ${BRANDING.PRODUCT_NAME} project`;
+    options.message =
+      "Select the project folder (e.g. MyBrain.masonjar) that contains project.masonjar or project.belljar.";
+  } else if (tag === "newProjectBundle") {
+    options.title = `New ${BRANDING.PRODUCT_NAME} project location`;
+    options.message =
+      "Choose a parent folder where the new project bundle will be created.";
+  } else if (tag === "brainRoot") {
+    options.title = "Legacy brain folder";
+    options.message =
+      "Select the M### brain folder (must contain a counting/ subdirectory).";
+  }
+  return options;
+}
+
+async function pickDirectory(
+  event: { sender: { send: (channel: string, payload: unknown) => void } },
+  data: unknown,
+): Promise<
+  | { canceled: true; tag: string; error?: string }
+  | { canceled: false; tag: string; path: string }
+> {
+  const parentWindow = dialogParentWindow(event);
+  const { tag, defaultPath } = parseDialogArg(data);
+  const options = directoryDialogOptions(tag, defaultPath);
+  if (parentWindow && !parentWindow.isDestroyed()) {
+    parentWindow.show();
+    parentWindow.focus();
+  } else {
+    console.warn(
+      "pickDirectory: no parent BrowserWindow; showing detached folder dialog",
+    );
+  }
+  let result;
+  try {
+    result =
+      parentWindow && !parentWindow.isDestroyed()
+        ? await dialog.showOpenDialog(parentWindow, options)
+        : await dialog.showOpenDialog(options);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("showOpenDialog failed:", err);
+    return { canceled: true, tag, error: message };
+  }
+  if (result.canceled || !result.filePaths[0]) {
+    return { canceled: true, tag };
+  }
+  return { canceled: false, tag, path: result.filePaths[0] };
+}
+
+/** Promise-based folder picker (avoids returnPath listener races on the menu). */
+ipcMain.handle("showOpenDirectoryDialog", async (event: any, data: unknown) => {
+  try {
+    return await pickDirectory(event, data);
+  } catch (err) {
+    console.error("showOpenDirectoryDialog failed:", err);
+    const { tag } = parseDialogArg(data);
+    const message = err instanceof Error ? err.message : String(err);
+    return { canceled: true, tag, error: message };
+  }
+});
+
 // Handlers
 // Directories
 ipcMain.on("openDialog", function (event: any, data: any) {
-  let window = BrowserWindow.getFocusedWindow();
   const { tag, defaultPath } = parseDialogArg(data);
-  dialog
-    .showOpenDialog(
-      window,
-      openDialogOptions(["openDirectory"], defaultPath),
-    )
-    .then((result: { canceled: boolean; filePaths: any[] }) => {
-      // Check for a valid result
-      if (!result.canceled) {
-        // console.log(result.filePaths)
-        // Send back the dir and whether this is input or output
-        event.sender.send("returnPath", [result.filePaths[0], tag]);
-      }
-    })
-    .catch((err: Error) => {
-      console.log(err);
-    });
+  void pickDirectory(event, data).then((result) => {
+    if (!result.canceled && "path" in result) {
+      event.sender.send("returnPath", [result.path, tag]);
+    }
+  });
 });
 // Files
 ipcMain.on("openFileDialog", function (event: any, data: any) {
-  let window = BrowserWindow.getFocusedWindow();
+  const parentWindow = dialogParentWindow(event);
   const { tag, defaultPath } = parseDialogArg(data);
+  if (parentWindow && !parentWindow.isDestroyed()) {
+    parentWindow.show();
+    parentWindow.focus();
+  }
   dialog
-    .showOpenDialog(window, openDialogOptions(["openFile"], defaultPath))
+    .showOpenDialog(parentWindow, openDialogOptions(["openFile"], defaultPath))
     .then((result: { canceled: boolean; filePaths: any[] }) => {
       // Check for a valid result
       if (!result.canceled) {
@@ -1443,4 +1555,38 @@ ipcMain.on("runDetection", function (event: any, data: any[]) {
   ipcMain.once("killDetect", function (event: any, data: any[]) {
     pyshell.kill();
   });
+});
+
+function getBatchQueueDeps() {
+  return {
+    PythonShell,
+    envPythonPath,
+    pyCommand,
+    pyScriptsPath,
+    homeDir,
+    appDir,
+    describePythonShellFailure,
+    queueLogLineForUi,
+  };
+}
+
+ipcMain.on("runBatch", function (event: any, plan: BatchPlan) {
+  const { runBatchQueue } = require("./batch_queue") as typeof import("./batch_queue");
+  void runBatchQueue(
+    getBatchQueueDeps(),
+    plan,
+    (overallPct, message, detail) => {
+      event.sender.send("batchProgress", [overallPct, message, detail || ""]);
+    },
+    (projectName, step) => {
+      event.sender.send("batchJobStart", { project: projectName, step });
+    },
+  ).then((result) => {
+    event.sender.send("batchComplete", result);
+  });
+});
+
+ipcMain.on("killBatch", function () {
+  const { killBatchQueue } = require("./batch_queue") as typeof import("./batch_queue");
+  killBatchQueue();
 });

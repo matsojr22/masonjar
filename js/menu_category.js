@@ -1,5 +1,12 @@
 "use strict";
 
+var navTrail = require("./nav_trail");
+var project = require("./project");
+var pipelineGate = require("./pipeline_gate");
+
+project.tryRestoreActiveProject();
+pipelineGate.assertPipelineAccess();
+
 var CATEGORIES = {
 	preprocess: {
 		title: "Image preprocessing",
@@ -36,13 +43,18 @@ var params = new URLSearchParams(window.location.search);
 var cat = params.get("cat") || "preprocess";
 var config = CATEGORIES[cat] || CATEGORIES.preprocess;
 
-var breadcrumb = document.getElementById("breadcrumb");
 var categoryTitle = document.getElementById("categoryTitle");
 var toolLinks = document.getElementById("toolLinks");
 
-if (breadcrumb) {
-	breadcrumb.textContent = "Menu › " + config.title;
-}
+navTrail.renderTrail(
+	[
+		{ label: "Start", href: "./menu.html" },
+		{ label: "Workspace", href: "./workspace_menu.html" },
+		{ label: config.title },
+	],
+	"navTrail",
+);
+
 if (categoryTitle) {
 	categoryTitle.textContent = config.title;
 }

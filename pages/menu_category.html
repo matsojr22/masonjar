@@ -24,7 +24,11 @@
     <div id="parent" class="container h-100">
       <div class="row align-items-center m-4">
         <div class="col">
-          <p class="text-muted mb-1" id="breadcrumb">Menu</p>
+          <nav
+            id="navTrail"
+            class="nav-trail-wrap text-muted small mb-1"
+            aria-label="Breadcrumb"
+          ></nav>
           <h1 id="categoryTitle">Tools</h1>
         </div>
       </div>
@@ -33,7 +37,9 @@
       </div>
       <div class="row align-items-center m-4">
         <div class="col d-grid gap-2">
-          <a role="button" class="btn btn-warning" href="./menu.html">Back to menu</a>
+          <a role="button" class="btn btn-warning" href="./workspace_menu.html"
+            >Back to workspace</a
+          >
         </div>
       </div>
     </div>
@@ -42,6 +48,6 @@
       integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p"
       crossorigin="anonymous"
     ></script>
-    <script src="../js/menu_category.js"></script>
+    <script src="../js/run.js" data-entry="menu_category.js"></script>
   </body>
 </html>

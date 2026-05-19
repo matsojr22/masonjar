@@ -1,7 +1,9 @@
 var ipc = require("electron").ipcRenderer;
 var workspace = require("./workspace");
 var project = require("./project");
+var pipelineGate = require("./pipeline_gate");
 project.tryRestoreActiveProject();
+pipelineGate.assertPipelineAccess();
 var run = document.getElementById("run");
 var indir = document.getElementById("indir");
 var outdir = document.getElementById("outdir");

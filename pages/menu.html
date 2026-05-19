@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="../css/style.css" />
     <link
+      rel="stylesheet"
+      href="../node_modules/@fortawesome/fontawesome-free/css/all.css"
+    />
+    <link
       href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css"
       rel="stylesheet"
       integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC"
@@ -20,118 +24,53 @@
     />
     <title>Mason Jar</title>
   </head>
-  <body>
-    <div id="parent" class="container h-100">
-      <div class="row align-items-center m-4">
-        <div class="col">
-          <h1>Menu</h1>
-          <p>
-            Open a <code>.masonjar</code> project or a legacy brain folder. Legacy
-            <code>.belljar</code> projects still supported. Tools pre-fill paths from
-            the project or standard <code>counting/</code> layout.
-          </p>
-        </div>
-      </div>
+  <body class="menu-page">
+    <div id="parent" class="container menu-shell">
+      <header class="menu-hero text-center">
+        <h1 class="menu-hero-title">Mason Jar</h1>
+        <p class="menu-hero-version text-muted mb-1" id="version"></p>
+        <p class="menu-hero-subtitle">
+          Mouse brain neurohistology — alignment, detection, quantification.
+        </p>
+        <div id="projectChip" class="menu-project-chip d-none"></div>
+      </header>
 
-      <div class="row align-items-center m-2 workspace-block">
-        <div class="col">
-          <h5>Project</h5>
-          <div class="d-flex flex-wrap gap-2 mb-2">
-            <a class="btn btn-primary" href="./project_wizard.html?mode=new">New project</a>
-            <button type="button" class="btn btn-outline-primary" id="openProject">
-              Open project
-            </button>
-            <a class="btn btn-outline-secondary" href="./project_wizard.html?mode=migrate"
-              >Migrate to .masonjar</a
-            >
-            <button type="button" class="btn btn-outline-secondary" id="closeProject">
-              Close project
-            </button>
-          </div>
-          <p id="projectStatus" class="workspace-status text-muted">No project open.</p>
-          <h6 class="mt-3">Recent projects</h6>
-          <ul id="recentProjects" class="list-group list-group-flush small"></ul>
+      <section class="hub-actions mb-4" aria-label="Project actions">
+        <div class="hub-actions-primary d-grid gap-2 d-sm-flex flex-sm-wrap justify-content-center">
+          <a class="btn btn-primary" href="./project_start.html">New project</a>
+          <button type="button" class="btn btn-outline-primary" id="openProject">
+            Open project
+          </button>
+          <a
+            class="btn btn-success d-none"
+            href="./workspace_menu.html"
+            id="openPipeline"
+            >Continue to pipeline →</a
+          >
+          <a class="btn btn-outline-secondary" href="#" id="guide">Guide</a>
+          <a class="btn btn-outline-secondary" href="./credits.html">Credits</a>
         </div>
-      </div>
+      </section>
 
-      <div class="row align-items-center m-2 workspace-block">
-        <div class="col">
-          <h5>Legacy brain workspace</h5>
-          <div class="input-group mb-2">
-            <input
-              type="text"
-              id="brainRoot"
-              class="form-control"
-              placeholder="M### brain folder (parent of counting/)"
-              readonly
-            />
-            <button type="button" class="btn btn-outline-primary" id="chooseBrain">
-              Open legacy folder
-            </button>
-            <button type="button" class="btn btn-outline-secondary" id="rescanBrain">
-              Rescan
-            </button>
-          </div>
-          <p id="workspaceStatus" class="workspace-status text-muted"></p>
-        </div>
-      </div>
+      <section class="hub-recent mb-4" aria-label="Recent projects">
+        <h2 class="h6 text-muted mb-2">Recent projects</h2>
+        <ul id="recentProjects" class="list-group list-group-flush hub-recent-list small"></ul>
+      </section>
 
-      <div class="row align-items-stretch m-2 g-3 menu-categories">
-        <div class="col-md-6 col-lg-3 d-grid">
-          <a
-            role="button"
-            class="btn btn-primary menu-card"
-            href="./menu_category.html?cat=preprocess"
-          >
-            <span class="menu-card-title">Image preprocessing</span>
-            <span class="menu-card-sub">Max projection, Sharpen</span>
-          </a>
-        </div>
-        <div class="col-md-6 col-lg-3 d-grid">
-          <a
-            role="button"
-            class="btn btn-primary menu-card"
-            href="./menu_category.html?cat=alignment"
-          >
-            <span class="menu-card-title">Atlas alignment</span>
-            <span class="menu-card-sub">Align sections, Viewer/Editor</span>
-          </a>
-        </div>
-        <div class="col-md-6 col-lg-3 d-grid">
-          <a
-            role="button"
-            class="btn btn-primary menu-card"
-            href="./menu_category.html?cat=detection"
-          >
-            <span class="menu-card-title">Cell detection</span>
-            <span class="menu-card-sub">Detection, Count, Collate</span>
-          </a>
-        </div>
-        <div class="col-md-6 col-lg-3 d-grid">
-          <a
-            role="button"
-            class="btn btn-primary menu-card"
-            href="./menu_category.html?cat=exports"
-          >
-            <span class="menu-card-title">Image &amp; atlas exports</span>
-            <span class="menu-card-sub">Isolate regions, Dual-channel TIFs</span>
-          </a>
-        </div>
-      </div>
-
-      <div class="row align-items-center m-4">
-        <div class="col d-grid gap-2">
-          <a role="button" class="btn btn-warning" href="./index.html">Back</a>
-        </div>
-      </div>
+      <section class="mb-3" aria-label="Batch processing">
+        <a class="menu-card menu-card-batch d-block" href="./batch_select.html">
+          <i class="fas fa-tasks menu-card-icon" aria-hidden="true"></i>
+          <span class="menu-card-title">Batch</span>
+          <span class="menu-card-sub">Run steps across multiple projects</span>
+        </a>
+      </section>
     </div>
     <script
       src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"
       integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p"
       crossorigin="anonymous"
     ></script>
-    <script src="../js/workspace.js"></script>
-    <script src="../js/project.js"></script>
-    <script src="../js/menu.js"></script>
+    <script src="../js/hub_version.js"></script>
+    <script src="../js/run.js" data-entry="open_guide.js,menu.js"></script>
   </body>
 </html>

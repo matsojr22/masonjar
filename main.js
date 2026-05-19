@@ -8,11 +8,29 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+Object.defineProperty(exports, "__esModule", { value: true });
+/** Ensure packaged / relocated app roots can resolve production dependencies. */
+const path = require("path");
+const fs = require("fs");
+const Module = require("module");
+(function ensureAppNodeModulePaths() {
+    const roots = [__dirname];
+    const resourcesPath = process
+        .resourcesPath;
+    if (resourcesPath) {
+        roots.push(path.join(resourcesPath, "app"));
+    }
+    const globalPaths = Module.globalPaths;
+    for (const root of roots) {
+        const nodeModules = path.join(root, "node_modules");
+        if (fs.existsSync(nodeModules) && !globalPaths.includes(nodeModules)) {
+            globalPaths.unshift(nodeModules);
+        }
+    }
+})();
 const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 const { promisify } = require("util");
 const { PythonShell } = require("python-shell");
-const path = require("path");
-const fs = require("fs");
 const tar = require("tar");
 const mv = promisify(fs.rename);
 const exec = promisify(require("child_process").exec);
@@ -133,24 +151,35 @@ function checkForUpdates() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             const response = yield serverFetch(GITHUB_API_RELEASES);
+            // No published releases yet — normal for a new fork; do not alarm the user.
+            if (response.status === 404) {
+                console.log("No GitHub releases published yet; skipping update check.");
+                return;
+            }
             if (!response.ok) {
-                throw new Error(`GitHub API response status: ${response.status}`);
+                console.warn(`Update check: GitHub API returned ${response.status}; skipping.`);
+                return;
             }
             const data = yield response.json();
             const latestVersionTag = data.tag_name;
-            if (semver.valid(latestVersionTag) &&
-                semver.gt(latestVersionTag, CURRENT_VERSION_TAG)) {
+            const latestCoerced = latestVersionTag
+                ? semver.coerce(latestVersionTag)
+                : null;
+            const currentCoerced = semver.coerce(CURRENT_VERSION_TAG);
+            if (latestCoerced &&
+                currentCoerced &&
+                semver.gt(latestCoerced, currentCoerced)) {
                 const userResponse = yield dialog.showMessageBox({
                     type: "info",
                     title: "Update Available",
-                    message: "A new version of the application is available.",
-                    detail: `The latest version is ${latestVersionTag}. Would you like to download it?`,
+                    message: "A new version of Mason Jar is available.",
+                    detail: `The latest version is ${latestCoerced.version}. Would you like to download it?`,
                     buttons: ["Yes", "No"],
                     defaultId: 0,
                     cancelId: 1,
                 });
-                if (userResponse.response === 0) {
-                    shell.openExternal(data.html_url); // URL to the latest release page
+                if (userResponse.response === 0 && data.html_url) {
+                    shell.openExternal(data.html_url);
                 }
             }
             else {
@@ -158,8 +187,8 @@ function checkForUpdates() {
             }
         }
         catch (error) {
-            console.error("Failed to check for updates:", error);
-            dialog.showErrorBox("Update Check Failed", "There was an error checking for updates. Please try again later.");
+            // Network or parse errors should not block launch with a modal dialog.
+            console.warn("Failed to check for updates:", error);
         }
     });
 }
@@ -523,7 +552,7 @@ function setupEnvironment(win) {
             .then(({ stdout, stderr }) => {
             console.log(stdout);
             win.webContents.send("updateStatus", "Setup complete!");
-            win.loadFile("pages/index.html");
+            win.loadFile("pages/menu.html");
         })
             .catch((error) => {
             console.log("An error occurred during setup:", error);
@@ -661,7 +690,7 @@ app.on("ready", () => {
                     // Check for new patch
                     // Check if any directories are missing
                     fixMissingDirectories(win).then(() => {
-                        win.loadFile("pages/index.html");
+                        win.loadFile("pages/menu.html");
                     });
                 });
             }
@@ -702,31 +731,99 @@ function openDialogOptions(properties, defaultPath) {
     }
     return options;
 }
+/** Prefer the BrowserWindow that sent the IPC (menu/tools), not getFocusedWindow() (often the log). */
+function dialogParentWindow(event) {
+    const fromSender = BrowserWindow.fromWebContents(event.sender);
+    if (fromSender && !fromSender.isDestroyed()) {
+        return fromSender;
+    }
+    if (win && !win.isDestroyed()) {
+        return win;
+    }
+    const focused = BrowserWindow.getFocusedWindow();
+    return focused && !focused.isDestroyed() ? focused : null;
+}
+function directoryDialogOptions(tag, defaultPath) {
+    const options = openDialogOptions(["openDirectory"], defaultPath);
+    if (tag === "projectBundle") {
+        options.title = `Open ${BRANDING.PRODUCT_NAME} project`;
+        options.message =
+            "Select the project folder (e.g. MyBrain.masonjar) that contains project.masonjar or project.belljar.";
+    }
+    else if (tag === "newProjectBundle") {
+        options.title = `New ${BRANDING.PRODUCT_NAME} project location`;
+        options.message =
+            "Choose a parent folder where the new project bundle will be created.";
+    }
+    else if (tag === "brainRoot") {
+        options.title = "Legacy brain folder";
+        options.message =
+            "Select the M### brain folder (must contain a counting/ subdirectory).";
+    }
+    return options;
+}
+function pickDirectory(event, data) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const parentWindow = dialogParentWindow(event);
+        const { tag, defaultPath } = parseDialogArg(data);
+        const options = directoryDialogOptions(tag, defaultPath);
+        if (parentWindow && !parentWindow.isDestroyed()) {
+            parentWindow.show();
+            parentWindow.focus();
+        }
+        else {
+            console.warn("pickDirectory: no parent BrowserWindow; showing detached folder dialog");
+        }
+        let result;
+        try {
+            result =
+                parentWindow && !parentWindow.isDestroyed()
+                    ? yield dialog.showOpenDialog(parentWindow, options)
+                    : yield dialog.showOpenDialog(options);
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error("showOpenDialog failed:", err);
+            return { canceled: true, tag, error: message };
+        }
+        if (result.canceled || !result.filePaths[0]) {
+            return { canceled: true, tag };
+        }
+        return { canceled: false, tag, path: result.filePaths[0] };
+    });
+}
+/** Promise-based folder picker (avoids returnPath listener races on the menu). */
+ipcMain.handle("showOpenDirectoryDialog", (event, data) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        return yield pickDirectory(event, data);
+    }
+    catch (err) {
+        console.error("showOpenDirectoryDialog failed:", err);
+        const { tag } = parseDialogArg(data);
+        const message = err instanceof Error ? err.message : String(err);
+        return { canceled: true, tag, error: message };
+    }
+}));
 // Handlers
 // Directories
 ipcMain.on("openDialog", function (event, data) {
-    let window = BrowserWindow.getFocusedWindow();
     const { tag, defaultPath } = parseDialogArg(data);
-    dialog
-        .showOpenDialog(window, openDialogOptions(["openDirectory"], defaultPath))
-        .then((result) => {
-        // Check for a valid result
-        if (!result.canceled) {
-            // console.log(result.filePaths)
-            // Send back the dir and whether this is input or output
-            event.sender.send("returnPath", [result.filePaths[0], tag]);
+    void pickDirectory(event, data).then((result) => {
+        if (!result.canceled && "path" in result) {
+            event.sender.send("returnPath", [result.path, tag]);
         }
-    })
-        .catch((err) => {
-        console.log(err);
     });
 });
 // Files
 ipcMain.on("openFileDialog", function (event, data) {
-    let window = BrowserWindow.getFocusedWindow();
+    const parentWindow = dialogParentWindow(event);
     const { tag, defaultPath } = parseDialogArg(data);
+    if (parentWindow && !parentWindow.isDestroyed()) {
+        parentWindow.show();
+        parentWindow.focus();
+    }
     dialog
-        .showOpenDialog(window, openDialogOptions(["openFile"], defaultPath))
+        .showOpenDialog(parentWindow, openDialogOptions(["openFile"], defaultPath))
         .then((result) => {
         // Check for a valid result
         if (!result.canceled) {
@@ -1272,4 +1369,30 @@ ipcMain.on("runDetection", function (event, data) {
     ipcMain.once("killDetect", function (event, data) {
         pyshell.kill();
     });
+});
+function getBatchQueueDeps() {
+    return {
+        PythonShell,
+        envPythonPath,
+        pyCommand,
+        pyScriptsPath,
+        homeDir,
+        appDir,
+        describePythonShellFailure,
+        queueLogLineForUi,
+    };
+}
+ipcMain.on("runBatch", function (event, plan) {
+    const { runBatchQueue } = require("./batch_queue");
+    void runBatchQueue(getBatchQueueDeps(), plan, (overallPct, message, detail) => {
+        event.sender.send("batchProgress", [overallPct, message, detail || ""]);
+    }, (projectName, step) => {
+        event.sender.send("batchJobStart", { project: projectName, step });
+    }).then((result) => {
+        event.sender.send("batchComplete", result);
+    });
+});
+ipcMain.on("killBatch", function () {
+    const { killBatchQueue } = require("./batch_queue");
+    killBatchQueue();
 });

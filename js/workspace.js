@@ -329,27 +329,19 @@ function bindPathPicker(inputEl, tag, logicalKey, isFile) {
 }
 
 function chooseBrainFolder(callback) {
-	ipc.once("returnPath", function (event, response) {
-		var tag = response[1];
-		if (typeof tag === "object" && tag !== null && tag.tag) {
-			tag = tag.tag;
-		}
-		if (tag !== "brainRoot") {
-			return;
-		}
-		var selected = response[0];
-		if (selected) {
-			scanBrainRoot(selected);
-		}
-		if (typeof callback === "function") {
-			callback(workspace);
-		}
-	});
+	var dialogs = require("./dialogs");
+	loadWorkspace();
 	var defaultPath = workspace.brainRoot || "";
-	var payload = defaultPath
-		? { tag: "brainRoot", defaultPath: defaultPath }
-		: "brainRoot";
-	ipc.send("openDialog", payload);
+	dialogs
+		.pickDirectory({ tag: "brainRoot", defaultPath: defaultPath })
+		.then(function (selected) {
+			if (selected) {
+				scanBrainRoot(selected);
+			}
+			if (typeof callback === "function") {
+				callback(workspace);
+			}
+		});
 }
 
 module.exports = {

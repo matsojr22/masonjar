@@ -2,8 +2,8 @@
 
 var fs = require("fs");
 var path = require("path");
-var ipc = require("electron").ipcRenderer;
 var branding = require("./branding");
+var dialogs = require("./dialogs");
 
 var PROJECT_FILENAME = branding.PROJECT_FILENAME;
 var META_DIR = branding.META_DIR;
@@ -134,12 +134,17 @@ function resolveLogicalPath(logicalKey) {
 	return "";
 }
 
+function readProjectJson(bundleRoot) {
+	var filename = findProjectFilename(bundleRoot);
+	var filePath = path.join(bundleRoot, filename);
+	var raw = fs.readFileSync(filePath, "utf8");
+	return JSON.parse(raw);
+}
+
 function loadProjectJson(bundleRoot) {
 	state.projectFilename = findProjectFilename(bundleRoot);
 	state.metaDirName = findMetaDirName(bundleRoot);
-	var filePath = projectFilePath(bundleRoot);
-	var raw = fs.readFileSync(filePath, "utf8");
-	return JSON.parse(raw);
+	return readProjectJson(bundleRoot);
 }
 
 function saveProjectJson() {
@@ -546,16 +551,16 @@ function buildManifest(bundleRoot, onProgress) {
 }
 
 function chooseProjectBundle(callback) {
-	ipc.once("returnPath", function (event, response) {
-		var tag = response[1];
-		if (typeof tag === "object" && tag !== null && tag.tag) {
-			tag = tag.tag;
-		}
-		if (tag !== "projectBundle") {
-			return;
-		}
-		var selected = response[0];
-		if (selected) {
+	var defaultPath = state.bundleRoot || "";
+	dialogs
+		.pickDirectory({ tag: "projectBundle", defaultPath: defaultPath })
+		.then(function (selected) {
+			if (!selected) {
+				if (typeof callback === "function") {
+					callback(null);
+				}
+				return;
+			}
 			try {
 				openProject(selected);
 				if (typeof callback === "function") {
@@ -564,31 +569,155 @@ function chooseProjectBundle(callback) {
 			} catch (err) {
 				if (typeof callback === "function") {
 					callback(err);
+				} else {
+					alert(String(err.message || err));
+				}
+			}
+		});
+}
+
+function listBundlesInDirectory(parentDir) {
+	parentDir = path.resolve(parentDir);
+	if (!parentDir || !fs.existsSync(parentDir)) {
+		return [];
+	}
+	var out = [];
+	var entries;
+	try {
+		entries = fs.readdirSync(parentDir, { withFileTypes: true });
+	} catch (err) {
+		return [];
+	}
+	for (var i = 0; i < entries.length; i++) {
+		if (!entries[i].isDirectory()) {
+			continue;
+		}
+		var full = path.join(parentDir, entries[i].name);
+		if (isBundleRoot(full)) {
+			out.push(full);
+		}
+	}
+	return out.sort();
+}
+
+var BATCH_STEP_ROLES = {
+	max: { indir: "original_scans", outdir: "max" },
+	sharpen: { indir: "max", outdir: "max" },
+	detect: { indir: "max", outdir: "predictions" },
+	count: {
+		preddir: "predictions",
+		annodir: "slices",
+		outdir: "quantification",
+	},
+	intensity: {
+		indir: "max",
+		annodir: "slices",
+		outdir: "pkls",
+		dapi: "dapi",
+	},
+	dual: { indir: "pkls", outdir: "dual" },
+};
+
+var ANNOTATION_PKL_RE = /^Annotation_.*\.pkl$/i;
+
+function countAnnotationPkls(dir) {
+	if (!dir || !fs.existsSync(dir)) {
+		return 0;
+	}
+	var count = 0;
+	var entries;
+	try {
+		entries = fs.readdirSync(dir, { withFileTypes: true });
+	} catch (err) {
+		return 0;
+	}
+	for (var i = 0; i < entries.length; i++) {
+		if (!entries[i].isFile()) {
+			continue;
+		}
+		if (ANNOTATION_PKL_RE.test(entries[i].name) || /\.pkl$/i.test(entries[i].name)) {
+			count++;
+		}
+	}
+	return count;
+}
+
+function resolvePathsForBundle(bundleRoot, stepId) {
+	bundleRoot = path.resolve(bundleRoot);
+	var roles;
+	try {
+		roles = readProjectJson(bundleRoot).roles || CANONICAL_ROLES;
+	} catch (err) {
+		roles = CANONICAL_ROLES;
+	}
+	var mapping = BATCH_STEP_ROLES[stepId];
+	if (!mapping) {
+		return {};
+	}
+	var out = {};
+	var keys = Object.keys(mapping);
+	for (var i = 0; i < keys.length; i++) {
+		var key = keys[i];
+		out[key] = resolveRolePathForBundle(bundleRoot, roles, mapping[key]);
+	}
+	return out;
+}
+
+function preflightBatchPlan(plan) {
+	var warnings = [];
+	if (!plan || !plan.projects || !plan.steps) {
+		return warnings;
+	}
+	var stepsNeedingAnnotations = { count: true, intensity: true };
+	for (var p = 0; p < plan.projects.length; p++) {
+		var proj = plan.projects[p];
+		var bundleRoot = proj.path;
+		var projName = proj.name || path.basename(bundleRoot);
+		for (var s = 0; s < plan.steps.length; s++) {
+			var stepId = plan.steps[s];
+			var paths = resolvePathsForBundle(bundleRoot, stepId);
+			var pathKeys = Object.keys(paths);
+			for (var k = 0; k < pathKeys.length; k++) {
+				var pk = pathKeys[k];
+				if (pk === "dapi") {
+					continue;
+				}
+				var dirPath = paths[pk];
+				if (!dirPath || !fs.existsSync(dirPath)) {
+					warnings.push(
+						projName +
+							": missing " +
+							pk +
+							" for " +
+							stepId +
+							" (" +
+							(dirPath || "unset") +
+							")",
+					);
+				}
+			}
+			if (stepsNeedingAnnotations[stepId]) {
+				var slicesDir = resolvePathsForBundle(bundleRoot, stepId).annodir;
+				if (!slicesDir || countAnnotationPkls(slicesDir) === 0) {
+					warnings.push(
+						projName +
+							": no annotation PKLs in slices — " +
+							stepId +
+							" may fail",
+					);
 				}
 			}
 		}
-	});
-	var defaultPath = state.bundleRoot || "";
-	var payload = defaultPath
-		? { tag: "projectBundle", defaultPath: defaultPath }
-		: "projectBundle";
-	ipc.send("openDialog", payload);
+	}
+	return warnings;
 }
 
 function chooseNewBundleLocation(callback) {
-	ipc.once("returnPath", function (event, response) {
-		var tag = response[1];
-		if (typeof tag === "object" && tag !== null && tag.tag) {
-			tag = tag.tag;
-		}
-		if (tag !== "newProjectBundle") {
-			return;
-		}
+	dialogs.pickDirectory({ tag: "newProjectBundle" }).then(function (selected) {
 		if (typeof callback === "function") {
-			callback(response[0] || "");
+			callback(selected || "");
 		}
 	});
-	ipc.send("openDialog", "newProjectBundle");
 }
 
 module.exports = {
@@ -617,4 +746,10 @@ module.exports = {
 	addRecentProject: addRecentProject,
 	syncWorkspaceFromProject: syncWorkspaceFromProject,
 	setActiveProject: setActiveProject,
+	listBundlesInDirectory: listBundlesInDirectory,
+	resolvePathsForBundle: resolvePathsForBundle,
+	preflightBatchPlan: preflightBatchPlan,
+	countAnnotationPkls: countAnnotationPkls,
+	loadProjectJson: loadProjectJson,
+	readProjectJson: readProjectJson,
 };

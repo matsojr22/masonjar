@@ -1,7 +1,9 @@
 var ipc = require('electron').ipcRenderer;
 var workspace = require('./workspace');
 var project = require('./project');
+var pipelineGate = require('./pipeline_gate');
 project.tryRestoreActiveProject();
+pipelineGate.assertPipelineAccess();
 var run = document.getElementById('run');
 var preddir = document.getElementById('preddir');
 var annodir = document.getElementById('annodir');
