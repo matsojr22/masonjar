@@ -71,6 +71,7 @@ def probe_file(path: Path) -> dict:
         "has_m_dim": has_m_dim,
         "m_tile_count": mosaic_info.get("m_tile_count"),
         "likely_unstitched": bool(mosaic_info.get("likely_unstitched")),
+        "mosaic_stitch_status": mosaic_info.get("mosaic_stitch_status", "unknown"),
         "mosaic_warnings": list(mosaic_info.get("mosaic_warnings") or []),
         "scene_count": len(scene_indices),
         "channel_count": len(channel_indices),

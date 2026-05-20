@@ -205,7 +205,7 @@ def test_collapse_z_stack_to_2d_single_plane() -> None:
     assert collapse_z_stack_to_2d(already_2d) is already_2d
 
 
-def test_assess_mosaic_import_warns_on_m_tiles() -> None:
+def test_assess_mosaic_import_m_tiles_informational_only() -> None:
     class FakeCzi:
         def is_mosaic(self):
             return True
@@ -214,9 +214,11 @@ def test_assess_mosaic_import_warns_on_m_tiles() -> None:
             return [{"M": (0, 3), "Z": (0, 1), "C": (0, 1), "S": (0, 1)}]
 
     info = assess_mosaic_import(FakeCzi(), sample_read=False)
-    assert info["likely_unstitched"] is True
+    assert info["likely_unstitched"] is False
     assert info["m_tile_count"] == 3
-    assert any("ZEN" in w for w in info["mosaic_warnings"])
+    assert info["mosaic_stitch_status"] == "unknown"
+    assert any("tile index" in w.lower() for w in info["mosaic_warnings"])
+    assert not any("stitch in ZEN" in w for w in info["mosaic_warnings"])
 
 
 def test_assess_mosaic_import_bbox_mismatch() -> None:
@@ -251,6 +253,7 @@ def test_assess_mosaic_import_bbox_mismatch() -> None:
 
     info = assess_mosaic_import(FakeCzi(), sample_read=True)
     assert info["likely_unstitched"] is True
+    assert info["mosaic_stitch_status"] == "suspect"
     assert any("bounding box" in w.lower() or "tile" in w.lower() for w in info["mosaic_warnings"])
 
 
@@ -267,6 +270,38 @@ def test_assess_mosaic_import_non_mosaic_clean() -> None:
     assert info["mosaic_warnings"] == []
 
 
+def test_assess_mosaic_import_zen_stitched_full_coverage() -> None:
+    """ZEN-stitched mosaics keep M>1 but read_mosaic returns full scene bbox."""
+    import numpy as np
+
+    class BBox:
+        x = 0
+        y = 0
+        w = 2000
+        h = 1500
+
+    class FakeCzi:
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"M": (0, 30), "Z": (0, 1), "C": (0, 1), "S": (0, 1)}]
+
+        def read_mosaic(self, **kwargs):
+            assert "S" not in kwargs
+            plane = np.zeros((1500, 2000), dtype=np.uint16)
+            return plane, [("Y", 1500), ("X", 2000)]
+
+        def get_mosaic_scene_bounding_box(self, index=0):
+            return BBox()
+
+    info = assess_mosaic_import(FakeCzi(), sample_read=True)
+    assert info["likely_unstitched"] is False
+    assert info["mosaic_stitch_status"] == "ok"
+    assert info["m_tile_count"] == 30
+    assert not any("stitch in ZEN" in w for w in info["mosaic_warnings"])
+
+
 def test_read_czi_plane_mosaic_uses_read_mosaic() -> None:
     import numpy as np
 
@@ -277,8 +312,22 @@ def test_read_czi_plane_mosaic_uses_read_mosaic() -> None:
         def is_mosaic(self):
             return True
 
+        def get_dims_shape(self):
+            return [{"M": (0, 4), "Z": (0, 2), "C": (0, 4), "S": (0, 3)}]
+
+        def get_mosaic_scene_bounding_box(self, index=0):
+            class BBox:
+                x = 100
+                y = 200
+                w = 800
+                h = 600
+
+            return BBox()
+
         def read_mosaic(self, **kwargs):
             self.calls.append(kwargs)
+            if "S" in kwargs:
+                raise ValueError("Do not set S when reading mosaic files!")
             arr = np.ones((1, 12, 24), dtype=np.uint8)
             return arr, [("Y", 12), ("X", 24)]
 
@@ -288,4 +337,37 @@ def test_read_czi_plane_mosaic_uses_read_mosaic() -> None:
     czi = FakeCzi()
     plane = read_czi_plane(czi, scene=2, z=1, channel=3)
     assert plane.shape == (12, 24)
-    assert czi.calls == [{"scale_factor": 1.0, "S": 2, "Z": 1, "C": 3}]
+    assert czi.calls == [
+        {
+            "scale_factor": 1.0,
+            "Z": 1,
+            "C": 3,
+            "region": (100, 200, 800, 600),
+        }
+    ]
+
+
+def test_read_czi_plane_mosaic_single_scene_no_region() -> None:
+    import numpy as np
+
+    class FakeCzi:
+        def __init__(self):
+            self.calls = []
+
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"M": (0, 30), "Z": (0, 1), "C": (0, 1), "S": (0, 1)}]
+
+        def read_mosaic(self, **kwargs):
+            self.calls.append(kwargs)
+            assert "S" not in kwargs
+            assert "region" not in kwargs
+            arr = np.ones((12, 24), dtype=np.uint8)
+            return arr, [("Y", 12), ("X", 24)]
+
+    czi = FakeCzi()
+    plane = read_czi_plane(czi, scene=0, z=0, channel=0)
+    assert plane.shape == (12, 24)
+    assert czi.calls == [{"scale_factor": 1.0, "Z": 0, "C": 0}]

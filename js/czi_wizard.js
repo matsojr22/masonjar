@@ -452,6 +452,30 @@ function renderPrimarySignalSelect() {
 	}
 }
 
+function renderMosaicInfo(files) {
+	var box = qs("mosaicInfoBox");
+	if (!box) {
+		return;
+	}
+	var infos = cziImport.collectMosaicInfo(files);
+	if (!infos.length) {
+		box.classList.add("d-none");
+		box.innerHTML = "";
+		return;
+	}
+	var html =
+		"<strong>Mosaic files detected:</strong> These CZIs contain mosaic tile structure. " +
+		"This is normal for ZEN-stitched exports.<ul class=\"mb-0 mt-2\">";
+	for (var i = 0; i < infos.length; i++) {
+		var info = infos[i];
+		var label = info.basename ? "<code>" + info.basename + "</code>: " : "";
+		html += "<li>" + label + info.message + "</li>";
+	}
+	html += "</ul>";
+	box.innerHTML = html;
+	box.classList.remove("d-none");
+}
+
 function renderMosaicWarnings(files) {
 	var box = qs("mosaicWarningBox");
 	if (!box) {
@@ -488,7 +512,7 @@ function mosaicTableLabel(f) {
 	if (tiles !== "?" && tiles !== 1) {
 		label += " (" + tiles + " tiles)";
 	}
-	if (f.likely_unstitched) {
+	if (f.likely_unstitched || f.mosaic_stitch_status === "suspect") {
 		label += ' <span class="text-warning">unstitched?</span>';
 	}
 	return label;
@@ -499,12 +523,13 @@ function renderCziFileTable(files) {
 	if (!tbody) {
 		return;
 	}
+	renderMosaicInfo(files);
 	renderMosaicWarnings(files);
 	tbody.innerHTML = "";
 	for (var i = 0; i < files.length; i++) {
 		var f = files[i];
 		var tr = document.createElement("tr");
-		if (f.likely_unstitched) {
+		if (f.likely_unstitched || f.mosaic_stitch_status === "suspect") {
 			tr.classList.add("table-warning");
 		}
 		var err = f.error ? ' <span class="text-danger">' + f.error + "</span>" : "";

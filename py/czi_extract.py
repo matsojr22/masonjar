@@ -385,13 +385,23 @@ def main() -> int:
             blocks = normalized_dim_blocks(czi)
             dim_letters = sorted({str(k).upper() for b in blocks for k in b.keys()})
             dims_str = "".join(dim_letters)
-            mosaic_info = assess_mosaic_import(czi, sample_read=False)
+            mosaic_info = assess_mosaic_import(czi, sample_read=True)
             is_mosaic = bool(mosaic_info.get("is_mosaic"))
             emit_log(f"  dims={dims_str or '?'}, is_mosaic={is_mosaic}")
             if is_mosaic and key not in mosaic_logged:
-                emit_log("  mosaic read, scale_factor=1.0")
-                for warn in mosaic_info.get("mosaic_warnings") or []:
-                    emit_log(f"  WARNING: {warn}")
+                stitch_status = str(mosaic_info.get("mosaic_stitch_status") or "unknown")
+                if stitch_status == "ok":
+                    emit_log("  mosaic stitched read OK (scale_factor=1.0, no S dimension)")
+                elif stitch_status == "suspect":
+                    emit_log("  mosaic read, scale_factor=1.0")
+                    for warn in mosaic_info.get("mosaic_warnings") or []:
+                        if "ZEN" in warn or "stitch" in warn.lower() or "tile" in warn.lower():
+                            emit_log(f"  WARNING: {warn}")
+                else:
+                    emit_log("  mosaic read, scale_factor=1.0 (stitch status unknown)")
+                    for warn in mosaic_info.get("mosaic_warnings") or []:
+                        if "Could not read" in warn:
+                            emit_log(f"  WARNING: {warn}")
                 mosaic_logged.add(key)
             czi_cache[key] = czi
         return czi_cache[key]

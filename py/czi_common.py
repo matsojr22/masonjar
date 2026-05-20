@@ -296,30 +296,72 @@ def bbox_width_height(bbox: Any) -> tuple[int, int]:
     return 0, 0
 
 
+def bbox_origin(bbox: Any) -> tuple[int, int]:
+    if bbox is None:
+        return 0, 0
+    x = getattr(bbox, "x", None)
+    y = getattr(bbox, "y", None)
+    if x is not None and y is not None:
+        return int(x), int(y)
+    if isinstance(bbox, (list, tuple)) and len(bbox) >= 2:
+        return int(bbox[0]), int(bbox[1])
+    if isinstance(bbox, Mapping):
+        return int(bbox.get("x", 0)), int(bbox.get("y", 0))
+    return 0, 0
+
+
+def mosaic_region_for_scene(czi, scene: int) -> tuple[int, int, int, int] | None:
+    """Return (x, y, width, height) for read_mosaic region, or None for default extent."""
+    get_bbox = getattr(czi, "get_mosaic_scene_bounding_box", None)
+    if not callable(get_bbox):
+        return None
+    try:
+        bbox = get_bbox(scene)
+    except Exception:
+        return None
+    if bbox is None:
+        return None
+    w, h = bbox_width_height(bbox)
+    if w <= 0 or h <= 0:
+        return None
+    x, y = bbox_origin(bbox)
+    return x, y, w, h
+
+
 def assess_mosaic_import(czi, *, sample_read: bool = True) -> dict[str, Any]:
     """Heuristics for unstitched mosaic tiles (warn only; import is not blocked)."""
-    blocks = normalized_dim_blocks(czi)
     is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
     m_tile_count = m_tile_count_from_czi(czi)
     has_m_dim = m_tile_count > 1
     warnings: list[str] = []
     likely_unstitched = False
+    mosaic_stitch_status = "ok"
 
     if is_mosaic and has_m_dim:
-        likely_unstitched = True
         warnings.append(
-            f"Mosaic file reports {m_tile_count} tile(s) on the M axis. If the acquisition "
-            "was not stitched in ZEN before export, import may show seams, missing regions, "
-            "or wrong geometry. Open the file in ZEN, run mosaic stitch, and re-export."
+            f"Mosaic structure with {m_tile_count} tile index(es) on the M axis "
+            "(normal for ZEN-stitched exports)."
         )
 
-    if not is_mosaic or not sample_read:
+    if not is_mosaic:
         return {
             "is_mosaic": is_mosaic,
             "m_tile_count": m_tile_count,
             "has_m_dim": has_m_dim,
             "mosaic_warnings": warnings,
             "likely_unstitched": likely_unstitched,
+            "mosaic_stitch_status": mosaic_stitch_status,
+        }
+
+    if not sample_read:
+        mosaic_stitch_status = "unknown"
+        return {
+            "is_mosaic": is_mosaic,
+            "m_tile_count": m_tile_count,
+            "has_m_dim": has_m_dim,
+            "mosaic_warnings": warnings,
+            "likely_unstitched": likely_unstitched,
+            "mosaic_stitch_status": mosaic_stitch_status,
         }
 
     scene_indices = scene_indices_from_czi(czi)
@@ -332,6 +374,7 @@ def assess_mosaic_import(czi, *, sample_read: bool = True) -> dict[str, Any]:
     try:
         plane = read_czi_plane(czi, scene, z, channel)
     except Exception as exc:
+        mosaic_stitch_status = "unknown"
         warnings.append(f"Could not read a sample mosaic plane: {exc}")
         return {
             "is_mosaic": is_mosaic,
@@ -339,6 +382,7 @@ def assess_mosaic_import(czi, *, sample_read: bool = True) -> dict[str, Any]:
             "has_m_dim": has_m_dim,
             "mosaic_warnings": warnings,
             "likely_unstitched": likely_unstitched,
+            "mosaic_stitch_status": mosaic_stitch_status,
         }
 
     import numpy as _np
@@ -388,12 +432,18 @@ def assess_mosaic_import(czi, *, sample_read: bool = True) -> dict[str, Any]:
         except Exception:
             pass
 
+    if likely_unstitched:
+        mosaic_stitch_status = "suspect"
+    else:
+        mosaic_stitch_status = "ok"
+
     return {
         "is_mosaic": is_mosaic,
         "m_tile_count": m_tile_count,
         "has_m_dim": has_m_dim,
         "mosaic_warnings": warnings,
         "likely_unstitched": likely_unstitched,
+        "mosaic_stitch_status": mosaic_stitch_status,
     }
 
 
@@ -497,7 +547,13 @@ def read_czi_plane(czi, scene: int, z: int, channel: int) -> Any:
     is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
     fixed = {"S", "Z", "C"}
     if is_mosaic:
-        result = czi.read_mosaic(scale_factor=1.0, S=scene, Z=z, C=channel)
+        kwargs: dict[str, Any] = {"scale_factor": 1.0, "Z": z, "C": channel}
+        scene_indices = scene_indices_from_czi(czi)
+        if len(scene_indices) > 1:
+            region = mosaic_region_for_scene(czi, scene)
+            if region is not None:
+                kwargs["region"] = region
+        result = czi.read_mosaic(**kwargs)
         data, dims = unpack_read_image(result)
         if not isinstance(data, _np.ndarray):
             data = _np.asarray(data)

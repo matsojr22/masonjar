@@ -226,6 +226,7 @@ function normalizeProbeFileEntry(file, sourceDir, scanIndex) {
 		has_m_dim: file.has_m_dim,
 		m_tile_count: file.m_tile_count,
 		likely_unstitched: file.likely_unstitched,
+		mosaic_stitch_status: file.mosaic_stitch_status || "unknown",
 		mosaic_warnings: file.mosaic_warnings || [],
 		scenes: scenes,
 		channels: file.channels || [],
@@ -242,10 +243,13 @@ function collectMosaicWarnings(files) {
 		if (f.error) {
 			continue;
 		}
+		if (!f.likely_unstitched && f.mosaic_stitch_status !== "suspect") {
+			continue;
+		}
 		var warnings = f.mosaic_warnings || [];
 		for (var w = 0; w < warnings.length; w++) {
 			var msg = String(warnings[w] || "").trim();
-			if (!msg) {
+			if (!msg || msg.indexOf("normal for ZEN-stitched") >= 0) {
 				continue;
 			}
 			var key = (f.basename || f.path || "file") + "|" + msg;
@@ -267,6 +271,38 @@ function collectMosaicWarnings(files) {
 				out.push({ basename: f.basename || "", message: fallback });
 			}
 		}
+	}
+	return out;
+}
+
+function collectMosaicInfo(files) {
+	var out = [];
+	var seen = {};
+	var list = files || [];
+	for (var i = 0; i < list.length; i++) {
+		var f = list[i];
+		if (f.error || f.is_mosaic !== true) {
+			continue;
+		}
+		if (f.likely_unstitched || f.mosaic_stitch_status === "suspect") {
+			continue;
+		}
+		var tiles = f.m_tile_count != null ? f.m_tile_count : f.has_m_dim ? "2+" : null;
+		if (!tiles || tiles === 1) {
+			continue;
+		}
+		var key = (f.basename || f.path || "file") + "|" + tiles;
+		if (seen[key]) {
+			continue;
+		}
+		seen[key] = true;
+		out.push({
+			basename: f.basename || "",
+			message:
+				"Mosaic with " +
+				tiles +
+				" tile index(es) in file structure (normal for ZEN-stitched exports).",
+		});
 	}
 	return out;
 }
@@ -608,5 +644,6 @@ module.exports = {
 	countExtractWorkItems: countExtractWorkItems,
 	primaryMaxRunRel: primaryMaxRunRel,
 	collectMosaicWarnings: collectMosaicWarnings,
+	collectMosaicInfo: collectMosaicInfo,
 	hasLikelyUnstitchedMosaic: hasLikelyUnstitchedMosaic,
 };

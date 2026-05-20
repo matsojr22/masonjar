@@ -196,19 +196,57 @@ function testCollectMosaicWarnings() {
 		{
 			basename: "tile.czi",
 			likely_unstitched: true,
+			mosaic_stitch_status: "suspect",
 			mosaic_warnings: ["Stitch in ZEN first."],
 		},
 		{
 			basename: "tile.czi",
 			likely_unstitched: true,
+			mosaic_stitch_status: "suspect",
 			mosaic_warnings: ["Stitch in ZEN first."],
 		},
-		{ basename: "flat.czi", likely_unstitched: false, mosaic_warnings: [] },
+		{
+			basename: "flat.czi",
+			likely_unstitched: false,
+			mosaic_stitch_status: "ok",
+			mosaic_warnings: [],
+		},
+		{
+			basename: "zen.czi",
+			is_mosaic: true,
+			m_tile_count: 30,
+			likely_unstitched: false,
+			mosaic_stitch_status: "ok",
+			mosaic_warnings: ["Mosaic structure with 30 tile index(es) (normal for ZEN-stitched exports)."],
+		},
 	];
 	var warnings = cziImport.collectMosaicWarnings(files);
 	assert.strictEqual(warnings.length, 1);
 	assert.strictEqual(warnings[0].basename, "tile.czi");
 	assert.match(warnings[0].message, /ZEN/);
+}
+
+function testCollectMosaicInfo() {
+	var files = [
+		{
+			basename: "zen.czi",
+			is_mosaic: true,
+			m_tile_count: 30,
+			likely_unstitched: false,
+			mosaic_stitch_status: "ok",
+		},
+		{
+			basename: "bad.czi",
+			is_mosaic: true,
+			m_tile_count: 4,
+			likely_unstitched: true,
+			mosaic_stitch_status: "suspect",
+		},
+	];
+	var infos = cziImport.collectMosaicInfo(files);
+	assert.strictEqual(infos.length, 1);
+	assert.strictEqual(infos[0].basename, "zen.czi");
+	assert.match(infos[0].message, /30 tile/);
 }
 
 function testHasLikelyUnstitchedMosaic() {
@@ -253,6 +291,7 @@ testValidateSliceOrderDuplicate();
 testCollectKeptSignalRoleKeys();
 testImportConfigPath();
 testCollectMosaicWarnings();
+testCollectMosaicInfo();
 testHasLikelyUnstitchedMosaic();
 testCountExtractWorkItems();
 console.log("test-czi-import.js: OK");
