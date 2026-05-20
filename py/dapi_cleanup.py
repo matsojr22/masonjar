@@ -161,12 +161,8 @@ def process_file(
         saturation_pct=saturation_pct,
         use_clahe=use_clahe,
     )
-    out_file = output_path / file_path.name
-    suffix = out_file.suffix.lower()
-    if suffix in {".tif", ".tiff"}:
-        tiff.imwrite(str(out_file), result.astype(np.uint8), photometric="minisblack")
-    else:
-        cv2.imwrite(str(out_file), result.astype(np.uint8))
+    out_file = output_path / (file_path.stem + ".png")
+    cv2.imwrite(str(out_file), result.astype(np.uint8))
 
 
 def main() -> None:

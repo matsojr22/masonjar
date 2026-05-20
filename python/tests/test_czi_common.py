@@ -100,6 +100,13 @@ def test_load_import_config_strips_path(tmp_path: Path) -> None:
     assert loaded.get("version") == 1
 
 
+def test_dapi_preview_path_png(tmp_path: Path) -> None:
+    bundle = tmp_path / "Brain_masonjar"
+    path = dapi_preview_path(bundle, "M528_s001")
+    assert path == bundle / "data/counting/00_dapi/M528_s001.png"
+    assert path.suffix.lower() == ".png"
+
+
 def test_branch_paths(tmp_path: Path) -> None:
     bundle = tmp_path / "Brain_masonjar"
     assert branch_for_role(ROLE_SIGNAL_SOMATA) == "somata"
@@ -558,6 +565,11 @@ def test_preview_plane_to_uint8_uint16() -> None:
     assert out.dtype == np.uint8
     assert out.max() <= 255
 
+    low = np.full((32, 32), 400, dtype=np.uint16)
+    low[8:24, 8:24] = 500
+    out_low = preview_plane_to_uint8(low)
+    assert out_low.max() > 200
+
 
 def test_clamp_preview_scale() -> None:
     assert clamp_preview_scale(0.05) == 0.05
@@ -591,6 +603,7 @@ def test_repair_preview_from_zstack(tmp_path: Path) -> None:
     arr = cv2.imread(str(prev), cv2.IMREAD_UNCHANGED)
     assert arr.dtype == np.uint8
     assert arr.shape == (10, 10)
+    assert arr.max() > 200
 
 
 def test_read_czi_plane_mosaic_single_scene_no_region() -> None:

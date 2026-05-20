@@ -31,7 +31,7 @@ CANONICAL_REL = {
 }
 
 DEFAULT_PREVIEW_SCALE = 0.05
-PREVIEW_FORMAT_VERSION = 3
+PREVIEW_FORMAT_VERSION = 4
 
 
 def clamp_preview_scale(scale: float | None) -> float:
@@ -45,24 +45,28 @@ def clamp_preview_scale(scale: float | None) -> float:
     return value
 
 
-def preview_plane_to_uint8(plane) -> "np.ndarray":
+def preview_autoscale_to_uint8(plane, saturation_pct: float = 2.0) -> "np.ndarray":
+    """Percentile stretch for orient/adjust preview PNGs (display contrast)."""
     import numpy as np
 
     arr = np.asarray(plane)
     if arr.dtype == np.uint8:
         return arr
-    if np.issubdtype(arr.dtype, np.floating):
-        arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
-        max_val = float(arr.max()) if arr.size else 0.0
-        if max_val <= 1.0:
-            scaled = arr * 255.0
-        else:
-            scaled = arr * (255.0 / max_val) if max_val > 0 else arr
-        return np.clip(scaled, 0, 255).astype(np.uint8)
-    info = np.iinfo(arr.dtype) if np.issubdtype(arr.dtype, np.integer) else None
-    if info is not None and info.max > 255:
-        return (arr.astype(np.float32) * (255.0 / float(info.max))).astype(np.uint8)
-    return np.clip(arr, 0, 255).astype(np.uint8)
+    work = np.nan_to_num(arr.astype(np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    flat = work.ravel()
+    if flat.size == 0:
+        return np.zeros(arr.shape, dtype=np.uint8)
+    lo = float(np.percentile(flat, saturation_pct))
+    hi = float(np.percentile(flat, 100.0 - saturation_pct))
+    if hi <= lo:
+        hi = lo + 1.0
+    clipped = np.clip(flat, lo, hi)
+    scaled = (clipped - lo) / (hi - lo) * 255.0
+    return scaled.reshape(arr.shape).astype(np.uint8)
+
+
+def preview_plane_to_uint8(plane) -> "np.ndarray":
+    return preview_autoscale_to_uint8(plane)
 
 
 def sanitize_slice_stem(stem: str) -> str:
@@ -200,11 +204,12 @@ def original_scans_path(bundle_root: Path, channel: Mapping[str, Any], slice_id:
 
 
 def dapi_preview_path(bundle_root: Path, slice_id: str) -> Path:
-    return bundle_root / CANONICAL_REL["dapi"] / f"{slice_id}.tif"
+    return bundle_root / CANONICAL_REL["dapi"] / f"{slice_id}.png"
 
 
 def orient_dapi_preview_path(bundle_root: Path, slice_id: str) -> Path:
-    return bundle_root / CANONICAL_REL["previews"] / f"{slice_id}_dapi.png"
+    """Legacy alias — low-res DAPI lives in ``00_dapi/{sliceId}.png`` only."""
+    return dapi_preview_path(bundle_root, slice_id)
 
 
 def signal_preview_path(bundle_root: Path, slice_id: str, channel: Mapping[str, Any]) -> Path:

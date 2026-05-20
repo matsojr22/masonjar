@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from czi_common import emit_log
+
 
 def resolve_previews_dir(images_dir: Path) -> Path | None:
     """Return ``data/counting/_previews`` sibling of ``00_dapi`` if it exists."""
@@ -16,9 +18,13 @@ def _display_name_from_suffix(suffix: str) -> str:
 
 
 def _dapi_path(images_dir: Path, slice_id: str) -> Path | None:
-    for ext in (".tif", ".tiff"):
+    for ext in (".png", ".tif", ".tiff"):
         path = images_dir / f"{slice_id}{ext}"
         if path.is_file():
+            if ext != ".png":
+                emit_log(
+                    f"  legacy DAPI TIFF {path.name} — prefer 00_dapi/{{sliceId}}.png for Align/Adjust",
+                )
             return path
     return None
 

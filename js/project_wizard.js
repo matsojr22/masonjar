@@ -331,8 +331,12 @@ async function runBuildAsync() {
 		logEl.textContent = "";
 	}
 	var openMenu = qs("openMenu");
+	var openOrient = qs("openOrient");
 	if (openMenu) {
 		openMenu.classList.add("d-none");
+	}
+	if (openOrient) {
+		openOrient.classList.add("d-none");
 	}
 
 	try {
@@ -456,6 +460,9 @@ async function runBuildAsync() {
 		verboseLog("Done — opening project");
 		if (openMenu) {
 			openMenu.classList.remove("d-none");
+		}
+		if (openOrient) {
+			openOrient.classList.remove("d-none");
 		}
 		project.openProject(bundleRoot);
 	} catch (err) {

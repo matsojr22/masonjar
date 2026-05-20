@@ -298,6 +298,17 @@ testCollectMosaicInfo();
 testHasLikelyUnstitchedMosaic();
 testCountExtractWorkItems();
 
+function testLowResTiffAudit() {
+	var bundle = fs.mkdtempSync(path.join(os.tmpdir(), "czi-tiff-audit-"));
+	var sliceId = "M528_s001";
+	var dapiTif = path.join(bundle, "data/counting/00_dapi", sliceId + ".tif");
+	fs.mkdirSync(path.dirname(dapiTif), { recursive: true });
+	fs.writeFileSync(dapiTif, "legacy");
+	var issues = cziImport.findLowResTiffIssues(bundle);
+	assert.strictEqual(issues.length, 1);
+	assert.strictEqual(issues[0].kind, "dapi_tif");
+}
+
 function testResolveOrientPreviewPath() {
 	var bundle = fs.mkdtempSync(path.join(os.tmpdir(), "czi-orient-"));
 	var sliceId = "M528_s001";
@@ -371,8 +382,7 @@ function testAuditCziImportCompletion() {
 	fs.mkdirSync(path.dirname(dapiPrev), { recursive: true });
 	fs.writeFileSync(dapiPrev, "preview");
 	var orientDapiPrev = cziImport.orientDapiPreviewPath(bundle, sliceId);
-	fs.mkdirSync(path.dirname(orientDapiPrev), { recursive: true });
-	fs.writeFileSync(orientDapiPrev, "preview");
+	assert.strictEqual(orientDapiPrev, dapiPrev);
 	var somataPrev = cziImport.signalPreviewPath(bundle, sliceId, cziCfg.channels[1]);
 	fs.mkdirSync(path.dirname(somataPrev), { recursive: true });
 	fs.writeFileSync(somataPrev, "preview");
@@ -419,6 +429,7 @@ function testPathToFileURLSpaces() {
 	assert.ok(href.indexOf("Matt") >= 0);
 }
 
+testLowResTiffAudit();
 testResolveOrientPreviewPath();
 testCziImportFingerprintStable();
 testAuditCziImportCompletion();

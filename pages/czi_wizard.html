@@ -34,6 +34,12 @@
         max-height: 140px;
         object-fit: contain;
         background: #111;
+        transform-origin: center center;
+      }
+      .czi-orient-preview-hint {
+        font-size: 0.75rem;
+        color: var(--bs-secondary, #6c757d);
+        margin: 0.25rem 0 0;
       }
       .czi-channel-table td {
         vertical-align: middle;
@@ -224,6 +230,20 @@
                   </p>
                 </div>
               </div>
+              <div class="row g-2 align-items-end mb-3 d-none" id="axonBitDepthRow">
+                <div class="col-auto">
+                  <label class="form-label mb-0" for="axonBitDepth">Axon full-res bit depth</label>
+                  <select class="form-select form-select-sm" id="axonBitDepth">
+                    <option value="8">8-bit (default)</option>
+                    <option value="16">16-bit</option>
+                  </select>
+                </div>
+                <div class="col">
+                  <p class="small text-muted mb-0">
+                    Applies to axon z-stacks and max TIFFs only. Low-res previews remain uint8 PNG.
+                  </p>
+                </div>
+              </div>
               <p id="step3Validation" class="small text-danger d-none"></p>
               <div class="table-responsive">
                 <table class="table table-sm czi-channel-table" id="channelTable">
@@ -300,14 +320,28 @@
       </section>
 
       <section id="step6" class="wizard-panel d-none">
-        <p id="finishStatus" class="text-muted"></p>
-        <div class="progress mb-2 d-none" id="finishProgressWrap">
-          <div id="finishProgress" class="progress-bar" style="width: 0%"></div>
+        <p id="finishStatus" class="text-muted">Applying geometry to z-stacks, max slices, and previews…</p>
+        <div class="progress mb-3" id="finishProgressWrap">
+          <div
+            id="finishProgress"
+            class="progress-bar progress-bar-striped progress-bar-animated"
+            role="progressbar"
+            style="width: 0%"
+            aria-valuenow="0"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          ></div>
         </div>
+        <p id="finishDetail" class="small text-muted mb-2">
+          Each rotated or flipped slice updates DAPI PNGs, signal preview PNGs, original z-stacks,
+          and max TIFFs. Progress is file-based; large jobs may take several minutes. Detailed
+          lines also appear in the application log window.
+        </p>
+        <pre id="finishLog" class="wizard-log czi-extract-log small text-muted mb-3"></pre>
         <a class="btn btn-primary d-none" id="openWorkspace" href="./workspace_menu.html"
           >Open workspace</a
         >
-        <a class="btn btn-warning ms-2" href="./menu.html">Hub</a>
+        <a class="btn btn-warning ms-2 d-none" id="finishHub" href="./menu.html">Hub</a>
       </section>
 
       <div class="mt-4">

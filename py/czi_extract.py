@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
 import threading
 import time
@@ -13,8 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from czi_common import (
+    CANONICAL_REL,
     PREVIEW_FORMAT_VERSION,
     ROLE_DAPI,
+    ROLE_SIGNAL_AXONS,
     ROLE_UNUSED,
     assess_mosaic_import,
     branch_for_channel,
@@ -22,7 +23,6 @@ from czi_common import (
     clamp_preview_scale,
     collapse_z_stack_to_2d,
     dapi_preview_path,
-    orient_dapi_preview_path,
     default_slice_id,
     dim_size,
     emit_log,
@@ -38,7 +38,7 @@ from czi_common import (
     natural_sort_slice_ids,
     normalized_dim_blocks,
     original_scans_path,
-    preview_plane_to_uint8,
+    preview_autoscale_to_uint8,
     read_czi_plane,
     role_key_for_channel,
     signal_preview_path,
@@ -68,7 +68,7 @@ def max_project_z(stack):
     return collapse_z_stack_to_2d(stack)
 
 
-def max_project_file(input_path: Path, output_path: Path) -> None:
+def max_project_file(input_path: Path, output_path: Path, *, bit_depth: int = 8) -> None:
     img = tiff.imread(str(input_path))
     arr = np.asarray(img)
     parent = output_path.parent
@@ -77,15 +77,60 @@ def max_project_file(input_path: Path, output_path: Path) -> None:
     parent.mkdir(parents=True, exist_ok=True)
     if arr.ndim <= 2:
         emit_log(f"  copy single plane -> {output_path.name}")
-        shutil.copy2(str(input_path), str(output_path))
+        out = coerce_stack_depth(arr, bit_depth)
+        write_pipeline_tiff(output_path, out, bit_depth)
         return
     if arr.ndim == 3 and arr.shape[0] == 1:
         emit_log(f"  copy single Z plane -> {output_path.name}")
-        out = arr[0]
-        tiff.imwrite(str(output_path), out, photometric="minisblack")
+        out = coerce_stack_depth(arr[0], bit_depth)
+        write_pipeline_tiff(output_path, out, bit_depth)
         return
     out = max_project_z(arr)
-    cv2.imwrite(str(output_path), out)
+    out = coerce_stack_depth(out, bit_depth)
+    write_pipeline_tiff(output_path, out, bit_depth)
+
+
+def bit_depth_for_role(cfg: dict, role_key: str) -> int:
+    by_role = cfg.get("bit_depth_by_role") or {}
+    raw = by_role.get(role_key, 8)
+    try:
+        depth = int(raw)
+    except (TypeError, ValueError):
+        depth = 8
+    if role_key != ROLE_SIGNAL_AXONS:
+        return 8
+    return 16 if depth == 16 else 8
+
+
+def coerce_stack_depth(arr, bit_depth: int):
+    work = np.asarray(arr)
+    if bit_depth >= 16:
+        if work.dtype == np.uint16:
+            return work
+        if np.issubdtype(work.dtype, np.floating):
+            scaled = np.clip(work, 0, None)
+            if scaled.max() <= 1.0:
+                scaled = scaled * 65535.0
+            elif scaled.max() <= 255.0:
+                scaled = scaled * 257.0
+            return np.clip(scaled, 0, 65535).astype(np.uint16)
+        if work.dtype == np.uint8:
+            return work.astype(np.uint16) * 257
+        return np.clip(work, 0, 65535).astype(np.uint16)
+    if work.dtype == np.uint8:
+        return work
+    if np.issubdtype(work.dtype, np.floating):
+        if work.max() <= 1.0:
+            return np.clip(work * 255.0, 0, 255).astype(np.uint8)
+        return np.clip(work, 0, 255).astype(np.uint8)
+    if work.dtype == np.uint16:
+        return (work / 257).astype(np.uint8)
+    return np.clip(work, 0, 255).astype(np.uint8)
+
+
+def write_pipeline_tiff(path: Path, arr, bit_depth: int) -> None:
+    out = coerce_stack_depth(arr, bit_depth)
+    tiff.imwrite(str(path), out, photometric="minisblack")
 
 
 def read_plane(czi, scene: int, z: int, channel: int):
@@ -102,6 +147,9 @@ def extract_z_stack(
     preview_scale: float,
     slice_id: str = "",
     bundle_root: Path | None = None,
+    *,
+    cfg: dict | None = None,
+    role_key: str = "",
 ) -> None:
     planes = []
     mid_z = z_indices[len(z_indices) // 2] if z_indices else 0
@@ -117,11 +165,13 @@ def extract_z_stack(
     parent.mkdir(parents=True, exist_ok=True)
     if n_z == 1:
         emit_log(f"  Single Z plane ({h}x{w}), writing 2D TIFF (no z-stack)")
-        tiff.imwrite(str(out_path), planes[0], photometric="minisblack")
+        depth = bit_depth_for_role(cfg or {}, role_key)
+        write_pipeline_tiff(out_path, planes[0], depth)
     else:
         emit_log(f"  Stacking {n_z} planes ({h}x{w})")
         stack = np.stack(planes, axis=0)
-        tiff.imwrite(str(out_path), stack, photometric="minisblack")
+        depth = bit_depth_for_role(cfg or {}, role_key)
+        write_pipeline_tiff(out_path, stack, depth)
     try:
         rel = out_path.relative_to(bundle_root) if bundle_root else out_path.name
     except ValueError:
@@ -274,8 +324,16 @@ def preview_path_for_channel(bundle_root: Path, ch: dict, slice_id: str) -> Path
     return None
 
 
+def _is_low_res_preview_path(preview_path: Path) -> bool:
+    parts = {p.lower() for p in preview_path.parts}
+    return "00_dapi" in parts or "_previews" in parts
+
+
 def _write_preview_array(preview, preview_path: Path) -> None:
     preview_path.parent.mkdir(parents=True, exist_ok=True)
+    if _is_low_res_preview_path(preview_path):
+        cv2.imwrite(str(preview_path), preview)
+        return
     if preview_path.suffix.lower() == ".png":
         cv2.imwrite(str(preview_path), preview)
     else:
@@ -289,25 +347,54 @@ def write_preview_at_path(
     bundle_root: Path | None,
     slice_id: str = "",
 ) -> None:
-    preview = preview_plane_to_uint8(downscale_plane(plane, preview_scale))
+    preview = downscale_plane(preview_autoscale_to_uint8(plane), preview_scale)
     _write_preview_array(preview, preview_path)
     try:
         prev_rel = preview_path.relative_to(bundle_root) if bundle_root else preview_path.name
     except ValueError:
         prev_rel = preview_path.name
     emit_log(f"  Writing preview -> {prev_rel} ({slice_id})")
-    if (
-        bundle_root
-        and slice_id
-        and preview_path == dapi_preview_path(bundle_root, slice_id)
-    ):
-        orient_path = orient_dapi_preview_path(bundle_root, slice_id)
-        _write_preview_array(preview, orient_path)
-        try:
-            orient_rel = orient_path.relative_to(bundle_root)
-        except ValueError:
-            orient_rel = orient_path.name
-        emit_log(f"  Writing preview -> {orient_rel} ({slice_id})")
+
+
+def migrate_low_res_tiffs(bundle_root: Path, cfg: dict, preview_scale: float) -> int:
+    """Convert legacy low-res TIFFs to PNG and drop redundant DAPI duplicates."""
+    migrated = 0
+    dapi_dir = bundle_root / CANONICAL_REL["dapi"]
+    if dapi_dir.is_dir():
+        legacy_tifs = sorted(dapi_dir.glob("*.tif")) + sorted(dapi_dir.glob("*.tiff"))
+        for tif_path in legacy_tifs:
+            slice_id = tif_path.stem
+            png_path = dapi_preview_path(bundle_root, slice_id)
+            if png_path.exists():
+                tif_path.unlink(missing_ok=True)
+                emit_log(f"  removed stale DAPI TIFF {tif_path.name}")
+                migrated += 1
+                continue
+            arr = np.asarray(tiff.imread(str(tif_path)))
+            plane = plane_from_zstack(arr) if arr.ndim > 2 else arr
+            write_preview_at_path(png_path, plane, preview_scale, bundle_root, slice_id)
+            tif_path.unlink(missing_ok=True)
+            emit_log(f"  migrated {tif_path.name} -> {png_path.name}")
+            migrated += 1
+
+    prev_dir = bundle_root / CANONICAL_REL["previews"]
+    if prev_dir.is_dir():
+        legacy_prev = sorted(prev_dir.glob("*.tif")) + sorted(prev_dir.glob("*.tiff"))
+        for tif_path in legacy_prev:
+            png_path = tif_path.with_suffix(".png")
+            arr = np.asarray(tiff.imread(str(tif_path)))
+            plane = plane_from_zstack(arr) if arr.ndim > 2 else arr
+            write_preview_at_path(png_path, plane, preview_scale, bundle_root)
+            tif_path.unlink(missing_ok=True)
+            emit_log(f"  migrated {tif_path.name} -> {png_path.name}")
+            migrated += 1
+        for dup in sorted(prev_dir.glob("*_dapi.png")):
+            slice_id = dup.stem[: -len("_dapi")]
+            if dapi_preview_path(bundle_root, slice_id).exists():
+                dup.unlink(missing_ok=True)
+                emit_log(f"  removed redundant preview {dup.name}")
+                migrated += 1
+    return migrated
 
 
 def repair_preview_from_zstack(
@@ -374,7 +461,7 @@ def max_runs_on_disk(bundle_root: Path, max_runs: dict[str, str]) -> bool:
     return True
 
 
-def run_max_for_role_key(bundle_root: Path, role_key: str, slice_ids: list[str]) -> str:
+def run_max_for_role_key(bundle_root: Path, role_key: str, slice_ids: list[str], cfg: dict) -> str:
     branch = branch_for_role_key(role_key)
     if not branch:
         return ""
@@ -390,9 +477,10 @@ def run_max_for_role_key(bundle_root: Path, role_key: str, slice_ids: list[str])
     files = natural_sort_filenames([p.name for p in in_dir.glob("*.tif")])
     emit_log(f"Max projecting {branch} ({len(files)} slices)...")
     emit_progress("Max projecting signal channels...")
+    depth = bit_depth_for_role(cfg, role_key)
     for fname in files:
         emit_log(f"  max <- {fname}")
-        max_project_file(in_dir / fname, out_dir / f"{Path(fname).stem}.tif")
+        max_project_file(in_dir / fname, out_dir / f"{Path(fname).stem}.tif", bit_depth=depth)
     write_run_manifest(
         out_dir,
         {
@@ -475,6 +563,7 @@ def main() -> int:
 
     if repair_mode == "previews" and repair_targets:
         emit_log(f"Preview repair mode ({len(repair_targets)} target(s))")
+        migrate_low_res_tiffs(bundle_root, cfg, preview_scale)
         files_by_name: dict[str, dict] = {}
         for f in cfg.get("files") or []:
             files_by_name[Path(f.get("path", "")).name] = f
@@ -615,6 +704,8 @@ def main() -> int:
             preview_scale,
             slice_id=slice_id,
             bundle_root=bundle_root,
+            cfg=cfg,
+            role_key=role_key,
         )
         extracted_by_role_key.setdefault(role_key, []).append(slice_id)
         state["done"] = i + 1
@@ -637,13 +728,17 @@ def main() -> int:
                 continue
             if not branch_for_role_key(role_key):
                 continue
-            rel = run_max_for_role_key(bundle_root, role_key, slice_ids)
+            rel = run_max_for_role_key(bundle_root, role_key, slice_ids, cfg)
             if rel:
                 max_runs[role_key] = rel
                 branch = branch_for_role_key(role_key) or role_key
                 emit_log(f"max projection {branch} -> {rel}")
                 if not primary_role:
                     primary_role = role_key
+
+    migrated_tiffs = migrate_low_res_tiffs(bundle_root, cfg, preview_scale)
+    if migrated_tiffs:
+        emit_log(f"Migrated {migrated_tiffs} low-res TIFF artifact(s) to PNG")
 
     state = read_import_state(bundle_root) or {}
     state["phase"] = "complete"

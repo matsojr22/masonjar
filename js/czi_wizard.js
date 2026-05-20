@@ -7,6 +7,7 @@ var pageInit = require("./page_init");
 var project = require("./project");
 var pipelineRuns = require("./pipeline_runs");
 var cziImport = require("./czi_import");
+var orientGeometry = require("./orient_geometry");
 var branding = require("./branding");
 
 var ipc = require("electron").ipcRenderer;
@@ -24,6 +25,7 @@ var wizardState = {
 };
 
 var extractRunning = false;
+var geometryRunning = false;
 var probeInFlight = false;
 var extractGotPythonAck = false;
 var extractHeartbeatTimer = null;
@@ -99,8 +101,70 @@ function setStep(step) {
 function updateWizardCancelVisibility() {
 	var footer = qs("wizardCancel");
 	if (footer) {
-		footer.classList.toggle("d-none", wizardState.step === 4 && extractRunning);
+		footer.classList.toggle(
+			"d-none",
+			(wizardState.step === 4 && extractRunning) ||
+				(wizardState.step === 6 && geometryRunning),
+		);
 	}
+}
+
+function setFinishNavDisabled(disabled) {
+	var hub = qs("finishHub");
+	var openBtn = qs("openWorkspace");
+	if (hub) {
+		hub.classList.toggle("d-none", disabled);
+	}
+	if (openBtn) {
+		openBtn.classList.toggle("d-none", disabled);
+	}
+}
+
+function verboseFinishLog(msg) {
+	console.log("[CziWizard]", msg);
+	var el = qs("finishLog");
+	if (el) {
+		el.textContent = (el.textContent ? el.textContent + "\n" : "") + msg;
+		var lines = el.textContent.split("\n");
+		if (lines.length > EXTRACT_LOG_MAX_LINES) {
+			el.textContent = lines.slice(lines.length - EXTRACT_LOG_MAX_LINES).join("\n");
+		}
+		el.scrollTop = el.scrollHeight;
+	}
+}
+
+function setGeometryActivity(msg, pct) {
+	var bar = qs("finishProgress");
+	var status = qs("finishStatus");
+	if (status && msg) {
+		status.textContent = msg;
+	}
+	if (bar && typeof pct === "number") {
+		bar.style.width = String(pct) + "%";
+		bar.setAttribute("aria-valuenow", String(pct));
+		if (pct >= 100) {
+			bar.classList.remove("progress-bar-striped", "progress-bar-animated");
+		} else {
+			bar.classList.add("progress-bar-striped", "progress-bar-animated");
+		}
+	}
+}
+
+function countNonIdentityGeometry() {
+	return orientGeometry.countNonIdentityGeometry(
+		wizardState.cziImport.geometry || {},
+		cziImport.collectSliceIds(wizardState.cziImport),
+	);
+}
+
+function geometryCssTransform(geom) {
+	return orientGeometry.geometryCssTransform(geom);
+}
+
+function confirmLeaveDuringJob() {
+	return confirm(
+		"A CZI import job is still running. Leave anyway? Progress may be incomplete.",
+	);
 }
 
 function verboseExtractLog(msg) {
@@ -725,6 +789,41 @@ function applyGlobalChannelDefaults() {
 	renderChannelTable();
 }
 
+function syncAxonBitDepthUi() {
+	var row = qs("axonBitDepthRow");
+	var sel = qs("axonBitDepth");
+	if (!row || !sel) {
+		return;
+	}
+	var channels = wizardState.cziImport.channels || [];
+	var axonKept = channels.some(function (ch) {
+		return ch.keep && ch.role === cziImport.ROLE_SIGNAL_AXONS;
+	});
+	if (axonKept) {
+		row.classList.remove("d-none");
+	} else {
+		row.classList.add("d-none");
+	}
+	if (!wizardState.cziImport.bit_depth_by_role) {
+		wizardState.cziImport.bit_depth_by_role = {};
+	}
+	var depth = Number(wizardState.cziImport.bit_depth_by_role.signal_axons) || 8;
+	sel.value = depth === 16 ? "16" : "8";
+}
+
+function bindAxonBitDepth() {
+	var sel = qs("axonBitDepth");
+	if (!sel) {
+		return;
+	}
+	sel.addEventListener("change", function () {
+		if (!wizardState.cziImport.bit_depth_by_role) {
+			wizardState.cziImport.bit_depth_by_role = {};
+		}
+		wizardState.cziImport.bit_depth_by_role.signal_axons = Number(sel.value) || 8;
+	});
+}
+
 function renderChannelTable() {
 	var tbody = qs("channelTableBody");
 	if (!tbody) {
@@ -809,6 +908,7 @@ function renderChannelTable() {
 	renderPrimarySignalSelect();
 	syncSliceNumberingRadios();
 	syncKeepAllCheckbox();
+	syncAxonBitDepthUi();
 	updateStep3Validation();
 }
 
@@ -819,19 +919,14 @@ function renderStep3Panel() {
 }
 
 function defaultGeometry() {
-	return { rotate: 0, flipX: false, flipY: false };
+	return orientGeometry.defaultGeometry();
 }
 
 function ensureGeometryMap() {
-	if (!wizardState.cziImport.geometry) {
-		wizardState.cziImport.geometry = {};
-	}
-	var ids = cziImport.collectSliceIds(wizardState.cziImport);
-	for (var i = 0; i < ids.length; i++) {
-		if (!wizardState.cziImport.geometry[ids[i]]) {
-			wizardState.cziImport.geometry[ids[i]] = defaultGeometry();
-		}
-	}
+	wizardState.cziImport.geometry = orientGeometry.ensureGeometryMap(
+		wizardState.cziImport.geometry,
+		cziImport.collectSliceIds(wizardState.cziImport),
+	);
 }
 
 function fileUrlForPath(filePath) {
@@ -878,6 +973,8 @@ function renderOrientationGrid() {
 			img.src = imgSrc;
 			img.alt = sliceId;
 			img.title = imgPath;
+			img.style.transform = geometryCssTransform(geom);
+			img.style.transformOrigin = "center center";
 			img.onerror = function () {
 				var msg = document.createElement("p");
 				msg.className = "small text-muted";
@@ -888,6 +985,10 @@ function renderOrientationGrid() {
 				}
 			};
 			tile.appendChild(img);
+			var hint = document.createElement("p");
+			hint.className = "czi-orient-preview-hint";
+			hint.textContent = "Live preview — saved on Confirm geometry";
+			tile.appendChild(hint);
 		} else {
 			var noPrev = document.createElement("p");
 			noPrev.className = "small text-muted";
@@ -930,13 +1031,7 @@ function renderOrientationGrid() {
 				g = defaultGeometry();
 				wizardState.cziImport.geometry[sid] = g;
 			}
-			if (action === "rot90") {
-				g.rotate = ((Number(g.rotate) || 0) + 90) % 360;
-			} else if (action === "flipX") {
-				g.flipX = !g.flipX;
-			} else if (action === "flipY") {
-				g.flipY = !g.flipY;
-			}
+			wizardState.cziImport.geometry[sid] = orientGeometry.applyGeometryAction(g, action);
 			renderOrientationGrid();
 		});
 	});
@@ -945,6 +1040,13 @@ function renderOrientationGrid() {
 function writeImportConfig() {
 	var meta = path.join(wizardState.bundleRoot, branding.META_DIR);
 	fs.mkdirSync(meta, { recursive: true });
+	var axonSel = qs("axonBitDepth");
+	if (axonSel) {
+		if (!wizardState.cziImport.bit_depth_by_role) {
+			wizardState.cziImport.bit_depth_by_role = {};
+		}
+		wizardState.cziImport.bit_depth_by_role.signal_axons = Number(axonSel.value) || 8;
+	}
 	var cfgPath = cziImport.importConfigPath(wizardState.bundleRoot);
 	var payload = Object.assign({}, wizardState.cziImport);
 	payload.config_fingerprint = cziImport.cziImportFingerprint(payload);
@@ -1325,43 +1427,93 @@ async function runExtract(options) {
 
 async function runApplyGeometry() {
 	setStep(6);
-	var status = qs("finishStatus");
-	var wrap = qs("finishProgressWrap");
-	var bar = qs("finishProgress");
-	if (status) {
-		status.textContent = "Applying geometry to all derived TIFFs…";
+	geometryRunning = true;
+	updateWizardCancelVisibility();
+	setFinishNavDisabled(true);
+	var logEl = qs("finishLog");
+	if (logEl) {
+		logEl.textContent = "";
 	}
-	if (wrap) {
-		wrap.classList.remove("d-none");
-	}
+	setGeometryActivity("Applying geometry to z-stacks, max slices, and previews…", 2);
+	verboseFinishLog("Bundle: " + wizardState.bundleRoot);
+	verboseFinishLog(
+		"Slices with rotation/flip: " + countNonIdentityGeometry() + " of " + cziImport.collectSliceIds(wizardState.cziImport).length,
+	);
 	writeImportConfig();
 	persistCziSettings();
 
 	return new Promise(function (resolve, reject) {
+		var fileTotal = 0;
+		var fileDone = 0;
+		var longJobWarned = false;
+		var LONG_JOB_FILE_THRESHOLD = 40;
+
 		function onProgress(ev, data) {
-			if (bar) {
-				bar.style.width = String(data[0]) + "%";
+			var rawPct = Number(data[0]) || 0;
+			var message = String(data[1] || "");
+			var match = message.match(/\[(\d+)\/(\d+)\]/);
+			if (match) {
+				fileDone = Number(match[1]);
+				fileTotal = Number(match[2]);
+				rawPct = Math.min(99, Math.round((fileDone / fileTotal) * 100));
 			}
-			if (status) {
-				status.textContent = data[1];
+			setGeometryActivity(message || "Applying geometry…", rawPct);
+		}
+		function onJobLog(ev, line) {
+			var msg = String(line || "").trim();
+			if (!msg) {
+				return;
 			}
+			if (/^\d+$/.test(msg) && fileTotal === 0) {
+				fileTotal = Number(msg);
+				verboseFinishLog("Transforming " + fileTotal + " file(s)…");
+				if (fileTotal >= LONG_JOB_FILE_THRESHOLD && !longJobWarned) {
+					longJobWarned = true;
+					verboseFinishLog(
+						"Large geometry job (" +
+							fileTotal +
+							" files) — may take several minutes. See Application log.",
+					);
+					setGeometryActivity(
+						"Large job: transforming " + fileTotal + " files…",
+						5,
+					);
+				}
+				return;
+			}
+			verboseFinishLog(msg.replace(/^LOG:\s*/i, ""));
 		}
 		function onResult(ev, payload) {
 			ipc.removeListener("updateLoad", onProgress);
+			ipc.removeListener("cziJobLog", onJobLog);
 			ipc.removeListener("applyGeometryResult", onResult);
+			geometryRunning = false;
+			updateWizardCancelVisibility();
 			if (!payload || payload.ok === false) {
-				if (status) {
-					status.textContent = (payload && payload.error) || "Geometry apply failed";
+				var errMsg = (payload && payload.error) || "Geometry apply failed";
+				if (payload && payload.failed && payload.failed.length) {
+					errMsg += ": " + payload.failed.slice(0, 3).join("; ");
 				}
-				reject(new Error((payload && payload.error) || "Geometry apply failed"));
+				setGeometryActivity("Geometry apply failed: " + errMsg, 0);
+				verboseFinishLog("ERROR: " + errMsg);
+				setFinishNavDisabled(false);
+				reject(new Error(errMsg));
 				return;
 			}
-			finishWizard();
-			resolve(payload);
+			finishWizard(payload)
+				.then(function () {
+					resolve(payload);
+				})
+				.catch(function (finishErr) {
+					reject(finishErr);
+				});
 		}
 		ipc.on("updateLoad", onProgress);
+		ipc.on("cziJobLog", onJobLog);
 		ipc.once("applyGeometryResult", onResult);
 		var cfgPath = cziImport.importConfigPath(wizardState.bundleRoot);
+		verboseFinishLog("Config: " + cfgPath);
+		setGeometryActivity("Starting Python geometry apply…", 5);
 		ipc.send("runApplyGeometry", [
 			String(wizardState.bundleRoot || "").trim(),
 			String(cfgPath || "").trim(),
@@ -1369,24 +1521,73 @@ async function runApplyGeometry() {
 	});
 }
 
-async function finishWizard() {
+async function finishWizard(geometryPayload) {
 	setActiveMaxRuns();
 	await project.refreshProjectIndex(wizardState.bundleRoot);
 	var status = qs("finishStatus");
-	var openBtn = qs("openWorkspace");
-	if (status) {
-		var report = project.computeMatchReport(
-			project.readProjectFileIndex(wizardState.bundleRoot),
-			["dapi", "max"],
+	var report = project.computeMatchReport(
+		project.readProjectFileIndex(wizardState.bundleRoot),
+		["dapi", "max"],
+	);
+	var matched = (report.matchedSliceIds || []).length;
+	var changed = geometryPayload && typeof geometryPayload.changed === "number"
+		? geometryPayload.changed
+		: 0;
+	var filesTotal =
+		geometryPayload && typeof geometryPayload.files_total === "number"
+			? geometryPayload.files_total
+			: changed;
+	var elapsedSec =
+		geometryPayload && typeof geometryPayload.elapsed_sec === "number"
+			? geometryPayload.elapsed_sec
+			: null;
+	var bytesTotal =
+		geometryPayload && typeof geometryPayload.bytes_total === "number"
+			? geometryPayload.bytes_total
+			: null;
+	var geomSlices = countNonIdentityGeometry();
+	var importResult = wizardState.importResult || {};
+	var maxRuns = importResult.max_runs || {};
+	var summary =
+		"Import complete — " +
+		changed +
+		"/" +
+		filesTotal +
+		" file(s) transformed; " +
+		geomSlices +
+		" slice(s) with non-default geometry; " +
+		matched +
+		" DAPI/max slice(s) matched.";
+	if (elapsedSec != null) {
+		summary += " (" + elapsedSec + "s)";
+	}
+	setGeometryActivity(summary, 100);
+	verboseFinishLog(summary);
+	verboseFinishLog("Bundle: " + wizardState.bundleRoot);
+	if (bytesTotal != null && bytesTotal > 0) {
+		verboseFinishLog(
+			"Bytes written: ~" + Math.round(bytesTotal / (1024 * 1024)) + " MB",
 		);
-		status.textContent =
-			"Import complete. " +
-			(report.matchedSliceIds || []).length +
-			" slice(s) matched between DAPI and max.";
 	}
-	if (openBtn) {
-		openBtn.classList.remove("d-none");
+	if (wizardState.cziImport.preview_format_version) {
+		verboseFinishLog(
+			"Preview format v" + wizardState.cziImport.preview_format_version + " (PNG low-res previews)",
+		);
 	}
+	if (wizardState.repairMode || (wizardState.repairTargets && wizardState.repairTargets.length)) {
+		verboseFinishLog("Note: preview repair was used earlier in this wizard session.");
+	}
+	var maxKeys = Object.keys(maxRuns);
+	if (maxKeys.length) {
+		verboseFinishLog("Primary max run(s):");
+		for (var k = 0; k < maxKeys.length; k++) {
+			verboseFinishLog("  " + maxKeys[k] + " → " + maxRuns[maxKeys[k]]);
+		}
+	}
+	if (status) {
+		status.textContent = summary;
+	}
+	setFinishNavDisabled(false);
 }
 
 function bindStep1() {
@@ -1579,6 +1780,31 @@ function bindStep5() {
 	});
 }
 
+function bindWizardNavigationGuards() {
+	var cancel = qs("wizardCancel");
+	if (cancel) {
+		cancel.addEventListener("click", function (ev) {
+			if ((extractRunning || geometryRunning) && !confirmLeaveDuringJob()) {
+				ev.preventDefault();
+			}
+		});
+	}
+	var hub = qs("finishHub");
+	if (hub) {
+		hub.addEventListener("click", function (ev) {
+			if (geometryRunning && !confirmLeaveDuringJob()) {
+				ev.preventDefault();
+			}
+		});
+	}
+	window.addEventListener("beforeunload", function (ev) {
+		if (extractRunning || geometryRunning) {
+			ev.preventDefault();
+			ev.returnValue = "";
+		}
+	});
+}
+
 pageInit.onReady(function () {
 	pageInit.installGlobalErrorHandler();
 	bindStep1();
@@ -1586,5 +1812,7 @@ pageInit.onReady(function () {
 	bindStep3();
 	bindStep4();
 	bindStep5();
+	bindAxonBitDepth();
+	bindWizardNavigationGuards();
 	setStep(1);
 });

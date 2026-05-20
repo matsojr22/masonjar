@@ -38,10 +38,10 @@ function writeSyntheticWithPython(python, outFile) {
 	}
 }
 
-function readTiffStats(python, filePath) {
+function readPngStats(python, filePath) {
 	var code =
-		"import numpy as np, tifffile as tiff, json, sys\n" +
-		"img=tiff.imread(sys.argv[1])\n" +
+		"import numpy as np, cv2, json, sys\n" +
+		"img=cv2.imread(sys.argv[1], cv2.IMREAD_UNCHANGED)\n" +
 		"h,w=img.shape[:2]\n" +
 		"border=np.concatenate([img[0,:],img[-1,:],img[1:-1,0],img[1:-1,-1]])\n" +
 		"cy,cx=h//2,w//2\n" +
@@ -89,10 +89,10 @@ function main() {
 		assert.strictEqual(run.status, 0, run.stderr || run.stdout);
 		assert.match(run.stdout, /Done!/);
 
-		var outFile = path.join(outDir, "M528_s001.tif");
-		assert.ok(fs.existsSync(outFile), "output tif missing");
+		var outFile = path.join(outDir, "M528_s001.png");
+		assert.ok(fs.existsSync(outFile), "output png missing");
 
-		var stats = readTiffStats(python, outFile);
+		var stats = readPngStats(python, outFile);
 		assert.strictEqual(stats.dtype, "uint8");
 		assert.deepStrictEqual(stats.shape, [96, 128]);
 		assert.ok(stats.tissue_mean > stats.border_mean + 20, "expected brighter tissue");

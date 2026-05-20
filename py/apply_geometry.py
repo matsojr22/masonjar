@@ -1,9 +1,10 @@
-"""Apply per-slice rotation/flip geometry to CZI-derived TIFFs using OpenCV."""
+"""Apply per-slice rotation/flip geometry to CZI-derived TIFFs and PNG previews."""
 
 from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import cv2
@@ -16,6 +17,7 @@ from czi_common import (
     ROLE_UNUSED,
     branch_for_channel,
     branch_for_role_key,
+    emit_log,
     emit_result,
     load_import_config,
     meta_state_path,
@@ -52,11 +54,33 @@ def apply_ops_to_array(arr: np.ndarray, ops: list) -> np.ndarray:
     return out
 
 
-def transform_file(path: Path, ops: list) -> None:
-    data = tiff.imread(str(path))
-    arr = np.asarray(data)
-    transformed = apply_ops_to_array(arr, ops)
-    tiff.imwrite(str(path), transformed, photometric="minisblack")
+def _read_image_array(path: Path) -> np.ndarray:
+    if path.suffix.lower() == ".png":
+        img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise ValueError(f"Could not read {path}")
+        return np.asarray(img)
+    return np.asarray(tiff.imread(str(path)))
+
+
+def _write_image_array(path: Path, arr: np.ndarray) -> None:
+    if path.suffix.lower() == ".png":
+        cv2.imwrite(str(path), arr)
+        return
+    tiff.imwrite(str(path), arr, photometric="minisblack")
+
+
+def transform_file(path: Path, ops: list) -> tuple[np.ndarray, np.ndarray]:
+    arr = _read_image_array(path)
+    if arr.ndim == 2:
+        transformed = apply_ops_to_array(arr, ops)
+    elif arr.ndim == 3:
+        planes = [apply_ops_to_array(arr[z], ops) for z in range(arr.shape[0])]
+        transformed = np.stack(planes, axis=0)
+    else:
+        raise ValueError(f"Unsupported ndim={arr.ndim} for {path.name}")
+    _write_image_array(path, transformed)
+    return arr, transformed
 
 
 def signal_branch_dirs_from_cfg(cfg: dict) -> set[str]:
@@ -70,12 +94,12 @@ def signal_branch_dirs_from_cfg(cfg: dict) -> set[str]:
 
 def paths_for_slice(bundle_root: Path, slice_id: str, cfg: dict) -> list[Path]:
     paths: list[Path] = []
-    dapi = bundle_root / CANONICAL_REL["dapi"] / f"{slice_id}.tif"
-    if dapi.exists():
-        paths.append(dapi)
+    dapi_png = bundle_root / CANONICAL_REL["dapi"] / f"{slice_id}.png"
+    if dapi_png.exists():
+        paths.append(dapi_png)
     prev_dir = bundle_root / CANONICAL_REL["previews"]
     if prev_dir.exists():
-        for p in prev_dir.glob(f"{slice_id}_*.tif"):
+        for p in prev_dir.glob(f"{slice_id}_*.png"):
             paths.append(p)
     orig_base = bundle_root / CANONICAL_REL["original_scans"]
     for sub in sorted(signal_branch_dirs_from_cfg(cfg)):
@@ -120,7 +144,6 @@ def paths_for_slice(bundle_root: Path, slice_id: str, cfg: dict) -> list[Path]:
                 if candidate.exists():
                     paths.append(candidate)
 
-    # de-dupe
     seen = set()
     unique = []
     for p in paths:
@@ -131,6 +154,72 @@ def paths_for_slice(bundle_root: Path, slice_id: str, cfg: dict) -> list[Path]:
     return unique
 
 
+def collect_geometry_jobs(
+    bundle_root: Path,
+    geometry: dict,
+    cfg: dict,
+) -> list[tuple[str, list, list[Path]]]:
+    jobs: list[tuple[str, list, list[Path]]] = []
+    for slice_id in sorted(geometry.keys()):
+        spec = geometry[slice_id] or {}
+        ops = compose_ops(spec.get("rotate", 0), spec.get("flipX"), spec.get("flipY"))
+        if not ops:
+            continue
+        targets = paths_for_slice(bundle_root, slice_id, cfg)
+        if targets:
+            jobs.append((slice_id, ops, targets))
+    return jobs
+
+
+def _file_kind(path: Path) -> str:
+    if path.suffix.lower() == ".png":
+        return "PNG"
+    return "TIFF"
+
+
+def _describe_target(path: Path) -> str:
+    size = path.stat().st_size if path.is_file() else 0
+    kind = _file_kind(path)
+    detail = f"{kind} {size} bytes"
+    if kind == "TIFF":
+        try:
+            arr = np.asarray(tiff.imread(str(path)))
+            if arr.ndim == 2:
+                detail += f" 2D {arr.dtype} {arr.shape[1]}x{arr.shape[0]}"
+            elif arr.ndim == 3:
+                detail += f" Z-stack {arr.dtype} Z={arr.shape[0]} {arr.shape[2]}x{arr.shape[1]}"
+            else:
+                detail += f" ndim={arr.ndim} {arr.dtype}"
+        except Exception as exc:
+            detail += f" (read meta failed: {exc})"
+    else:
+        try:
+            img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+            if img is not None:
+                arr = np.asarray(img)
+                detail += f" 2D {arr.dtype} {arr.shape[1]}x{arr.shape[0]}"
+        except Exception as exc:
+            detail += f" (read meta failed: {exc})"
+    return detail
+
+
+def preflight_log(jobs: list[tuple[str, list, list[Path]]], bundle_root: Path) -> int:
+    total_bytes = 0
+    total_files = sum(len(targets) for _, _, targets in jobs)
+    emit_log(f"Preflight: {len(jobs)} slice(s), {total_files} file(s) to transform")
+    for slice_id, _ops, targets in jobs:
+        for tpath in targets:
+            try:
+                rel = tpath.relative_to(bundle_root)
+            except ValueError:
+                rel = Path(tpath.name)
+            size = tpath.stat().st_size if tpath.is_file() else 0
+            total_bytes += size
+            emit_log(f"  {rel}: {_describe_target(tpath)}")
+    emit_log(f"Preflight total: {total_files} files, {total_bytes} bytes")
+    return total_files
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Apply geometry to CZI import outputs")
     parser.add_argument("-b", "--bundle", required=True)
@@ -139,6 +228,7 @@ def main() -> int:
     args.bundle = str(args.bundle).strip()
     args.json = str(args.json).strip()
 
+    started = time.monotonic()
     bundle_root = Path(args.bundle).resolve()
     try:
         cfg = load_import_config(args.json)
@@ -147,27 +237,69 @@ def main() -> int:
         return 1
     geometry = cfg.get("geometry") or {}
     if not geometry:
-        emit_result({"ok": True, "changed": 0})
+        emit_result({"ok": True, "changed": 0, "files_total": 0, "bytes_total": 0, "elapsed_sec": 0})
         print("Done!", flush=True)
         return 0
 
-    slice_ids = sorted(geometry.keys())
-    print(len(slice_ids), flush=True)
-    changed = 0
-    for i, slice_id in enumerate(slice_ids):
-        spec = geometry[slice_id] or {}
-        ops = compose_ops(spec.get("rotate", 0), spec.get("flipX"), spec.get("flipY"))
-        if not ops:
-            continue
-        targets = paths_for_slice(bundle_root, slice_id, cfg)
-        for tpath in targets:
-            transform_file(tpath, ops)
-            changed += 1
-        print(f"Applied geometry to {slice_id}", flush=True)
+    jobs = collect_geometry_jobs(bundle_root, geometry, cfg)
+    total_files = preflight_log(jobs, bundle_root)
+    print(total_files, flush=True)
 
-    emit_result({"ok": True, "changed": changed})
+    changed = 0
+    bytes_total = 0
+    failed: list[str] = []
+    file_index = 0
+
+    for slice_id, ops, targets in jobs:
+        for tpath in targets:
+            file_index += 1
+            try:
+                rel = tpath.relative_to(bundle_root)
+            except ValueError:
+                rel = Path(tpath.name)
+            kind = _file_kind(tpath)
+            size_before = tpath.stat().st_size if tpath.is_file() else 0
+            emit_log(
+                f"[{file_index}/{total_files}] read {rel} ({kind}, {size_before} bytes)",
+            )
+            read_start = time.monotonic()
+            before = None
+            try:
+                before, after = transform_file(tpath, ops)
+                read_elapsed = time.monotonic() - read_start
+                if after.ndim == 2:
+                    shape_desc = f"{after.shape[1]}x{after.shape[0]} {after.dtype}"
+                elif after.ndim == 3:
+                    shape_desc = f"Z={after.shape[0]} {after.shape[2]}x{after.shape[1]} {after.dtype}"
+                else:
+                    shape_desc = f"ndim={after.ndim} {after.dtype}"
+                size_after = tpath.stat().st_size if tpath.is_file() else 0
+                write_elapsed = time.monotonic() - read_start - read_elapsed
+                emit_log(
+                    f"[{file_index}/{total_files}] wrote {rel} ({shape_desc}, "
+                    f"{size_after} bytes, read {read_elapsed:.2f}s write {write_elapsed:.2f}s)",
+                )
+                changed += 1
+                bytes_total += size_after
+                print(f"Applied geometry [{file_index}/{total_files}] {rel}", flush=True)
+            except Exception as exc:
+                failed.append(f"{rel}: {exc}")
+                emit_log(f"[{file_index}/{total_files}] FAILED {rel}: {exc}")
+                print(f"Failed geometry [{file_index}/{total_files}] {rel}", flush=True)
+
+    elapsed = time.monotonic() - started
+    emit_result(
+        {
+            "ok": len(failed) == 0,
+            "changed": changed,
+            "files_total": total_files,
+            "bytes_total": bytes_total,
+            "elapsed_sec": round(elapsed, 2),
+            "failed": failed,
+        }
+    )
     print("Done!", flush=True)
-    return 0
+    return 0 if not failed else 1
 
 
 if __name__ == "__main__":

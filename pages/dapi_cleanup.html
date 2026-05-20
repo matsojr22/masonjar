@@ -33,6 +33,8 @@
             <br />
             Polish DAPI preview images before atlas alignment: grayscale,
             optional tissue isolation, uniform background, and contrast stretch.
+            Outputs <strong>PNG</strong> files (Align and Adjust expect PNG in
+            <code>00_dapi</code>, not TIFF).
             <br />
           </p>
         </div>
@@ -45,7 +47,7 @@
               class="fas fa-circle-question fa-fw fa-xs"
               data-bs-toggle="tooltip"
               data-bs-placement="right"
-              title="Path to DAPI preview images (typically 00_dapi)"
+              title="Path to DAPI preview PNGs (typically 00_dapi)"
             ></i>
           </h5>
         </div>
@@ -86,7 +88,7 @@
                 value="separate"
               />
               <label class="form-check-label" for="outputSeparate">
-                Separate folder — write to
+                Separate folder — write PNGs to
                 <code>00_dapi_clean</code> (point Align input at the clean folder)
               </label>
             </div>
