@@ -912,6 +912,9 @@ function pythonShellEnv() {
     if (process.platform === "darwin") {
         env.PYTORCH_ENABLE_MPS_FALLBACK = "1";
     }
+    if (process.platform === "win32") {
+        env.PYTHONIOENCODING = "utf-8";
+    }
     return env;
 }
 function attachPythonShellKillCleanup(pyshell, killChannel) {

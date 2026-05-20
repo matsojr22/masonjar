@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -215,17 +216,58 @@ def write_import_state(bundle_root: Path, state: Mapping[str, Any]) -> None:
         json.dump(dict(state), f, indent=2)
 
 
+_stdio_configured = False
+
+_UNICODE_REPLACEMENTS = (
+    ("\u2192", "->"),  # →
+    ("\u2190", "<-"),  # ←
+    ("\u2026", "..."),  # …
+    ("\u2013", "-"),  # –
+    ("\u2014", "-"),  # —
+    ("\u00d7", "x"),  # ×
+)
+
+
+def _configure_stdio_utf8() -> None:
+    global _stdio_configured
+    if _stdio_configured:
+        return
+    _stdio_configured = True
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
+def _to_console_safe(text: str) -> str:
+    out = text
+    for src, dst in _UNICODE_REPLACEMENTS:
+        out = out.replace(src, dst)
+    return out
+
+
+def _safe_print(line: str) -> None:
+    _configure_stdio_utf8()
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        print(_to_console_safe(line), flush=True)
+
+
 def emit_progress(message: str) -> None:
-    print(message, flush=True)
+    _safe_print(message)
 
 
 def emit_progress_phase(pct: int, message: str) -> None:
     """pct 0-100 within startup sub-phase; main maps to display bar."""
-    print(f"PROGRESS:{pct}:{message}", flush=True)
+    _safe_print(f"PROGRESS:{pct}:{message}")
 
 
 def emit_log(message: str) -> None:
-    print(f"LOG:{message}", flush=True)
+    _safe_print(f"LOG:{message}")
 
 
 def emit_result(payload: Mapping[str, Any]) -> None:
@@ -728,7 +770,7 @@ def read_czi_plane(
         plane, picked = select_largest_plane(plane)
         if picked:
             h, w = plane.shape[:2]
-            emit_log(f"  selected largest plane ({h}×{w})")
+            emit_log(f"  selected largest plane ({h}x{w})")
     if plane.dtype != _np.uint8 and plane.dtype != _np.uint16:
         plane = plane.astype(_np.uint16)
     return plane

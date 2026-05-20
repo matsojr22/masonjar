@@ -14,7 +14,9 @@ from czi_common import (  # noqa: E402
     ROLE_DAPI,
     ROLE_OTHER,
     ROLE_SIGNAL_SOMATA,
+    _safe_print,
     assess_mosaic_import,
+    emit_log,
     assess_mosaic_import_metadata,
     bbox_width_height,
     branch_for_channel,
@@ -38,6 +40,25 @@ from czi_common import (  # noqa: E402
     suggest_role_from_label,
     unpack_read_image,
 )
+
+
+def test_emit_log_cp1252_stdout(monkeypatch) -> None:
+    """LOG lines with arrows must not crash on Windows cp1252 consoles."""
+    import io
+
+    import czi_common
+
+    buf = io.BytesIO()
+    stream = io.TextIOWrapper(buf, encoding="cp1252", errors="strict", line_buffering=True)
+    monkeypatch.setattr(sys, "stdout", stream)
+    monkeypatch.setattr(czi_common, "_configure_stdio_utf8", lambda: None)
+    emit_log("Writing z-stack -> path")
+    emit_log("Writing z-stack \u2192 path")
+    _safe_print("PROGRESS:50:Loading aicspylibczi \u2192 ready")
+    stream.flush()
+    out = buf.getvalue().decode("cp1252")
+    assert out.count("LOG:Writing z-stack -> path") == 2
+    assert "PROGRESS:50:Loading aicspylibczi -> ready" in out
 
 
 def test_default_slice_id_single_scene() -> None:

@@ -71,11 +71,11 @@ def max_project_file(input_path: Path, output_path: Path) -> None:
         emit_log(f"  mkdir {parent}")
     parent.mkdir(parents=True, exist_ok=True)
     if arr.ndim <= 2:
-        emit_log(f"  copy single plane → {output_path.name}")
+        emit_log(f"  copy single plane -> {output_path.name}")
         shutil.copy2(str(input_path), str(output_path))
         return
     if arr.ndim == 3 and arr.shape[0] == 1:
-        emit_log(f"  copy single Z plane → {output_path.name}")
+        emit_log(f"  copy single Z plane -> {output_path.name}")
         out = arr[0]
         tiff.imwrite(str(output_path), out, photometric="minisblack")
         return
@@ -126,7 +126,7 @@ def extract_z_stack(
     else:
         nbytes = planes[0].nbytes if planes else 0
         approx_mb = nbytes / (1024 * 1024)
-    emit_log(f"  Writing {'plane' if n_z == 1 else 'z-stack'} → {rel} ({approx_mb:.1f} MB approx)")
+    emit_log(f"  Writing {'plane' if n_z == 1 else 'z-stack'} -> {rel} ({approx_mb:.1f} MB approx)")
 
     if preview_path is not None:
         preview_plane = planes[z_indices.index(mid_z)] if z_indices else planes[0]
@@ -140,7 +140,7 @@ def extract_z_stack(
             prev_rel = preview_path.relative_to(bundle_root) if bundle_root else preview_path.name
         except ValueError:
             prev_rel = preview_path.name
-        emit_log(f"  Writing preview → {prev_rel}")
+        emit_log(f"  Writing preview -> {prev_rel}")
 
 
 def slice_id_for_scene(file_entry: dict, scene_index: int) -> str:
@@ -227,12 +227,12 @@ def import_aicspylibczi():
     def tick() -> None:
         while not stop.wait(5):
             elapsed = int(time.monotonic() - start)
-            emit_log(f"  still loading aicspylibczi… ({elapsed}s)")
+            emit_log(f"  still loading aicspylibczi... ({elapsed}s)")
             mid = min(84, 50 + int(elapsed / 90 * 35))
             emit_progress_phase(mid, f"Loading aicspylibczi ({elapsed}s)")
 
-    emit_log("Importing aicspylibczi (large native library; may take 30–90s on first run)…")
-    emit_progress_phase(50, "Loading aicspylibczi…")
+    emit_log("Importing aicspylibczi (large native library; may take 30-90s on first run)...")
+    emit_progress_phase(50, "Loading aicspylibczi...")
     thread = threading.Thread(target=tick, daemon=True)
     thread.start()
     try:
@@ -262,10 +262,10 @@ def run_max_for_role_key(bundle_root: Path, role_key: str, slice_ids: list[str])
         emit_log(f"  mkdir {out_dir}")
     out_dir.mkdir(parents=True, exist_ok=True)
     files = natural_sort_filenames([p.name for p in in_dir.glob("*.tif")])
-    emit_log(f"Max projecting {branch} ({len(files)} slices)…")
-    emit_progress("Max projecting signal channels…")
+    emit_log(f"Max projecting {branch} ({len(files)} slices)...")
+    emit_progress("Max projecting signal channels...")
     for fname in files:
-        emit_log(f"  max ← {fname}")
+        emit_log(f"  max <- {fname}")
         max_project_file(in_dir / fname, out_dir / f"{Path(fname).stem}.tif")
     write_run_manifest(
         out_dir,
@@ -296,24 +296,24 @@ def main() -> int:
     emit_log(f"Parsed bundle={args.bundle} config={args.json}")
     emit_progress_phase(5, "Arguments OK")
 
-    emit_log("Importing numpy…")
-    emit_progress_phase(10, "Loading numpy…")
+    emit_log("Importing numpy...")
+    emit_progress_phase(10, "Loading numpy...")
     import numpy as _np
 
     np = _np
     emit_log("  numpy ready")
     emit_progress_phase(25, "numpy loaded")
 
-    emit_log("Importing opencv…")
-    emit_progress_phase(25, "Loading opencv…")
+    emit_log("Importing opencv...")
+    emit_progress_phase(25, "Loading opencv...")
     import cv2 as _cv2
 
     cv2 = _cv2
     emit_log("  opencv ready")
     emit_progress_phase(40, "opencv loaded")
 
-    emit_log("Importing tifffile…")
-    emit_progress_phase(40, "Loading tifffile…")
+    emit_log("Importing tifffile...")
+    emit_progress_phase(40, "Loading tifffile...")
     import tifffile as _tiff
 
     tiff = _tiff
@@ -351,14 +351,14 @@ def main() -> int:
     files_in_work = len({str(item["czi_path"]) for item in work})
 
     out_dirs = collect_output_dirs(bundle_root, work)
-    emit_log(f"Creating output directories ({len(out_dirs)} paths)…")
+    emit_log(f"Creating output directories ({len(out_dirs)} paths)...")
     for d in out_dirs:
         if not d.exists():
             emit_log(f"  mkdir {d}")
         d.mkdir(parents=True, exist_ok=True)
 
     emit_log(f"{len(work)} work items ({channels_kept} channels kept across {files_in_work} files)")
-    emit_log("Beginning extraction…")
+    emit_log("Beginning extraction...")
 
     state_path = meta_state_path(bundle_root)
     state = {
@@ -460,7 +460,7 @@ def main() -> int:
         if rel:
             max_runs[role_key] = rel
             branch = branch_for_role_key(role_key) or role_key
-            emit_log(f"max projection {branch} → {rel}")
+            emit_log(f"max projection {branch} -> {rel}")
             if not primary_role:
                 primary_role = role_key
 
