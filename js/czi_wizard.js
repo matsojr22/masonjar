@@ -974,6 +974,35 @@ function setActiveMaxRuns() {
 	}
 }
 
+/** After extract/repair: set active max run and rebuild file index (DAPI + max). */
+async function syncProjectIndexAfterExtract() {
+	if (!wizardState.bundleRoot) {
+		return { matchedCount: 0 };
+	}
+	setActiveMaxRuns();
+	await project.refreshProjectIndex(wizardState.bundleRoot);
+	var index = project.readProjectFileIndex(wizardState.bundleRoot);
+	var report = project.computeMatchReport(index, ["dapi", "max"]);
+	var matchedCount = (report.matchedSliceIds || []).length;
+	verboseExtractLog(
+		"File index updated: " + matchedCount + " slice(s) matched between DAPI and max.",
+	);
+	return { matchedCount: matchedCount };
+}
+
+function updateExtractIndexNote(matchedCount) {
+	var detail = qs("extractDetail");
+	if (!detail) {
+		return;
+	}
+	detail.textContent =
+		"File index updated — " +
+		matchedCount +
+		" slice(s) matched between DAPI and max. " +
+		"Refreshes again after you confirm geometry (finish step). " +
+		"Detailed lines also appear in the application log window.";
+}
+
 function probeSingleDir(dir, scanIndex) {
 	var status = qs("probeStatus");
 	return new Promise(function (resolve, reject) {
@@ -1091,6 +1120,7 @@ async function tryResumeCziImportAfterStep1() {
 	}
 	if (audit.canSkipToOrient) {
 		verboseExtractLog("Resuming — extract already complete.");
+		await syncProjectIndexAfterExtract();
 		renderOrientationGrid();
 		setStep(5);
 		return true;
@@ -1103,6 +1133,7 @@ async function tryResumeCziImportAfterStep1() {
 		);
 		try {
 			await runExtract({ repairOnly: true });
+			await syncProjectIndexAfterExtract();
 			renderOrientationGrid();
 			setStep(5);
 			return true;
@@ -1240,7 +1271,17 @@ async function runExtract(options) {
 					verboseExtractLog("  " + keys[k] + " → " + payload.max_runs[keys[k]]);
 				}
 			}
-			resolve(payload);
+			syncProjectIndexAfterExtract()
+				.then(function (info) {
+					updateExtractIndexNote(info.matchedCount);
+					resolve(payload);
+				})
+				.catch(function (indexErr) {
+					verboseExtractLog(
+						"File index update failed (continuing): " + String(indexErr.message || indexErr),
+					);
+					resolve(payload);
+				});
 		}
 		ipc.on("updateLoad", onProgress);
 		ipc.on("cziJobLog", onJobLog);
