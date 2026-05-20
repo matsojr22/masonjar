@@ -9,9 +9,10 @@
  * full release.
  *
  * Usage:
- *   node scripts/build-release.js              # all GitHub targets
+ *   node scripts/build-release.js              # macOS Intel + ARM + Windows (local artifacts)
+ *   node scripts/build-release.js --windows-only  # Windows x64 zip only
  *   node scripts/build-release.js --local    # host OS/arch only (dev smoke)
- *   node scripts/build-release.js --no-test  # skip yarn test:js / test:smoke
+ *   node scripts/build-release.js --no-test  # skip dev tests before packaging
  *   node scripts/build-release.js --dry-run  # print plan only
  *   node scripts/build-release.js --linux    # include Linux .deb (needs dpkg/fakeroot)
  */
@@ -32,7 +33,7 @@ const FORGE_MAKE = path.join(
 );
 const OUT_MAKE = path.join(REPO_ROOT, "out", "make");
 
-/** Default GitHub release targets (macOS + Windows). Linux omitted unless --linux. */
+/** Default local release build: all desktop platforms. */
 const DEFAULT_RELEASE_TARGETS = [
 	{
 		platform: "darwin",
@@ -46,6 +47,15 @@ const DEFAULT_RELEASE_TARGETS = [
 		label: "macOS Apple Silicon",
 		githubName: "macOS (Apple Silicon)",
 	},
+	{
+		platform: "win32",
+		arch: "x64",
+		label: "Windows x64",
+		githubName: "Windows (x64)",
+	},
+];
+
+const WINDOWS_ONLY_TARGETS = [
 	{
 		platform: "win32",
 		arch: "x64",
@@ -70,10 +80,11 @@ const LINUX_RELEASE_TARGETS = [
 ];
 
 function releaseTargets(opts) {
+	let targets = opts.windowsOnly ? WINDOWS_ONLY_TARGETS : DEFAULT_RELEASE_TARGETS;
 	if (opts.linux) {
-		return DEFAULT_RELEASE_TARGETS.concat(LINUX_RELEASE_TARGETS);
+		targets = targets.concat(LINUX_RELEASE_TARGETS);
 	}
-	return DEFAULT_RELEASE_TARGETS;
+	return targets;
 }
 
 function readVersion() {
@@ -89,6 +100,7 @@ function parseArgs(argv) {
 		dryRun: false,
 		noTest: false,
 		linux: false,
+		windowsOnly: false,
 	};
 	for (let i = 2; i < argv.length; i++) {
 		const a = argv[i];
@@ -100,16 +112,21 @@ function parseArgs(argv) {
 			opts.noTest = true;
 		} else if (a === "--linux") {
 			opts.linux = true;
+		} else if (a === "--windows-only") {
+			opts.windowsOnly = true;
 		} else if (a === "--help" || a === "-h") {
 			console.log(`Mason Jar release build
 
-  node scripts/build-release.js           macOS (Intel + ARM) + Windows zip
-  node scripts/build-release.js --linux   Also build Linux .deb (needs dpkg/fakeroot)
-  node scripts/build-release.js --local   Current machine only (NOT for GitHub)
-  node scripts/build-release.js --no-test Skip dev tests before packaging
-  node scripts/build-release.js --dry-run Show targets only
+  node scripts/build-release.js              macOS Intel + ARM + Windows (default)
+  node scripts/build-release.js --windows-only   Windows x64 zip only
+  node scripts/build-release.js --linux        Also build Linux .deb (needs dpkg/fakeroot)
+  node scripts/build-release.js --local        Current machine only (dev smoke)
+  node scripts/build-release.js --no-test      Skip dev tests before packaging
+  node scripts/build-release.js --dry-run      Show targets only
 
-Agents: always run the default release build unless the user explicitly asks for a local dev package.
+Publish to GitHub: node scripts/publish-release.js  (Windows zip only by default)
+
+Agents: build all platforms locally; publish uploads Windows zip only unless --all-platforms.
 `);
 			process.exit(0);
 		} else {
@@ -213,10 +230,10 @@ function writeManifest(version, targets, artifacts) {
 		"## GitHub release checklist",
 		"",
 		"1. Tag: `v" + version + "` (must match package.json).",
-		"2. Upload **every** artifact below to:",
-		"   https://github.com/matsojr22/masonjar/releases/new",
-		"3. Typical Windows users need the **win32 x64 zip**, not a .dmg.",
-		"4. Intel Macs need **darwin x64**; Apple Silicon needs **darwin arm64**.",
+		"2. Publish to GitHub: `node scripts/publish-release.js` (Windows zip only).",
+		"   macOS DMGs stay local unless you use `publish-release.js --all-platforms`.",
+		"3. Windows download: `masonjar-win32-x64-" + version + ".zip`",
+		"4. macOS local: `masonjar-" + version + "-x64.dmg`, `masonjar-" + version + "-arm64.dmg`",
 		"",
 		"## Targets built",
 		"",
@@ -227,7 +244,7 @@ function writeManifest(version, targets, artifacts) {
 	if (!targets.some((t) => t.platform === "linux")) {
 		lines.push(
 			"",
-			"_Linux builds skipped (default). Use `node scripts/build-release.js --linux` on a machine with `dpkg` and `fakeroot` if needed._",
+			"_Linux builds skipped unless `--linux` (needs dpkg/fakeroot)._",
 		);
 	}
 	lines.push("", "## Files", "");
@@ -279,7 +296,10 @@ function main() {
 			"\n*** --local: building for this machine only. NOT sufficient for GitHub release. ***\n",
 		);
 	} else {
-		console.log("\nFull GitHub release targets:");
+		console.log(
+			"\nRelease build targets" +
+				(opts.windowsOnly ? " (Windows only):" : ":"),
+		);
 		for (const t of targets) {
 			console.log("  -", t.label, "→", t.githubName);
 		}
@@ -343,9 +363,9 @@ function main() {
 
 	if (!opts.local) {
 		console.log(
-			"\nNext: create GitHub release tag v" +
+			"\nNext: tag v" +
 				version +
-				" and upload all artifacts listed in out/make/RELEASE-" +
+				", then `node scripts/publish-release.js` (Windows only). See out/make/RELEASE-" +
 				version +
 				".md",
 		);

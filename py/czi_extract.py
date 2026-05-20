@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 import threading
 import time
@@ -13,8 +14,10 @@ from pathlib import Path
 from czi_common import (
     ROLE_DAPI,
     ROLE_UNUSED,
+    assess_mosaic_import,
     branch_for_channel,
     branch_for_role_key,
+    collapse_z_stack_to_2d,
     dapi_preview_path,
     default_slice_id,
     dim_size,
@@ -57,19 +60,26 @@ def downscale_plane(plane, scale: float):
 
 
 def max_project_z(stack):
-    if stack.ndim == 2:
-        return stack
-    z_axis = int(np.argmin(stack.shape))
-    return np.max(stack, axis=z_axis)
+    return collapse_z_stack_to_2d(stack)
 
 
 def max_project_file(input_path: Path, output_path: Path) -> None:
     img = tiff.imread(str(input_path))
-    out = max_project_z(np.asarray(img))
+    arr = np.asarray(img)
     parent = output_path.parent
     if not parent.exists():
         emit_log(f"  mkdir {parent}")
     parent.mkdir(parents=True, exist_ok=True)
+    if arr.ndim <= 2:
+        emit_log(f"  copy single plane → {output_path.name}")
+        shutil.copy2(str(input_path), str(output_path))
+        return
+    if arr.ndim == 3 and arr.shape[0] == 1:
+        emit_log(f"  copy single Z plane → {output_path.name}")
+        out = arr[0]
+        tiff.imwrite(str(output_path), out, photometric="minisblack")
+        return
+    out = max_project_z(arr)
     cv2.imwrite(str(output_path), out)
 
 
@@ -96,19 +106,27 @@ def extract_z_stack(
         plane = read_plane(czi, scene, z, channel)
         planes.append(plane)
     h, w = planes[0].shape[:2] if planes else (0, 0)
-    emit_log(f"  Stacking {n_z} planes ({h}x{w})")
-    stack = np.stack(planes, axis=0)
     parent = out_path.parent
     if not parent.exists():
         emit_log(f"  mkdir {parent}")
     parent.mkdir(parents=True, exist_ok=True)
-    tiff.imwrite(str(out_path), stack, photometric="minisblack")
+    if n_z == 1:
+        emit_log(f"  Single Z plane ({h}x{w}), writing 2D TIFF (no z-stack)")
+        tiff.imwrite(str(out_path), planes[0], photometric="minisblack")
+    else:
+        emit_log(f"  Stacking {n_z} planes ({h}x{w})")
+        stack = np.stack(planes, axis=0)
+        tiff.imwrite(str(out_path), stack, photometric="minisblack")
     try:
         rel = out_path.relative_to(bundle_root) if bundle_root else out_path.name
     except ValueError:
         rel = out_path.name
-    approx_mb = out_path.stat().st_size / (1024 * 1024) if out_path.exists() else stack.nbytes / (1024 * 1024)
-    emit_log(f"  Writing z-stack → {rel} ({approx_mb:.1f} MB approx)")
+    if out_path.exists():
+        approx_mb = out_path.stat().st_size / (1024 * 1024)
+    else:
+        nbytes = planes[0].nbytes if planes else 0
+        approx_mb = nbytes / (1024 * 1024)
+    emit_log(f"  Writing {'plane' if n_z == 1 else 'z-stack'} → {rel} ({approx_mb:.1f} MB approx)")
 
     if preview_path is not None:
         preview_plane = planes[z_indices.index(mid_z)] if z_indices else planes[0]
@@ -367,10 +385,13 @@ def main() -> int:
             blocks = normalized_dim_blocks(czi)
             dim_letters = sorted({str(k).upper() for b in blocks for k in b.keys()})
             dims_str = "".join(dim_letters)
-            is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
+            mosaic_info = assess_mosaic_import(czi, sample_read=False)
+            is_mosaic = bool(mosaic_info.get("is_mosaic"))
             emit_log(f"  dims={dims_str or '?'}, is_mosaic={is_mosaic}")
             if is_mosaic and key not in mosaic_logged:
                 emit_log("  mosaic read, scale_factor=1.0")
+                for warn in mosaic_info.get("mosaic_warnings") or []:
+                    emit_log(f"  WARNING: {warn}")
                 mosaic_logged.add(key)
             czi_cache[key] = czi
         return czi_cache[key]

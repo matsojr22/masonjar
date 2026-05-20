@@ -344,6 +344,7 @@ function renderSourceDirList() {
 				});
 			} else {
 				renderCziFileTable([]);
+				renderMosaicWarnings([]);
 				var nextBtn = qs("step2Next");
 				if (nextBtn) {
 					nextBtn.disabled = true;
@@ -451,22 +452,63 @@ function renderPrimarySignalSelect() {
 	}
 }
 
+function renderMosaicWarnings(files) {
+	var box = qs("mosaicWarningBox");
+	if (!box) {
+		return;
+	}
+	var warnings = cziImport.collectMosaicWarnings(files);
+	if (!warnings.length) {
+		box.classList.add("d-none");
+		box.innerHTML = "";
+		return;
+	}
+	var html =
+		"<strong>Mosaic stitch check:</strong> One or more files may be unstitched tile sets. " +
+		"Stitch mosaics in ZEN before export when possible. Import will continue but geometry may be wrong.<ul class=\"mb-0 mt-2\">";
+	for (var i = 0; i < warnings.length; i++) {
+		var w = warnings[i];
+		var label = w.basename ? "<code>" + w.basename + "</code>: " : "";
+		html += "<li>" + label + w.message + "</li>";
+	}
+	html += "</ul>";
+	box.innerHTML = html;
+	box.classList.remove("d-none");
+}
+
+function mosaicTableLabel(f) {
+	if (f.error) {
+		return "—";
+	}
+	if (f.is_mosaic !== true) {
+		return f.is_mosaic === false ? "No" : "—";
+	}
+	var tiles = f.m_tile_count != null ? f.m_tile_count : f.has_m_dim ? "2+" : "?";
+	var label = "Yes";
+	if (tiles !== "?" && tiles !== 1) {
+		label += " (" + tiles + " tiles)";
+	}
+	if (f.likely_unstitched) {
+		label += ' <span class="text-warning">unstitched?</span>';
+	}
+	return label;
+}
+
 function renderCziFileTable(files) {
 	var tbody = qs("cziFileTableBody");
 	if (!tbody) {
 		return;
 	}
+	renderMosaicWarnings(files);
 	tbody.innerHTML = "";
 	for (var i = 0; i < files.length; i++) {
 		var f = files[i];
 		var tr = document.createElement("tr");
-		var err = f.error ? ' <span class="text-danger">' + f.error + "</span>" : "";
-		var mosaicLabel = "—";
-		if (f.is_mosaic === true) {
-			mosaicLabel = "Yes";
-		} else if (f.is_mosaic === false) {
-			mosaicLabel = "No";
+		if (f.likely_unstitched) {
+			tr.classList.add("table-warning");
 		}
+		var err = f.error ? ' <span class="text-danger">' + f.error + "</span>" : "";
+		var mosaicLabel = mosaicTableLabel(f);
 		tr.innerHTML =
 			"<td>" +
 			(f.basename || path.basename(f.path || "")) +

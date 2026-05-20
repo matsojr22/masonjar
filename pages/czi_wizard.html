@@ -91,6 +91,11 @@
           </button>
         </div>
         <p id="probeStatus" class="small text-muted"></p>
+        <div
+          id="mosaicWarningBox"
+          class="alert alert-warning d-none text-start small"
+          role="alert"
+        ></div>
         <div class="table-responsive">
           <table class="table table-sm" id="cziFileTable">
             <thead>
@@ -99,7 +104,7 @@
                 <th>Scenes</th>
                 <th>Channels</th>
                 <th>Z planes</th>
-                <th>Mosaic</th>
+                <th>Mosaic / tiles</th>
               </tr>
             </thead>
             <tbody id="cziFileTableBody"></tbody>

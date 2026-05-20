@@ -14,13 +14,17 @@ from czi_common import (  # noqa: E402
     ROLE_DAPI,
     ROLE_OTHER,
     ROLE_SIGNAL_SOMATA,
+    assess_mosaic_import,
+    bbox_width_height,
     branch_for_channel,
     branch_for_role,
     branch_for_role_key,
     collapse_to_plane_2d,
+    collapse_z_stack_to_2d,
     default_slice_id,
     load_import_config,
     max_output_run_dir,
+    m_tile_count_from_czi,
     natural_sort_czi_paths,
     natural_sort_key,
     natural_sort_slice_ids,
@@ -170,6 +174,97 @@ def test_read_czi_plane_non_mosaic() -> None:
     plane = read_czi_plane(FakeCzi(), scene=0, z=0, channel=0)
     assert plane.shape == (8, 16)
     assert plane.dtype == np.uint16
+
+
+def test_bbox_width_height_object() -> None:
+    class BBox:
+        w = 1200
+        h = 800
+
+    assert bbox_width_height(BBox()) == (1200, 800)
+    assert bbox_width_height((0, 0, 640, 480)) == (640, 480)
+
+
+def test_m_tile_count_from_czi() -> None:
+    class FakeCzi:
+        def get_dims_shape(self):
+            return [{"M": (0, 4), "Z": (0, 1), "C": (0, 2)}]
+
+    assert m_tile_count_from_czi(FakeCzi()) == 4
+
+
+def test_collapse_z_stack_to_2d_single_plane() -> None:
+    import numpy as np
+
+    stack = np.arange(12, dtype=np.uint16).reshape(1, 3, 4)
+    plane = collapse_z_stack_to_2d(stack)
+    assert plane.shape == (3, 4)
+    assert np.array_equal(plane, stack[0])
+
+    already_2d = np.zeros((5, 6), dtype=np.uint8)
+    assert collapse_z_stack_to_2d(already_2d) is already_2d
+
+
+def test_assess_mosaic_import_warns_on_m_tiles() -> None:
+    class FakeCzi:
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"M": (0, 3), "Z": (0, 1), "C": (0, 1), "S": (0, 1)}]
+
+    info = assess_mosaic_import(FakeCzi(), sample_read=False)
+    assert info["likely_unstitched"] is True
+    assert info["m_tile_count"] == 3
+    assert any("ZEN" in w for w in info["mosaic_warnings"])
+
+
+def test_assess_mosaic_import_bbox_mismatch() -> None:
+    import numpy as np
+
+    class BBox:
+        w = 2000
+        h = 1500
+
+    class FakeCzi:
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"M": (0, 2), "Z": (0, 1), "C": (0, 1), "S": (0, 1)}]
+
+        def read_mosaic(self, **kwargs):
+            plane = np.zeros((500, 600), dtype=np.uint16)
+            return plane, [("Y", 500), ("X", 600)]
+
+        def get_mosaic_scene_bounding_box(self, index=0):
+            return BBox()
+
+        def get_all_mosaic_tile_bounding_boxes(self, **kwargs):
+            class TileBBox:
+                pass
+
+            t0, t1 = TileBBox(), TileBBox()
+            t0.w, t0.h = 600, 500
+            t1.w, t1.h = 600, 500
+            return {0: t0, 1: t1}
+
+    info = assess_mosaic_import(FakeCzi(), sample_read=True)
+    assert info["likely_unstitched"] is True
+    assert any("bounding box" in w.lower() or "tile" in w.lower() for w in info["mosaic_warnings"])
+
+
+def test_assess_mosaic_import_non_mosaic_clean() -> None:
+    class FakeCzi:
+        def is_mosaic(self):
+            return False
+
+        def get_dims_shape(self):
+            return [{"Z": (0, 5), "C": (0, 1)}]
+
+    info = assess_mosaic_import(FakeCzi(), sample_read=False)
+    assert info["likely_unstitched"] is False
+    assert info["mosaic_warnings"] == []
 
 
 def test_read_czi_plane_mosaic_uses_read_mosaic() -> None:

@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from czi_common import (
+    assess_mosaic_import,
     channel_indices_from_czi,
     default_slice_id,
     dim_size,
@@ -32,8 +33,9 @@ def probe_file(path: Path) -> dict:
     blocks = normalized_dim_blocks(czi)
     dim_letters = sorted({str(k).upper() for b in blocks for k in b.keys()})
     dims = "".join(dim_letters)
-    is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
-    has_m_dim = dim_size(blocks[0], "M") > 1 if blocks else False
+    mosaic_info = assess_mosaic_import(czi, sample_read=True)
+    is_mosaic = bool(mosaic_info.get("is_mosaic"))
+    has_m_dim = bool(mosaic_info.get("has_m_dim"))
     scene_indices = scene_indices_from_czi(czi)
     channel_indices = channel_indices_from_czi(czi)
     z_count = len(z_indices_from_czi(czi))
@@ -67,6 +69,9 @@ def probe_file(path: Path) -> dict:
         "dims": dims,
         "is_mosaic": is_mosaic,
         "has_m_dim": has_m_dim,
+        "m_tile_count": mosaic_info.get("m_tile_count"),
+        "likely_unstitched": bool(mosaic_info.get("likely_unstitched")),
+        "mosaic_warnings": list(mosaic_info.get("mosaic_warnings") or []),
         "scene_count": len(scene_indices),
         "channel_count": len(channel_indices),
         "z_count": z_count,

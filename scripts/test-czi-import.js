@@ -191,6 +191,37 @@ function testImportConfigPath() {
 	assert.ok(p.endsWith(path.join(".masonjar", "czi_import_config.json")));
 }
 
+function testCollectMosaicWarnings() {
+	var files = [
+		{
+			basename: "tile.czi",
+			likely_unstitched: true,
+			mosaic_warnings: ["Stitch in ZEN first."],
+		},
+		{
+			basename: "tile.czi",
+			likely_unstitched: true,
+			mosaic_warnings: ["Stitch in ZEN first."],
+		},
+		{ basename: "flat.czi", likely_unstitched: false, mosaic_warnings: [] },
+	];
+	var warnings = cziImport.collectMosaicWarnings(files);
+	assert.strictEqual(warnings.length, 1);
+	assert.strictEqual(warnings[0].basename, "tile.czi");
+	assert.match(warnings[0].message, /ZEN/);
+}
+
+function testHasLikelyUnstitchedMosaic() {
+	assert.strictEqual(
+		cziImport.hasLikelyUnstitchedMosaic([{ likely_unstitched: false }]),
+		false,
+	);
+	assert.strictEqual(
+		cziImport.hasLikelyUnstitchedMosaic([{ likely_unstitched: true }]),
+		true,
+	);
+}
+
 function testCountExtractWorkItems() {
 	var cfg = {
 		files: [
@@ -221,5 +252,7 @@ testBuildSliceOrderRenameMultiDir();
 testValidateSliceOrderDuplicate();
 testCollectKeptSignalRoleKeys();
 testImportConfigPath();
+testCollectMosaicWarnings();
+testHasLikelyUnstitchedMosaic();
 testCountExtractWorkItems();
 console.log("test-czi-import.js: OK");

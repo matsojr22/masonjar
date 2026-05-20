@@ -204,7 +204,7 @@ After bootstrap, the main window loads [`pages/menu.html`](pages/menu.html) (not
 
   **CZI paths on Windows:** Bundle and config paths may contain spaces (`Matt Jacobs`). Do not pass `-j path` as one combined argv string from main — use separate entries (`-b`, bundleRoot, `-j`, configPath) as in `appendCziPathArgs` in [`src/main.ts`](src/main.ts). Python strips paths defensively in `load_import_config`.
 
-  **CZI read path (aicspylibczi 3.x):** `read_image` returns `(ndarray, dims_list)` — never `np.asarray()` the raw tuple. [`py/czi_common.py`](py/czi_common.py) `read_czi_plane` unpacks the tuple, collapses fixed S/Z/C axes, and selects the **largest Y×X plane** when pyramid levels stack. Mosaic files use `read_mosaic(scale_factor=1.0)` at native resolution. Probe reports `is_mosaic` / `has_m_dim` per file (wizard step 2 table).
+  **CZI read path (aicspylibczi 3.x):** `read_image` returns `(ndarray, dims_list)` — never `np.asarray()` the raw tuple. [`py/czi_common.py`](py/czi_common.py) `read_czi_plane` unpacks the tuple, collapses fixed S/Z/C axes, and selects the **largest Y×X plane** when pyramid levels stack. Mosaic files use `read_mosaic(scale_factor=1.0)` at native resolution (libCZI stitch). Probe runs `assess_mosaic_import()` and reports `is_mosaic`, `m_tile_count`, `likely_unstitched`, and `mosaic_warnings`; the wizard shows a **Mosaic stitch check** alert (warn only — import not blocked) when M>1 or sample read size is much smaller than the scene bounding box. **Unstitched** Zen mosaics (multiple tiles, not stitched before export) may import with seams or wrong geometry — users should stitch in ZEN first. **Single Z:** `extract_z_stack` writes a 2D TIFF (not a Z=1 stack); max projection copies/collapses a single plane instead of failing on `argmin` over equal dimensions.
 
   **Extract console verbosity:** Step 4 is high-volume by design. The inline console and Application log show staged library imports (`LOG: Importing numpy…`, `still loading aicspylibczi…`), directory creation, per-file CZI opens (one open per source `.czi`, cached across work items), **every Z plane read**, TIFF writes, and max-projection inputs. Progress bar phases: **0–3%** JS preamble/spawn (`Launching Python`, heartbeat while waiting); **3–18%** staged imports (`PROGRESS:` from Python, mapped in main); **~20%** `Ready — N extraction items`; **22–92%** per-item extract (`updateLoad` counter); **92–99%** max projection; **100%** done. If the bar appears frozen, check the Application log and stderr mirror (`cziJobLog`) — large jobs (300+ items) remain slow but should never look idle while Python is running. The wizard emits a 1–2 s heartbeat and gap watchdog until the first Python ack.
 
@@ -234,7 +234,7 @@ node scripts/build-release.js
 # or: npm run build:release   /   yarn build:release
 ```
 
-This compiles TypeScript, runs JS dev tests, then builds the **default** GitHub targets (Linux omitted unless `--linux`):
+Compiles TypeScript, runs JS dev tests, then builds **all desktop targets locally** (Linux omitted unless `--linux`):
 
 | Target | Platform / arch | Typical artifact |
 |--------|-----------------|------------------|
@@ -242,9 +242,18 @@ This compiles TypeScript, runs JS dev tests, then builds the **default** GitHub 
 | macOS Apple Silicon | `darwin` / `arm64` | `.dmg` |
 | Windows | `win32` / `x64` | `.zip` under `out/make/zip/win32/x64/` |
 
-Optional: `node scripts/build-release.js --linux` adds Linux `.deb` builds (requires `dpkg` and `fakeroot`; usually a Linux host).
+`node scripts/build-release.js --windows-only` skips macOS when you only need a Windows package.
 
-Outputs and a upload checklist: `out/make/RELEASE-<version>.md`. Publish tag `v<version>` (match `package.json`) at [matsojr22/masonjar releases](https://github.com/matsojr22/masonjar/releases).
+**Publish to GitHub** (after tag `v<version>` matches `package.json`): upload **Windows zip only** by default (Zen users are Windows-centric; faster publish). macOS DMGs remain local unless you opt in:
+
+```bash
+node scripts/publish-release.js          # Windows zip only
+node scripts/publish-release.js --all-platforms   # upload DMGs + zip
+```
+
+Optional: `--linux` on the build script adds Linux `.deb` (requires `dpkg` and `fakeroot`).
+
+Checklist: `out/make/RELEASE-<version>.md`. Releases: [matsojr22/masonjar releases](https://github.com/matsojr22/masonjar/releases).
 
 **Local dev package only** (not for GitHub): `node scripts/build-release.js --local` — builds for the current machine OS/arch only.
 

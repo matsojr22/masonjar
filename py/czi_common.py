@@ -277,6 +277,143 @@ def z_indices_from_czi(czi) -> list[int]:
     return list(range(z_count))
 
 
+def m_tile_count_from_czi(czi) -> int:
+    blocks = normalized_dim_blocks(czi)
+    return dim_size(blocks[0], "M") if blocks else 1
+
+
+def bbox_width_height(bbox: Any) -> tuple[int, int]:
+    if bbox is None:
+        return 0, 0
+    w = getattr(bbox, "w", None)
+    h = getattr(bbox, "h", None)
+    if w is not None and h is not None:
+        return max(0, int(w)), max(0, int(h))
+    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+        return max(0, int(bbox[2])), max(0, int(bbox[3]))
+    if isinstance(bbox, Mapping):
+        return max(0, int(bbox.get("w", 0))), max(0, int(bbox.get("h", 0)))
+    return 0, 0
+
+
+def assess_mosaic_import(czi, *, sample_read: bool = True) -> dict[str, Any]:
+    """Heuristics for unstitched mosaic tiles (warn only; import is not blocked)."""
+    blocks = normalized_dim_blocks(czi)
+    is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
+    m_tile_count = m_tile_count_from_czi(czi)
+    has_m_dim = m_tile_count > 1
+    warnings: list[str] = []
+    likely_unstitched = False
+
+    if is_mosaic and has_m_dim:
+        likely_unstitched = True
+        warnings.append(
+            f"Mosaic file reports {m_tile_count} tile(s) on the M axis. If the acquisition "
+            "was not stitched in ZEN before export, import may show seams, missing regions, "
+            "or wrong geometry. Open the file in ZEN, run mosaic stitch, and re-export."
+        )
+
+    if not is_mosaic or not sample_read:
+        return {
+            "is_mosaic": is_mosaic,
+            "m_tile_count": m_tile_count,
+            "has_m_dim": has_m_dim,
+            "mosaic_warnings": warnings,
+            "likely_unstitched": likely_unstitched,
+        }
+
+    scene_indices = scene_indices_from_czi(czi)
+    channel_indices = channel_indices_from_czi(czi)
+    z_indices = z_indices_from_czi(czi)
+    scene = scene_indices[0] if scene_indices else 0
+    channel = channel_indices[0] if channel_indices else 0
+    z = z_indices[0] if z_indices else 0
+
+    try:
+        plane = read_czi_plane(czi, scene, z, channel)
+    except Exception as exc:
+        warnings.append(f"Could not read a sample mosaic plane: {exc}")
+        return {
+            "is_mosaic": is_mosaic,
+            "m_tile_count": m_tile_count,
+            "has_m_dim": has_m_dim,
+            "mosaic_warnings": warnings,
+            "likely_unstitched": likely_unstitched,
+        }
+
+    import numpy as _np
+
+    plane_h, plane_w = int(_np.asarray(plane).shape[0]), int(_np.asarray(plane).shape[1])
+    scene_bbox = None
+    get_scene_bbox = getattr(czi, "get_mosaic_scene_bounding_box", None)
+    if callable(get_scene_bbox):
+        try:
+            scene_bbox = get_scene_bbox(scene)
+        except Exception:
+            scene_bbox = None
+    scene_w, scene_h = bbox_width_height(scene_bbox)
+    if scene_w > 0 and scene_h > 0:
+        cover_w = plane_w / scene_w
+        cover_h = plane_h / scene_h
+        if cover_w < 0.85 or cover_h < 0.85:
+            likely_unstitched = True
+            warnings.append(
+                f"Sample read is {plane_w}×{plane_h} px but the mosaic scene bounding box "
+                f"is {scene_w}×{scene_h} px — tiles may not be stitched. Stitch in ZEN before import."
+            )
+
+    get_tiles = getattr(czi, "get_all_mosaic_tile_bounding_boxes", None)
+    if callable(get_tiles) and has_m_dim:
+        try:
+            tiles = get_tiles(S=scene, Z=z, C=channel) or {}
+            if len(tiles) > 1 and scene_w > 0 and scene_h > 0:
+                max_tile_w = 0
+                max_tile_h = 0
+                for bbox in tiles.values():
+                    tw, th = bbox_width_height(bbox)
+                    max_tile_w = max(max_tile_w, tw)
+                    max_tile_h = max(max_tile_h, th)
+                if (
+                    max_tile_w > 0
+                    and max_tile_h > 0
+                    and plane_w <= int(max_tile_w * 1.05)
+                    and plane_h <= int(max_tile_h * 1.05)
+                    and (plane_w < int(scene_w * 0.9) or plane_h < int(scene_h * 0.9))
+                ):
+                    likely_unstitched = True
+                    warnings.append(
+                        f"Read plane matches one tile ({plane_w}×{plane_h} px) but "
+                        f"{len(tiles)} tiles span {scene_w}×{scene_h} px — stitch the mosaic in ZEN first."
+                    )
+        except Exception:
+            pass
+
+    return {
+        "is_mosaic": is_mosaic,
+        "m_tile_count": m_tile_count,
+        "has_m_dim": has_m_dim,
+        "mosaic_warnings": warnings,
+        "likely_unstitched": likely_unstitched,
+    }
+
+
+def collapse_z_stack_to_2d(stack: Any) -> Any:
+    """Collapse a z-stack array to 2D; single-plane stacks squeeze instead of max."""
+    import numpy as _np
+
+    arr = _np.asarray(stack)
+    if arr.ndim <= 2:
+        return arr
+    if arr.shape[0] == 1:
+        return arr[0]
+    if arr.ndim == 3 and arr.shape[-1] == 1:
+        return arr[..., 0]
+    z_axis = int(_np.argmin(arr.shape))
+    if int(arr.shape[z_axis]) == 1:
+        return _np.squeeze(arr, axis=z_axis)
+    return _np.max(arr, axis=z_axis)
+
+
 def unpack_read_image(result: Any) -> tuple[Any, list[tuple[str, int]]]:
     """Accept bare ndarray (legacy) or aicspylibczi 3.x (data, dims) tuple."""
     if isinstance(result, tuple) and len(result) == 2:

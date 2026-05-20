@@ -1,0 +1,302 @@
+#!/usr/bin/env node
+"use strict";
+
+/**
+ * Publish Mason Jar release assets to GitHub.
+ *
+ * Default: upload Windows x64 zip only (primary user platform; faster publish).
+ *
+ * Usage:
+ *   node scripts/publish-release.js              # Windows zip only
+ *   node scripts/publish-release.js --all-platforms  # all built artifacts for version
+ *   node scripts/publish-release.js --dry-run
+ */
+
+const fs = require("fs");
+const https = require("https");
+const path = require("path");
+const { spawnSync } = require("child_process");
+
+const REPO_ROOT = path.join(__dirname, "..");
+const REPO = "matsojr22/masonjar";
+const OUT_MAKE = path.join(REPO_ROOT, "out", "make");
+
+function readVersion() {
+	const pkg = JSON.parse(
+		fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+	);
+	return pkg.version;
+}
+
+function parseArgs(argv) {
+	const opts = { allPlatforms: false, dryRun: false };
+	for (let i = 2; i < argv.length; i++) {
+		const a = argv[i];
+		if (a === "--all-platforms") {
+			opts.allPlatforms = true;
+		} else if (a === "--dry-run") {
+			opts.dryRun = true;
+		} else if (a === "--help" || a === "-h") {
+			console.log(`Publish Mason Jar GitHub release assets
+
+  node scripts/publish-release.js                 Windows zip only (default)
+  node scripts/publish-release.js --all-platforms  Upload every masonjar-* artifact for version
+  node scripts/publish-release.js --dry-run       List files only
+
+Requires git credential for github.com (password = PAT) or GH_TOKEN env.
+`);
+			process.exit(0);
+		} else {
+			console.error("Unknown option:", a);
+			process.exit(1);
+		}
+	}
+	return opts;
+}
+
+function getToken() {
+	if (process.env.GH_TOKEN) {
+		return process.env.GH_TOKEN;
+	}
+	const r = spawnSync(
+		"git",
+		["credential", "fill"],
+		{
+			input: "protocol=https\nhost=github.com\n\n",
+			encoding: "utf8",
+		},
+	);
+	if (r.status !== 0) {
+		throw new Error("git credential fill failed; run gh auth login or set GH_TOKEN");
+	}
+	for (const line of (r.stdout || "").split("\n")) {
+		if (line.startsWith("password=")) {
+			return line.slice("password=".length);
+		}
+	}
+	throw new Error("No GitHub token from git credential");
+}
+
+function githubRequest(method, urlPath, token, body, headers) {
+	return new Promise((resolve, reject) => {
+		const payload = body
+			? typeof body === "string" || Buffer.isBuffer(body)
+				? body
+				: JSON.stringify(body)
+			: null;
+		const opts = {
+			hostname: "api.github.com",
+			path: urlPath,
+			method,
+			headers: Object.assign(
+				{
+					Authorization: "token " + token,
+					Accept: "application/vnd.github+json",
+					"User-Agent": "masonjar-publish-release",
+				},
+				headers || {},
+			),
+		};
+		if (payload && !opts.headers["Content-Type"]) {
+			opts.headers["Content-Type"] = "application/json";
+			opts.headers["Content-Length"] = Buffer.byteLength(payload);
+		}
+		const req = https.request(opts, (res) => {
+			const chunks = [];
+			res.on("data", (c) => chunks.push(c));
+			res.on("end", () => {
+				const raw = Buffer.concat(chunks).toString("utf8");
+				if (res.statusCode >= 200 && res.statusCode < 300) {
+					try {
+						resolve(raw ? JSON.parse(raw) : {});
+					} catch (_e) {
+						resolve(raw);
+					}
+					return;
+				}
+				reject(new Error("HTTP " + res.statusCode + " " + urlPath + ": " + raw.slice(0, 500)));
+			});
+		});
+		req.on("error", reject);
+		if (payload) {
+			req.write(payload);
+		}
+		req.end();
+	});
+}
+
+function uploadAsset(uploadUrlTemplate, token, filePath) {
+	return new Promise((resolve, reject) => {
+		const name = path.basename(filePath);
+		const uploadUrl = new URL(uploadUrlTemplate.replace(/\{.*$/, ""));
+		uploadUrl.searchParams.set("name", name);
+		const data = fs.readFileSync(filePath);
+		const sizeMb = Math.round(data.length / 1024 / 1024);
+		console.log("Uploading " + name + " (" + sizeMb + " MB)…");
+
+		const opts = {
+			hostname: uploadUrl.hostname,
+			path: uploadUrl.pathname + uploadUrl.search,
+			method: "POST",
+			headers: {
+				Authorization: "token " + token,
+				"Content-Type": "application/octet-stream",
+				"Content-Length": data.length,
+				"User-Agent": "masonjar-publish-release",
+			},
+		};
+
+		const req = https.request(opts, (res) => {
+			const chunks = [];
+			res.on("data", (c) => chunks.push(c));
+			res.on("end", () => {
+				const raw = Buffer.concat(chunks).toString("utf8");
+				if (res.statusCode >= 200 && res.statusCode < 300) {
+					const info = JSON.parse(raw);
+					console.log("  OK:", info.browser_download_url || name);
+					resolve(info);
+					return;
+				}
+				reject(new Error("Upload failed " + name + ": " + res.statusCode + " " + raw.slice(0, 400)));
+			});
+		});
+		req.on("error", reject);
+		req.write(data);
+		req.end();
+	});
+}
+
+function findArtifacts(version, allPlatforms) {
+	const found = [];
+	if (!fs.existsSync(OUT_MAKE)) {
+		return found;
+	}
+	const versionNeedle = "-" + version;
+	function isArtifact(name, full) {
+		if (!/\.(dmg|zip|deb|rpm)$/i.test(name)) {
+			return false;
+		}
+		if (!name.toLowerCase().startsWith("masonjar")) {
+			return false;
+		}
+		if (name.indexOf(versionNeedle) === -1 && name.indexOf(version) === -1) {
+			return false;
+		}
+		if (!allPlatforms) {
+			const rel = path.relative(OUT_MAKE, full).replace(/\\/g, "/");
+			if (!rel.includes("zip/win32/x64/") || !/\.zip$/i.test(name)) {
+				return false;
+			}
+		}
+		return true;
+	}
+	function walk(dir) {
+		let entries;
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch (_e) {
+			return;
+		}
+		for (const ent of entries) {
+			const full = path.join(dir, ent.name);
+			if (ent.isDirectory()) {
+				walk(full);
+			} else if (ent.isFile() && isArtifact(ent.name, full)) {
+				found.push(full);
+			}
+		}
+	}
+	walk(OUT_MAKE);
+	return [...new Set(found)].sort();
+}
+
+function releaseNotes(version) {
+	return (
+		"## Mason Jar v" +
+		version +
+		"\n\n" +
+		"**Windows (x64):** download `masonjar-win32-x64-" +
+		version +
+		".zip`, unzip, and run the app inside.\n\n" +
+		"_macOS builds are omitted from this release upload while Windows is stabilized. " +
+		"Build locally with `node scripts/build-release.js --all-platforms` if needed._\n"
+	);
+}
+
+async function main() {
+	const opts = parseArgs(process.argv);
+	const version = readVersion();
+	const tag = "v" + version;
+	const artifacts = findArtifacts(version, opts.allPlatforms);
+
+	console.log("Publish " + tag + " to " + REPO);
+	console.log(
+		opts.allPlatforms
+			? "Mode: all platforms"
+			: "Mode: Windows zip only",
+	);
+
+	if (!artifacts.length) {
+		console.error(
+			"No artifacts found. Run: node scripts/build-release.js" +
+				(opts.allPlatforms ? " --all-platforms" : ""),
+		);
+		process.exit(1);
+	}
+
+	for (const a of artifacts) {
+		console.log(" ", path.relative(REPO_ROOT, a));
+	}
+
+	if (opts.dryRun) {
+		console.log("\n(dry-run: no upload)");
+		return;
+	}
+
+	const token = getToken();
+	const base = "/repos/" + REPO;
+
+	let release;
+	try {
+		release = await githubRequest("GET", base + "/releases/tags/" + tag, token);
+	} catch (e) {
+		if (String(e.message).indexOf("404") >= 0) {
+			release = null;
+		} else {
+			throw e;
+		}
+	}
+
+	if (!release || !release.id) {
+		release = await githubRequest("POST", base + "/releases", token, {
+			tag_name: tag,
+			name: "Mason Jar v" + version,
+			body: releaseNotes(version),
+			draft: false,
+			prerelease: false,
+		});
+		console.log("Created release id=" + release.id);
+	}
+
+	const existing = new Set((release.assets || []).map((a) => a.name));
+	const uploadUrl = release.upload_url;
+	if (!uploadUrl) {
+		throw new Error("Release has no upload_url");
+	}
+
+	for (const filePath of artifacts) {
+		const name = path.basename(filePath);
+		if (existing.has(name)) {
+			console.log("Skip existing asset:", name);
+			continue;
+		}
+		await uploadAsset(uploadUrl, token, filePath);
+	}
+
+	console.log("\nRelease URL: https://github.com/" + REPO + "/releases/tag/" + tag);
+}
+
+main().catch((err) => {
+	console.error(err.message || err);
+	process.exit(1);
+});

@@ -222,10 +222,63 @@ function normalizeProbeFileEntry(file, sourceDir, scanIndex) {
 		scene_count: file.scene_count,
 		channel_count: file.channel_count,
 		z_count: file.z_count,
+		is_mosaic: file.is_mosaic,
+		has_m_dim: file.has_m_dim,
+		m_tile_count: file.m_tile_count,
+		likely_unstitched: file.likely_unstitched,
+		mosaic_warnings: file.mosaic_warnings || [],
 		scenes: scenes,
 		channels: file.channels || [],
 		error: file.error,
 	};
+}
+
+function collectMosaicWarnings(files) {
+	var out = [];
+	var seen = {};
+	var list = files || [];
+	for (var i = 0; i < list.length; i++) {
+		var f = list[i];
+		if (f.error) {
+			continue;
+		}
+		var warnings = f.mosaic_warnings || [];
+		for (var w = 0; w < warnings.length; w++) {
+			var msg = String(warnings[w] || "").trim();
+			if (!msg) {
+				continue;
+			}
+			var key = (f.basename || f.path || "file") + "|" + msg;
+			if (seen[key]) {
+				continue;
+			}
+			seen[key] = true;
+			out.push({
+				basename: f.basename || "",
+				message: msg,
+			});
+		}
+		if (f.likely_unstitched && !warnings.length) {
+			var fallback =
+				(f.basename || "CZI") +
+				": mosaic tiles may be unstitched — stitch in ZEN before import.";
+			if (!seen[fallback]) {
+				seen[fallback] = true;
+				out.push({ basename: f.basename || "", message: fallback });
+			}
+		}
+	}
+	return out;
+}
+
+function hasLikelyUnstitchedMosaic(files) {
+	var list = files || [];
+	for (var i = 0; i < list.length; i++) {
+		if (list[i].likely_unstitched) {
+			return true;
+		}
+	}
+	return false;
 }
 
 function rebuildChannelsFromFiles(cziImport) {
@@ -554,4 +607,6 @@ module.exports = {
 	collectSliceIds: collectSliceIds,
 	countExtractWorkItems: countExtractWorkItems,
 	primaryMaxRunRel: primaryMaxRunRel,
+	collectMosaicWarnings: collectMosaicWarnings,
+	hasLikelyUnstitchedMosaic: hasLikelyUnstitchedMosaic,
 };
