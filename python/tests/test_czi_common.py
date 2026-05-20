@@ -16,6 +16,7 @@ from czi_common import (  # noqa: E402
     ROLE_SIGNAL_SOMATA,
     _safe_print,
     assess_mosaic_import,
+    clamp_preview_scale,
     emit_log,
     assess_mosaic_import_metadata,
     bbox_width_height,
@@ -25,6 +26,7 @@ from czi_common import (  # noqa: E402
     collapse_to_plane_2d,
     collapse_z_stack_to_2d,
     default_slice_id,
+    dapi_preview_path,
     load_import_config,
     max_output_run_dir,
     m_tile_count_from_czi,
@@ -33,13 +35,16 @@ from czi_common import (  # noqa: E402
     natural_sort_slice_ids,
     original_scans_path,
     parse_section_suffix,
+    preview_plane_to_uint8,
     read_czi_plane,
     role_key_for_channel,
     sanitize_other_name,
     select_largest_plane,
+    signal_preview_path,
     suggest_role_from_label,
     unpack_read_image,
 )
+from czi_extract import downscale_plane, repair_preview_from_zstack  # noqa: E402
 
 
 def test_emit_log_cp1252_stdout(monkeypatch) -> None:
@@ -532,6 +537,59 @@ def test_read_czi_plane_mosaic_sample_scale() -> None:
     plane = read_czi_plane(czi, scene=0, z=0, channel=0, sample_scale=0.05)
     assert plane.shape == (6, 8)
     assert czi.calls == [{"scale_factor": 0.05, "Z": 0, "C": 0}]
+
+
+def test_downscale_plane_linear_005() -> None:
+    import cv2
+
+    import czi_extract
+
+    czi_extract.cv2 = cv2
+    plane = __import__("numpy").zeros((2000, 1000), dtype=__import__("numpy").uint16)
+    out = downscale_plane(plane, 0.05)
+    assert out.shape == (100, 50)
+
+
+def test_preview_plane_to_uint8_uint16() -> None:
+    import numpy as np
+
+    plane = np.array([[0, 32768], [65535, 1000]], dtype=np.uint16)
+    out = preview_plane_to_uint8(plane)
+    assert out.dtype == np.uint8
+    assert out.max() <= 255
+
+
+def test_clamp_preview_scale() -> None:
+    assert clamp_preview_scale(0.05) == 0.05
+    assert clamp_preview_scale(0.1) == 0.05
+
+
+def test_repair_preview_from_zstack(tmp_path: Path) -> None:
+    import numpy as np
+    import tifffile
+
+    import czi_extract
+
+    czi_extract.np = np
+    czi_extract.tiff = tifffile
+    import cv2
+
+    czi_extract.cv2 = cv2
+
+    bundle = tmp_path / "Brain_masonjar"
+    bundle.mkdir()
+    ch = {"role": ROLE_SIGNAL_SOMATA, "index": 1, "keep": True}
+    slice_id = "M528_s001"
+    z_path = original_scans_path(bundle, ch, slice_id)
+    z_path.parent.mkdir(parents=True)
+    stack = (np.arange(200 * 200 * 3, dtype=np.uint16).reshape(3, 200, 200))
+    tifffile.imwrite(str(z_path), stack, photometric="minisblack")
+    assert repair_preview_from_zstack(bundle, ch, slice_id, 0.05) is True
+    prev = signal_preview_path(bundle, slice_id, ch)
+    assert prev.is_file()
+    arr = tifffile.imread(str(prev))
+    assert arr.dtype == np.uint8
+    assert arr.shape == (10, 10)
 
 
 def test_read_czi_plane_mosaic_single_scene_no_region() -> None:

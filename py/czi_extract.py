@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -12,11 +13,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from czi_common import (
+    PREVIEW_FORMAT_VERSION,
     ROLE_DAPI,
     ROLE_UNUSED,
     assess_mosaic_import,
     branch_for_channel,
     branch_for_role_key,
+    clamp_preview_scale,
     collapse_z_stack_to_2d,
     dapi_preview_path,
     default_slice_id,
@@ -34,6 +37,7 @@ from czi_common import (
     natural_sort_slice_ids,
     normalized_dim_blocks,
     original_scans_path,
+    preview_plane_to_uint8,
     read_czi_plane,
     role_key_for_channel,
     signal_preview_path,
@@ -130,7 +134,7 @@ def extract_z_stack(
 
     if preview_path is not None:
         preview_plane = planes[z_indices.index(mid_z)] if z_indices else planes[0]
-        preview = downscale_plane(preview_plane, preview_scale)
+        preview = preview_plane_to_uint8(downscale_plane(preview_plane, preview_scale))
         pparent = preview_path.parent
         if not pparent.exists():
             emit_log(f"  mkdir {pparent}")
@@ -248,6 +252,112 @@ def import_aicspylibczi():
         thread.join(timeout=0.1)
 
 
+def read_import_state(bundle_root: Path) -> dict:
+    state_path = meta_state_path(bundle_root)
+    if not state_path.is_file():
+        return {}
+    with open(state_path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def plane_from_zstack(arr):
+    if arr.ndim <= 2:
+        return arr
+    if arr.ndim == 3:
+        return arr[arr.shape[0] // 2]
+    return collapse_z_stack_to_2d(arr)
+
+
+def preview_path_for_channel(bundle_root: Path, ch: dict, slice_id: str) -> Path | None:
+    role = ch.get("role")
+    if role == ROLE_DAPI:
+        return dapi_preview_path(bundle_root, slice_id)
+    if branch_for_channel(ch):
+        return signal_preview_path(bundle_root, slice_id, ch)
+    return None
+
+
+def write_preview_at_path(
+    preview_path: Path,
+    plane,
+    preview_scale: float,
+    bundle_root: Path | None,
+    slice_id: str = "",
+) -> None:
+    preview = preview_plane_to_uint8(downscale_plane(plane, preview_scale))
+    preview_path.parent.mkdir(parents=True, exist_ok=True)
+    tiff.imwrite(str(preview_path), preview, photometric="minisblack")
+    try:
+        prev_rel = preview_path.relative_to(bundle_root) if bundle_root else preview_path.name
+    except ValueError:
+        prev_rel = preview_path.name
+    emit_log(f"  Writing preview -> {prev_rel} ({slice_id})")
+
+
+def repair_preview_from_zstack(
+    bundle_root: Path,
+    ch: dict,
+    slice_id: str,
+    preview_scale: float,
+) -> bool:
+    z_path = original_scans_path(bundle_root, ch, slice_id)
+    if not z_path.is_file():
+        emit_log(f"  z-stack missing for repair: {z_path.name}")
+        return False
+    preview_path = preview_path_for_channel(bundle_root, ch, slice_id)
+    if preview_path is None:
+        return False
+    emit_log(f"  Repair preview from z-stack {z_path.name}")
+    arr = np.asarray(tiff.imread(str(z_path)))
+    plane = plane_from_zstack(arr)
+    write_preview_at_path(preview_path, plane, preview_scale, bundle_root, slice_id)
+    return True
+
+
+def channel_from_repair_target(cfg: dict, target: dict) -> dict | None:
+    idx = int(target.get("channel_index", -1))
+    role_key = target.get("role_key")
+    for ch in cfg.get("channels") or []:
+        if int(ch.get("index", -1)) != idx:
+            continue
+        if role_key and role_key_for_channel(ch) != role_key:
+            continue
+        return dict(ch)
+    return None
+
+
+def repair_target_to_work_item(cfg: dict, target: dict, files_by_name: dict) -> dict | None:
+    ch = channel_from_repair_target(cfg, target)
+    if not ch:
+        return None
+    file_key = target.get("file") or ch.get("file") or ""
+    file_entry = files_by_name.get(file_key) or files_by_name.get(Path(file_key).name)
+    if not file_entry:
+        return None
+    czi_path = Path(target.get("czi_path") or file_entry.get("path") or "")
+    if not czi_path.is_file():
+        return None
+    return {
+        "czi_path": czi_path,
+        "file_entry": file_entry,
+        "scene_index": int(target.get("scene_index", 0)),
+        "slice_id": str(target.get("slice_id") or ""),
+        "channel_index": int(ch["index"]),
+        "channel": ch,
+        "role_key": role_key_for_channel(ch),
+    }
+
+
+def max_runs_on_disk(bundle_root: Path, max_runs: dict[str, str]) -> bool:
+    if not max_runs:
+        return False
+    base = bundle_root / "data/counting/03_max"
+    for rel in max_runs.values():
+        if not rel or not (base / rel).is_dir():
+            return False
+    return True
+
+
 def run_max_for_role_key(bundle_root: Path, role_key: str, slice_ids: list[str]) -> str:
     branch = branch_for_role_key(role_key)
     if not branch:
@@ -341,38 +451,89 @@ def main() -> int:
     emit_log(f"CZI source: {source_dir or '(from config paths)'}")
 
     emit_progress_phase(100, "Building work list")
-    preview_scale = float(cfg.get("preview_scale") or 0.05)
-    work = build_work_items(cfg)
-    if not work:
+    preview_scale = clamp_preview_scale(cfg.get("preview_scale"))
+    repair_mode = cfg.get("repair_mode")
+    repair_targets = list(cfg.get("repair_targets") or [])
+    prior_state = read_import_state(bundle_root)
+    max_runs_existing = dict(cfg.get("max_runs") or prior_state.get("max_runs") or {})
+
+    if repair_mode == "previews" and repair_targets:
+        emit_log(f"Preview repair mode ({len(repair_targets)} target(s))")
+        files_by_name: dict[str, dict] = {}
+        for f in cfg.get("files") or []:
+            files_by_name[Path(f.get("path", "")).name] = f
+            files_by_name[f.get("basename", "")] = f
+        fallback_work: list[dict] = []
+        repaired = 0
+        state = {
+            "phase": "repair",
+            "started": datetime.now(timezone.utc).isoformat(),
+            "total": len(repair_targets),
+            "done": 0,
+            "repair_mode": repair_mode,
+        }
+        write_import_state(bundle_root, state)
+        print(len(repair_targets), flush=True)
+        extracted_by_role_key: dict[str, list[str]] = {}
+        for i, target in enumerate(repair_targets):
+            slice_id = str(target.get("slice_id") or "")
+            ch = channel_from_repair_target(cfg, target)
+            if not ch or not slice_id:
+                emit_log(f"[{i + 1}/{len(repair_targets)}] skip invalid repair target")
+                state["done"] = i + 1
+                write_import_state(bundle_root, state)
+                continue
+            emit_log(f"[{i + 1}/{len(repair_targets)}] repair preview {slice_id} ch {ch.get('index')}")
+            emit_progress(f"Repairing preview {slice_id}")
+            if repair_preview_from_zstack(bundle_root, ch, slice_id, preview_scale):
+                repaired += 1
+                role_key = role_key_for_channel(ch)
+                extracted_by_role_key.setdefault(role_key, []).append(slice_id)
+            else:
+                item = repair_target_to_work_item(cfg, target, files_by_name)
+                if item:
+                    fallback_work.append(item)
+                else:
+                    emit_log(f"  could not repair or fall back for {slice_id}")
+            state["done"] = i + 1
+            write_import_state(bundle_root, state)
+        work = fallback_work
+    else:
+        work = build_work_items(cfg)
+        if not work:
+            emit_result({"ok": False, "error": "No channels marked to keep"})
+            return 1
+        repaired = 0
+
+    if work:
+        channels_kept = len(
+            [c for c in cfg.get("channels") or [] if c.get("keep") and c.get("role") != ROLE_UNUSED],
+        )
+        files_in_work = len({str(item["czi_path"]) for item in work})
+        out_dirs = collect_output_dirs(bundle_root, work)
+        emit_log(f"Creating output directories ({len(out_dirs)} paths)...")
+        for d in out_dirs:
+            if not d.exists():
+                emit_log(f"  mkdir {d}")
+            d.mkdir(parents=True, exist_ok=True)
+        emit_log(f"{len(work)} work items ({channels_kept} channels kept across {files_in_work} files)")
+        emit_log("Beginning extraction...")
+        state = {
+            "phase": "extract",
+            "started": datetime.now(timezone.utc).isoformat(),
+            "total": len(work),
+            "done": 0,
+            "slice_numbering": cfg.get("slice_numbering"),
+            "slice_order_count": len(cfg.get("slice_order") or []),
+        }
+        write_import_state(bundle_root, state)
+        print(len(work), flush=True)
+    elif repair_mode != "previews":
         emit_result({"ok": False, "error": "No channels marked to keep"})
         return 1
 
-    channels_kept = len([c for c in cfg.get("channels") or [] if c.get("keep") and c.get("role") != ROLE_UNUSED])
-    files_in_work = len({str(item["czi_path"]) for item in work})
-
-    out_dirs = collect_output_dirs(bundle_root, work)
-    emit_log(f"Creating output directories ({len(out_dirs)} paths)...")
-    for d in out_dirs:
-        if not d.exists():
-            emit_log(f"  mkdir {d}")
-        d.mkdir(parents=True, exist_ok=True)
-
-    emit_log(f"{len(work)} work items ({channels_kept} channels kept across {files_in_work} files)")
-    emit_log("Beginning extraction...")
-
-    state_path = meta_state_path(bundle_root)
-    state = {
-        "phase": "extract",
-        "started": datetime.now(timezone.utc).isoformat(),
-        "total": len(work),
-        "done": 0,
-        "slice_numbering": cfg.get("slice_numbering"),
-        "slice_order_count": len(cfg.get("slice_order") or []),
-    }
-    write_import_state(bundle_root, state)
-
-    print(len(work), flush=True)
-    extracted_by_role_key: dict[str, list[str]] = {}
+    if repair_mode != "previews":
+        extracted_by_role_key = {}
     czi_cache: dict[str, object] = {}
 
     mosaic_logged: set[str] = set()
@@ -406,7 +567,7 @@ def main() -> int:
             czi_cache[key] = czi
         return czi_cache[key]
 
-    for i, item in enumerate(work):
+    for i, item in enumerate(work or []):
         czi_path = item["czi_path"]
         ch = item["channel"]
         role = ch.get("role")
@@ -449,23 +610,32 @@ def main() -> int:
             close()
     czi_cache.clear()
 
-    max_runs: dict[str, str] = {}
-    primary_role = cfg.get("primary_signal_role") or ""
-    for role_key, slice_ids in extracted_by_role_key.items():
-        if role_key in (ROLE_DAPI, ROLE_UNUSED):
-            continue
-        if not branch_for_role_key(role_key):
-            continue
-        rel = run_max_for_role_key(bundle_root, role_key, slice_ids)
-        if rel:
-            max_runs[role_key] = rel
-            branch = branch_for_role_key(role_key) or role_key
-            emit_log(f"max projection {branch} -> {rel}")
-            if not primary_role:
-                primary_role = role_key
+    max_runs: dict[str, str] = dict(max_runs_existing)
+    primary_role = cfg.get("primary_signal_role") or prior_state.get("primary_signal_role") or ""
+    skip_max = repair_mode == "previews" and max_runs_on_disk(bundle_root, max_runs)
+    if skip_max:
+        emit_log("Skipping max projection (existing max runs on disk)")
+    else:
+        for role_key, slice_ids in extracted_by_role_key.items():
+            if role_key in (ROLE_DAPI, ROLE_UNUSED):
+                continue
+            if not branch_for_role_key(role_key):
+                continue
+            rel = run_max_for_role_key(bundle_root, role_key, slice_ids)
+            if rel:
+                max_runs[role_key] = rel
+                branch = branch_for_role_key(role_key) or role_key
+                emit_log(f"max projection {branch} -> {rel}")
+                if not primary_role:
+                    primary_role = role_key
 
+    state = read_import_state(bundle_root) or {}
     state["phase"] = "complete"
     state["max_runs"] = max_runs
+    state["preview_format_version"] = PREVIEW_FORMAT_VERSION
+    state["config_fingerprint"] = cfg.get("config_fingerprint") or ""
+    if repair_mode:
+        state["repair_mode"] = repair_mode
     write_import_state(bundle_root, state)
 
     emit_result(
@@ -476,6 +646,10 @@ def main() -> int:
             "primary_signal_role": primary_role,
             "slice_numbering": cfg.get("slice_numbering"),
             "slice_order_count": len(cfg.get("slice_order") or []),
+            "preview_format_version": PREVIEW_FORMAT_VERSION,
+            "config_fingerprint": cfg.get("config_fingerprint") or "",
+            "repair_mode": repair_mode,
+            "repaired_previews": repaired if repair_mode == "previews" else None,
         }
     )
     print("Done!", flush=True)

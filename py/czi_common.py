@@ -31,6 +31,38 @@ CANONICAL_REL = {
 }
 
 DEFAULT_PREVIEW_SCALE = 0.05
+PREVIEW_FORMAT_VERSION = 2
+
+
+def clamp_preview_scale(scale: float | None) -> float:
+    """Force 5% linear downscale for on-disk orient/adjust previews."""
+    value = float(scale if scale is not None else DEFAULT_PREVIEW_SCALE)
+    if abs(value - DEFAULT_PREVIEW_SCALE) > 1e-6:
+        emit_log(
+            f"  preview_scale {value} overridden to {DEFAULT_PREVIEW_SCALE} (5% linear W/H)",
+        )
+        return DEFAULT_PREVIEW_SCALE
+    return value
+
+
+def preview_plane_to_uint8(plane) -> "np.ndarray":
+    import numpy as np
+
+    arr = np.asarray(plane)
+    if arr.dtype == np.uint8:
+        return arr
+    if np.issubdtype(arr.dtype, np.floating):
+        arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+        max_val = float(arr.max()) if arr.size else 0.0
+        if max_val <= 1.0:
+            scaled = arr * 255.0
+        else:
+            scaled = arr * (255.0 / max_val) if max_val > 0 else arr
+        return np.clip(scaled, 0, 255).astype(np.uint8)
+    info = np.iinfo(arr.dtype) if np.issubdtype(arr.dtype, np.integer) else None
+    if info is not None and info.max > 255:
+        return (arr.astype(np.float32) * (255.0 / float(info.max))).astype(np.uint8)
+    return np.clip(arr, 0, 255).astype(np.uint8)
 
 
 def sanitize_slice_stem(stem: str) -> str:

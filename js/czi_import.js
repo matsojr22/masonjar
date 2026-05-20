@@ -1,5 +1,7 @@
 "use strict";
 
+var crypto = require("crypto");
+var fs = require("fs");
 var path = require("path");
 
 var ROLE_DAPI = "dapi";
@@ -25,6 +27,8 @@ var CHANNEL_ROLE_OPTIONS = [
 ];
 
 var DEFAULT_PREVIEW_SCALE = 0.05;
+var PREVIEWS_REL = "data/counting/_previews";
+var PREVIEW_FORMAT_VERSION = 2;
 
 function branchForRole(role) {
 	return ROLE_TO_BRANCH[role] || "";
@@ -607,6 +611,365 @@ function primaryMaxRunRel(cziImport, importResult) {
 	return maxRuns[role] || "";
 }
 
+function originalScansPath(bundleRoot, channel, sliceId) {
+	var branch = branchForChannel(channel);
+	var base = path.join(bundleRoot, "data/original_scans");
+	if (branch) {
+		return path.join(base, branch, sliceId + ".tif");
+	}
+	return path.join(base, sliceId + ".tif");
+}
+
+function dapiPreviewPath(bundleRoot, sliceId) {
+	return path.join(bundleRoot, "data/counting/00_dapi", sliceId + ".tif");
+}
+
+function signalPreviewPath(bundleRoot, sliceId, channel) {
+	var branch = branchForChannel(channel);
+	var suffix = branch || roleKeyForChannel(channel);
+	return path.join(bundleRoot, PREVIEWS_REL, sliceId + "_" + suffix + ".tif");
+}
+
+function previewPathForChannel(bundleRoot, sliceId, channel) {
+	if (!channel || !channel.keep || channel.role === ROLE_UNUSED) {
+		return "";
+	}
+	if (channel.role === ROLE_DAPI) {
+		return dapiPreviewPath(bundleRoot, sliceId);
+	}
+	if (branchForChannel(channel)) {
+		return signalPreviewPath(bundleRoot, sliceId, channel);
+	}
+	return "";
+}
+
+function findKeptChannelForRoleKey(cziImport, roleKey) {
+	var channels = cziImport.channels || [];
+	for (var i = 0; i < channels.length; i++) {
+		var ch = channels[i];
+		if (!ch.keep || ch.role === ROLE_UNUSED) {
+			continue;
+		}
+		if (roleKeyForChannel(ch) === roleKey) {
+			return ch;
+		}
+	}
+	return null;
+}
+
+function resolveOrientPreviewPath(bundleRoot, cziImport, importResult, sliceId) {
+	if (!bundleRoot || !sliceId) {
+		return "";
+	}
+	var primaryRole =
+		(importResult && importResult.primary_signal_role) ||
+		cziImport.primary_signal_role ||
+		ROLE_SIGNAL_SOMATA;
+	var primaryCh = findKeptChannelForRoleKey(cziImport, primaryRole);
+	if (primaryCh) {
+		var primaryPrev = signalPreviewPath(bundleRoot, sliceId, primaryCh);
+		if (fs.existsSync(primaryPrev)) {
+			return primaryPrev;
+		}
+	}
+	var dapi = dapiPreviewPath(bundleRoot, sliceId);
+	if (fs.existsSync(dapi)) {
+		return dapi;
+	}
+	var prevDir = path.join(bundleRoot, PREVIEWS_REL);
+	if (fs.existsSync(prevDir)) {
+		var prefix = sliceId + "_";
+		var entries = fs.readdirSync(prevDir);
+		for (var i = 0; i < entries.length; i++) {
+			if (entries[i].indexOf(prefix) === 0 && entries[i].endsWith(".tif")) {
+				return path.join(prevDir, entries[i]);
+			}
+		}
+	}
+	return "";
+}
+
+function normalizeSourceDirs(cziImport) {
+	var dirs = (cziImport.source_dirs || []).slice();
+	if (!dirs.length && cziImport.source_dir) {
+		dirs = [cziImport.source_dir];
+	}
+	return dirs
+		.map(function (d) {
+			try {
+				return path.resolve(String(d || ""));
+			} catch (e) {
+				return String(d || "");
+			}
+		})
+		.sort();
+}
+
+function fingerprintPayload(cziImport) {
+	var keptChannels = (cziImport.channels || [])
+		.filter(function (ch) {
+			return ch.keep;
+		})
+		.map(function (ch) {
+			return {
+				file: ch.file || "",
+				index: ch.index,
+				role: ch.role,
+				other_name: ch.other_name || "",
+				keep: true,
+			};
+		})
+		.sort(function (a, b) {
+			var fa = String(a.file);
+			var fb = String(b.file);
+			if (fa < fb) {
+				return -1;
+			}
+			if (fa > fb) {
+				return 1;
+			}
+			return a.index - b.index;
+		});
+	var sliceOrder = (cziImport.slice_order || []).map(function (entry) {
+		return {
+			ordinal: entry.ordinal,
+			sliceId: entry.sliceId,
+			path: entry.path || "",
+			scene_index: entry.scene_index,
+			basename: entry.basename || "",
+		};
+	});
+	return {
+		source_dirs: normalizeSourceDirs(cziImport),
+		slice_numbering: cziImport.slice_numbering || SLICE_NUMBERING_PRESERVE,
+		slice_order: sliceOrder,
+		channels: keptChannels,
+		primary_signal_role: cziImport.primary_signal_role || ROLE_SIGNAL_SOMATA,
+		preview_scale: cziImport.preview_scale != null ? cziImport.preview_scale : DEFAULT_PREVIEW_SCALE,
+	};
+}
+
+function cziImportFingerprint(cziImport) {
+	return crypto
+		.createHash("sha256")
+		.update(JSON.stringify(fingerprintPayload(cziImport)))
+		.digest("hex");
+}
+
+function importStatePath(bundleRoot) {
+	var mason = path.join(bundleRoot, ".masonjar", "czi_import_state.json");
+	if (fs.existsSync(mason)) {
+		return mason;
+	}
+	var legacy = path.join(bundleRoot, ".belljar", "czi_import_state.json");
+	if (fs.existsSync(legacy)) {
+		return legacy;
+	}
+	return mason;
+}
+
+function readImportState(bundleRoot) {
+	var statePath = importStatePath(bundleRoot);
+	if (!fs.existsSync(statePath)) {
+		return null;
+	}
+	try {
+		return JSON.parse(fs.readFileSync(statePath, "utf8"));
+	} catch (e) {
+		return null;
+	}
+}
+
+function scenesForFileEntry(fileEntry, cziImport) {
+	if (!fileEntry) {
+		return [];
+	}
+	var order = cziImport.slice_order || [];
+	var filePath = String(fileEntry.path || "");
+	var basename = fileEntry.basename || "";
+	var fromOrder = [];
+	for (var i = 0; i < order.length; i++) {
+		var entry = order[i];
+		if (filePath && entry.path && String(entry.path) !== filePath) {
+			continue;
+		}
+		if (basename && entry.basename && entry.basename !== basename) {
+			continue;
+		}
+		fromOrder.push({
+			sliceId: entry.sliceId,
+			scene_index: entry.scene_index,
+		});
+	}
+	if (fromOrder.length) {
+		return fromOrder;
+	}
+	var scenes = fileEntry.scenes || [];
+	return scenes.map(function (sc) {
+		return {
+			sliceId: sc.sliceId,
+			scene_index: sc.index,
+		};
+	});
+}
+
+function iterKeptChannelScenes(cziImport) {
+	var filesByName = {};
+	var files = cziImport.files || [];
+	for (var f = 0; f < files.length; f++) {
+		var entry = files[f];
+		filesByName[entry.basename] = entry;
+		filesByName[path.basename(entry.path || "")] = entry;
+	}
+	var channels = (cziImport.channels || []).filter(function (ch) {
+		return ch.keep && ch.role !== ROLE_UNUSED;
+	});
+	var items = [];
+	for (var c = 0; c < channels.length; c++) {
+		var ch = channels[c];
+		if (ch.role === ROLE_OTHER && !sanitizeOtherName(ch.other_name)) {
+			continue;
+		}
+		var fileKey = ch.file || "";
+		var fileRef =
+			filesByName[fileKey] || filesByName[path.basename(fileKey)] || null;
+		var scenes = scenesForFileEntry(fileRef, cziImport);
+		for (var si = 0; si < scenes.length; si++) {
+			var scene = scenes[si];
+			if (!scene.sliceId) {
+				continue;
+			}
+			items.push({
+				slice_id: scene.sliceId,
+				scene_index: scene.scene_index != null ? scene.scene_index : 0,
+				channel_index: ch.index,
+				channel: ch,
+				role_key: roleKeyForChannel(ch),
+				file: fileRef ? fileRef.basename : ch.file,
+				czi_path: fileRef ? fileRef.path : "",
+			});
+		}
+	}
+	return items;
+}
+
+function isPreviewFileValid(previewPath, previewFormatVersion) {
+	if (previewFormatVersion == null || previewFormatVersion < PREVIEW_FORMAT_VERSION) {
+		return false;
+	}
+	if (!previewPath || !fs.existsSync(previewPath)) {
+		return false;
+	}
+	try {
+		return fs.statSync(previewPath).size > 0;
+	} catch (e) {
+		return false;
+	}
+}
+
+function auditCziImportCompletion(bundleRoot, cziImport, options) {
+	options = options || {};
+	var importResult = options.importResult || null;
+	var state = readImportState(bundleRoot);
+	var previewFormatVersion =
+		(state && state.preview_format_version) ||
+		(cziImport && cziImport.preview_format_version) ||
+		0;
+	var extractComplete =
+		!!state &&
+		state.phase === "complete" &&
+		Number(state.done) === Number(state.total) &&
+		state.total > 0;
+	var missingZstacks = [];
+	var invalidPreviews = [];
+	var missingMaxRuns = [];
+	var workItems = iterKeptChannelScenes(cziImport);
+
+	for (var i = 0; i < workItems.length; i++) {
+		var item = workItems[i];
+		var zPath = originalScansPath(bundleRoot, item.channel, item.slice_id);
+		if (!fs.existsSync(zPath)) {
+			missingZstacks.push({
+				slice_id: item.slice_id,
+				path: zPath,
+				role_key: item.role_key,
+			});
+		}
+		var prevPath = previewPathForChannel(bundleRoot, item.slice_id, item.channel);
+		if (prevPath && !isPreviewFileValid(prevPath, previewFormatVersion)) {
+			invalidPreviews.push({
+				slice_id: item.slice_id,
+				channel_index: item.channel_index,
+				role_key: item.role_key,
+				file: item.file,
+				scene_index: item.scene_index,
+				czi_path: item.czi_path,
+				preview_path: prevPath,
+			});
+		}
+	}
+
+	var maxRuns = (importResult && importResult.max_runs) || cziImport.max_runs || {};
+	var signalKeys = collectKeptSignalRoleKeys(cziImport);
+	var sliceIds = collectSliceIds(cziImport);
+	for (var r = 0; r < signalKeys.length; r++) {
+		var roleKey = signalKeys[r];
+		var rel = maxRuns[roleKey] || maxRunRelForRole(roleKey, sliceIds[0] || "run");
+		if (!rel) {
+			missingMaxRuns.push({ role_key: roleKey, reason: "no max run registered" });
+			continue;
+		}
+		var maxDir = path.join(bundleRoot, "data/counting/03_max", rel);
+		if (!fs.existsSync(maxDir)) {
+			missingMaxRuns.push({ role_key: roleKey, path: maxDir });
+			continue;
+		}
+		var missingSlice = false;
+		for (var s = 0; s < sliceIds.length; s++) {
+			var maxTif = path.join(maxDir, sliceIds[s] + ".tif");
+			if (!fs.existsSync(maxTif)) {
+				missingSlice = true;
+				break;
+			}
+		}
+		if (missingSlice) {
+			missingMaxRuns.push({ role_key: roleKey, path: maxDir, reason: "missing slice tifs" });
+		}
+	}
+
+	var canSkipToOrient =
+		extractComplete &&
+		missingZstacks.length === 0 &&
+		invalidPreviews.length === 0 &&
+		missingMaxRuns.length === 0;
+	var needsPreviewRepair =
+		extractComplete && missingZstacks.length === 0 && invalidPreviews.length > 0;
+
+	return {
+		extractComplete: extractComplete,
+		missingZstacks: missingZstacks,
+		invalidPreviews: invalidPreviews,
+		missingMaxRuns: missingMaxRuns,
+		canSkipToOrient: canSkipToOrient,
+		needsPreviewRepair: needsPreviewRepair,
+		previewFormatVersion: previewFormatVersion,
+		importState: state,
+	};
+}
+
+function buildRepairTargetsFromAudit(audit) {
+	return (audit.invalidPreviews || []).map(function (item) {
+		return {
+			slice_id: item.slice_id,
+			channel_index: item.channel_index,
+			role_key: item.role_key,
+			file: item.file,
+			scene_index: item.scene_index,
+			czi_path: item.czi_path,
+		};
+	});
+}
+
 module.exports = {
 	ROLE_DAPI: ROLE_DAPI,
 	ROLE_SIGNAL_SOMATA: ROLE_SIGNAL_SOMATA,
@@ -646,4 +1009,17 @@ module.exports = {
 	collectMosaicWarnings: collectMosaicWarnings,
 	collectMosaicInfo: collectMosaicInfo,
 	hasLikelyUnstitchedMosaic: hasLikelyUnstitchedMosaic,
+	PREVIEWS_REL: PREVIEWS_REL,
+	PREVIEW_FORMAT_VERSION: PREVIEW_FORMAT_VERSION,
+	originalScansPath: originalScansPath,
+	dapiPreviewPath: dapiPreviewPath,
+	signalPreviewPath: signalPreviewPath,
+	previewPathForChannel: previewPathForChannel,
+	resolveOrientPreviewPath: resolveOrientPreviewPath,
+	cziImportFingerprint: cziImportFingerprint,
+	importStatePath: importStatePath,
+	readImportState: readImportState,
+	auditCziImportCompletion: auditCziImportCompletion,
+	buildRepairTargetsFromAudit: buildRepairTargetsFromAudit,
+	iterKeptChannelScenes: iterKeptChannelScenes,
 };

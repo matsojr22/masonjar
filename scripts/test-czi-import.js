@@ -1,7 +1,10 @@
 "use strict";
 
 var assert = require("assert");
+var fs = require("fs");
+var os = require("os");
 var path = require("path");
+var url = require("url");
 var cziImport = require("../js/czi_import");
 
 function testDefaultSliceId() {
@@ -294,4 +297,113 @@ testCollectMosaicWarnings();
 testCollectMosaicInfo();
 testHasLikelyUnstitchedMosaic();
 testCountExtractWorkItems();
+
+function testResolveOrientPreviewPath() {
+	var bundle = fs.mkdtempSync(path.join(os.tmpdir(), "czi-orient-"));
+	var sliceId = "M528_s001";
+	var dapiPath = cziImport.dapiPreviewPath(bundle, sliceId);
+	var prevDir = path.join(bundle, cziImport.PREVIEWS_REL);
+	fs.mkdirSync(path.dirname(dapiPath), { recursive: true });
+	fs.mkdirSync(prevDir, { recursive: true });
+	fs.writeFileSync(dapiPath, "dapi");
+	var somataPrev = path.join(prevDir, sliceId + "_somata.tif");
+	fs.writeFileSync(somataPrev, "somata");
+	var cziCfg = {
+		primary_signal_role: cziImport.ROLE_SIGNAL_SOMATA,
+		channels: [
+			{ file: "M528.czi", index: 0, role: cziImport.ROLE_DAPI, keep: true },
+			{ file: "M528.czi", index: 1, role: cziImport.ROLE_SIGNAL_SOMATA, keep: true },
+		],
+	};
+	assert.strictEqual(
+		cziImport.resolveOrientPreviewPath(bundle, cziCfg, null, sliceId),
+		somataPrev,
+	);
+	fs.unlinkSync(somataPrev);
+	assert.strictEqual(
+		cziImport.resolveOrientPreviewPath(bundle, cziCfg, null, sliceId),
+		dapiPath,
+	);
+}
+
+function testCziImportFingerprintStable() {
+	var imp = cziImport.buildDefaultCziImport("/scan/a");
+	imp.source_dirs = ["/scan/a", "/scan/b"];
+	imp.slice_order = [{ ordinal: 1, sliceId: "M528_s001", path: "/scan/a/M528.czi", scene_index: 0 }];
+	imp.channels = [
+		{ file: "M528.czi", index: 0, role: cziImport.ROLE_DAPI, keep: true },
+	];
+	var fp1 = cziImport.cziImportFingerprint(imp);
+	var fp2 = cziImport.cziImportFingerprint(JSON.parse(JSON.stringify(imp)));
+	assert.strictEqual(fp1, fp2);
+	assert.notStrictEqual(fp1, cziImport.cziImportFingerprint(cziImport.buildDefaultCziImport("/other")));
+}
+
+function testAuditCziImportCompletion() {
+	var bundle = fs.mkdtempSync(path.join(os.tmpdir(), "czi-audit-"));
+	var meta = path.join(bundle, ".masonjar");
+	fs.mkdirSync(meta, { recursive: true });
+	var sliceId = "M528_s001";
+	var cziCfg = {
+		primary_signal_role: cziImport.ROLE_SIGNAL_SOMATA,
+		preview_format_version: cziImport.PREVIEW_FORMAT_VERSION,
+		slice_order: [{ ordinal: 1, sliceId: sliceId, path: "/scan/M528.czi", scene_index: 0, basename: "M528.czi" }],
+		files: [
+			{
+				basename: "M528.czi",
+				path: "/scan/M528.czi",
+				scenes: [{ index: 0, sliceId: sliceId }],
+			},
+		],
+		channels: [
+			{ file: "M528.czi", index: 0, role: cziImport.ROLE_DAPI, keep: true },
+			{ file: "M528.czi", index: 1, role: cziImport.ROLE_SIGNAL_SOMATA, keep: true },
+		],
+		max_runs: { signal_somata: "somata/max/M528_s001" },
+	};
+	var zSomata = cziImport.originalScansPath(bundle, cziCfg.channels[1], sliceId);
+	fs.mkdirSync(path.dirname(zSomata), { recursive: true });
+	fs.writeFileSync(zSomata, "z");
+	var zDapi = cziImport.originalScansPath(bundle, cziCfg.channels[0], sliceId);
+	fs.mkdirSync(path.dirname(zDapi), { recursive: true });
+	fs.writeFileSync(zDapi, "z");
+	var dapiPrev = cziImport.dapiPreviewPath(bundle, sliceId);
+	fs.mkdirSync(path.dirname(dapiPrev), { recursive: true });
+	fs.writeFileSync(dapiPrev, "preview");
+	var somataPrev = cziImport.signalPreviewPath(bundle, sliceId, cziCfg.channels[1]);
+	fs.mkdirSync(path.dirname(somataPrev), { recursive: true });
+	fs.writeFileSync(somataPrev, "preview");
+	var maxDir = path.join(bundle, "data/counting/03_max/somata/max/M528_s001");
+	fs.mkdirSync(maxDir, { recursive: true });
+	fs.writeFileSync(path.join(maxDir, sliceId + ".tif"), "max");
+	fs.writeFileSync(
+		path.join(meta, "czi_import_state.json"),
+		JSON.stringify({ phase: "complete", done: 2, total: 2, preview_format_version: 2 }),
+	);
+	var audit = cziImport.auditCziImportCompletion(bundle, cziCfg, {
+		importResult: { max_runs: cziCfg.max_runs },
+	});
+	assert.strictEqual(audit.extractComplete, true);
+	assert.strictEqual(audit.canSkipToOrient, true);
+	fs.writeFileSync(
+		path.join(meta, "czi_import_state.json"),
+		JSON.stringify({ phase: "complete", done: 2, total: 2, preview_format_version: 1 }),
+	);
+	var auditLegacy = cziImport.auditCziImportCompletion(bundle, cziCfg, {
+		importResult: { max_runs: cziCfg.max_runs },
+	});
+	assert.strictEqual(auditLegacy.needsPreviewRepair, true);
+}
+
+function testPathToFileURLSpaces() {
+	var p = path.join("Z:", "Matt Jacobs", "Brain_masonjar", "data", "preview.tif");
+	var href = url.pathToFileURL(p).href;
+	assert.ok(href.startsWith("file://"));
+	assert.ok(href.indexOf("Matt") >= 0);
+}
+
+testResolveOrientPreviewPath();
+testCziImportFingerprintStable();
+testAuditCziImportCompletion();
+testPathToFileURLSpaces();
 console.log("test-czi-import.js: OK");

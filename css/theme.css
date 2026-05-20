@@ -184,6 +184,17 @@ body.wizard-page #parent {
 	background: rgba(255, 255, 255, 0.65);
 }
 
+.wizard-panel[hidden],
+.wizard-panel.d-none {
+	display: none !important;
+}
+
+#wizardSteps .nav-link.wizard-step-done {
+	opacity: 0.65;
+	background: transparent;
+	color: var(--mj-text, #333);
+}
+
 .nav-trail-wrap .nav-trail a {
 	text-decoration: none;
 }

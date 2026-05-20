@@ -225,6 +225,10 @@ Step 3 (**Channels / Renaming**) includes a **global channel bar**: pick channel
 
 Slice IDs default to `{czi_stem}_s{scene:03d}` when multi-scene; **rename on import** assigns `{projectStem}_s{ordinal:03d}` in natural sort order across all merged folders. Preview scale defaults to `0.05` (5% linear).
 
+**Orient previews (step 5):** On-disk previews are **uint8** TIFFs at **5% linear** width/height (`preview_scale` 0.05 — clamped in [`py/czi_extract.py`](py/czi_extract.py) if config differs). The orient grid loads them via `url.pathToFileURL` in [`js/czi_wizard.js`](js/czi_wizard.js) (`fileUrlForPath`); paths resolve through [`resolveOrientPreviewPath`](js/czi_import.js) (primary signal `_previews`, then `00_dapi`, then other `_previews` — **no max fallback**). `preview_format_version: 2` in `.masonjar/czi_import_state.json` marks uint8 previews; legacy 16-bit previews are invalid for resume.
+
+**CZI wizard resume:** After step 1 **Next**, if the bundle already exists and `settings.czi_import.config_fingerprint` matches [`cziImportFingerprint`](js/czi_import.js), [`auditCziImportCompletion`](js/czi_import.js) may **skip to step 5 (Orient)** when extract is complete and previews are valid, or land on **step 4** for **repair-only** extract (`repair_mode: "previews"`, `repair_targets` in config) to rebuild previews from existing `original_scans` z-stacks (no full CZI re-read when z-stack exists; max projection skipped if max runs already on disk). Fingerprint mismatch (different source dirs, slice plan, or channels) returns to the normal wizard from step 2.
+
 ## Release builds (required for agents)
 
 When the user asks to **build**, **package**, or **cut a release**, do **not** run a single-host `electron-forge make` (e.g. only `--arch=arm64` on Apple Silicon). That produces a macOS-only DMG and **does not** work on Windows.

@@ -119,123 +119,141 @@
         <button type="button" class="btn btn-primary" id="step2Next" disabled>Next</button>
       </section>
 
-      <section id="step3" class="wizard-panel d-none">
-        <div class="mb-4 border rounded p-3">
-          <h2 class="h6">Renaming</h2>
-          <p class="small text-muted">
-            Choose whether to keep probed scene names or assign contiguous slice IDs for this project.
-          </p>
-          <div class="mb-3">
-            <div class="form-check form-check-inline">
-              <input
-                class="form-check-input"
-                type="radio"
-                name="sliceNumbering"
-                id="sliceNumberingPreserve"
-                value="preserve"
-              />
-              <label class="form-check-label" for="sliceNumberingPreserve">Keep scene names</label>
-            </div>
-            <div class="form-check form-check-inline">
-              <input
-                class="form-check-input"
-                type="radio"
-                name="sliceNumbering"
-                id="sliceNumberingRename"
-                value="rename"
-              />
-              <label class="form-check-label" for="sliceNumberingRename">Rename on import</label>
-            </div>
-          </div>
-          <div class="table-responsive">
-            <table class="table table-sm" id="renamingTable">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Source file</th>
-                  <th>Scene</th>
-                  <th>Original ID</th>
-                  <th>Slice ID</th>
-                  <th>Source folder</th>
-                </tr>
-              </thead>
-              <tbody id="renamingTableBody"></tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="mb-4 border rounded p-3">
-          <h2 class="h6">Channels</h2>
-          <p class="text-muted">
-            Assign each channel to a pipeline role. All channels are kept by default; uncheck
-            <em>Keep</em> to skip extraction.
-          </p>
-          <div id="channelGlobalBar" class="row g-2 align-items-end mb-3 border rounded p-3 bg-light">
-          <div class="col-auto">
-            <label class="form-label mb-0" for="globalChannelIndex">Channel index</label>
-            <select class="form-select form-select-sm" id="globalChannelIndex"></select>
-          </div>
-          <div class="col-auto">
-            <label class="form-label mb-0" for="globalChannelRole">Role for this index</label>
-            <select class="form-select form-select-sm" id="globalChannelRole"></select>
-          </div>
-          <div class="col-auto d-none" id="otherNameGlobalWrap">
-            <label class="form-label mb-0" for="otherNameGlobal">Other name</label>
-            <input
-              type="text"
-              class="form-control form-control-sm"
-              id="otherNameGlobal"
-              maxlength="32"
-              placeholder="rabies_red"
-            />
-          </div>
-          <div class="col-auto">
-            <button type="button" class="btn btn-sm btn-outline-primary" id="applyChannelDefaults">
-              Apply to all
-            </button>
-          </div>
-          <div class="col-12">
-            <p id="globalChannelHint" class="small text-muted mb-0"></p>
-          </div>
-        </div>
-          <div class="row g-2 align-items-end mb-3">
-            <div class="col-auto">
-              <label class="form-label mb-0" for="primarySignalRole">Primary signal</label>
-              <select class="form-select form-select-sm" id="primarySignalRole"></select>
-            </div>
-            <div class="col">
-              <p class="small text-muted mb-0">
-                Drives the default max run for detection. Other kept signal channels are still
-                extracted.
+      <section id="step3" class="wizard-panel workspace-block d-none" hidden>
+        <h2 class="h5 mb-2">Channels and renaming</h2>
+        <p class="text-muted small mb-3">
+          Confirm slice IDs and assign channel roles before extraction.
+        </p>
+        <div class="wizard-review-layout">
+          <div class="wizard-review-scroll" id="wizard-review-scroll">
+            <div class="mb-4 border rounded p-3">
+              <h3 class="h6">Renaming</h3>
+              <p class="small text-muted">
+                Choose whether to keep probed scene names or assign contiguous slice IDs for this
+                project.
               </p>
+              <div class="mb-3">
+                <div class="form-check form-check-inline">
+                  <input
+                    class="form-check-input"
+                    type="radio"
+                    name="sliceNumbering"
+                    id="sliceNumberingPreserve"
+                    value="preserve"
+                  />
+                  <label class="form-check-label" for="sliceNumberingPreserve">Keep scene names</label>
+                </div>
+                <div class="form-check form-check-inline">
+                  <input
+                    class="form-check-input"
+                    type="radio"
+                    name="sliceNumbering"
+                    id="sliceNumberingRename"
+                    value="rename"
+                  />
+                  <label class="form-check-label" for="sliceNumberingRename">Rename on import</label>
+                </div>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-sm" id="renamingTable">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Source file</th>
+                      <th>Scene</th>
+                      <th>Original ID</th>
+                      <th>Slice ID</th>
+                      <th>Source folder</th>
+                    </tr>
+                  </thead>
+                  <tbody id="renamingTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="mb-4 border rounded p-3">
+              <h3 class="h6">Channels</h3>
+              <p class="text-muted small">
+                Assign each channel to a pipeline role. All channels are kept by default; uncheck
+                <em>Keep</em> to skip extraction.
+              </p>
+              <div
+                id="channelGlobalBar"
+                class="row g-2 align-items-end mb-3 border rounded p-3 bg-light"
+              >
+                <div class="col-auto">
+                  <label class="form-label mb-0" for="globalChannelIndex">Channel index</label>
+                  <select class="form-select form-select-sm" id="globalChannelIndex"></select>
+                </div>
+                <div class="col-auto">
+                  <label class="form-label mb-0" for="globalChannelRole">Role for this index</label>
+                  <select class="form-select form-select-sm" id="globalChannelRole"></select>
+                </div>
+                <div class="col-auto d-none" id="otherNameGlobalWrap">
+                  <label class="form-label mb-0" for="otherNameGlobal">Other name</label>
+                  <input
+                    type="text"
+                    class="form-control form-control-sm"
+                    id="otherNameGlobal"
+                    maxlength="32"
+                    placeholder="rabies_red"
+                  />
+                </div>
+                <div class="col-auto">
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline-primary"
+                    id="applyChannelDefaults"
+                  >
+                    Apply to all
+                  </button>
+                </div>
+                <div class="col-12">
+                  <p id="globalChannelHint" class="small text-muted mb-0"></p>
+                </div>
+              </div>
+              <div class="row g-2 align-items-end mb-3">
+                <div class="col-auto">
+                  <label class="form-label mb-0" for="primarySignalRole">Primary signal</label>
+                  <select class="form-select form-select-sm" id="primarySignalRole"></select>
+                </div>
+                <div class="col">
+                  <p class="small text-muted mb-0">
+                    Drives the default max run for detection. Other kept signal channels are still
+                    extracted.
+                  </p>
+                </div>
+              </div>
+              <p id="step3Validation" class="small text-danger d-none"></p>
+              <div class="table-responsive">
+                <table class="table table-sm czi-channel-table" id="channelTable">
+                  <thead>
+                    <tr>
+                      <th>File</th>
+                      <th>Ch</th>
+                      <th>Label</th>
+                      <th>Role</th>
+                      <th>
+                        Keep
+                        <input
+                          type="checkbox"
+                          class="form-check-input ms-1"
+                          id="keepAllChannels"
+                          title="Toggle all"
+                        />
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody id="channelTableBody"></tbody>
+                </table>
+              </div>
             </div>
           </div>
-        <p id="step3Validation" class="small text-danger d-none"></p>
-        <div class="table-responsive">
-          <table class="table table-sm czi-channel-table" id="channelTable">
-            <thead>
-              <tr>
-                <th>File</th>
-                <th>Ch</th>
-                <th>Label</th>
-                <th>Role</th>
-                <th>
-                  Keep
-                  <input
-                    type="checkbox"
-                    class="form-check-input ms-1"
-                    id="keepAllChannels"
-                    title="Toggle all"
-                  />
-                </th>
-              </tr>
-            </thead>
-            <tbody id="channelTableBody"></tbody>
-          </table>
+          <div class="wizard-review-footer">
+            <button type="button" class="btn btn-outline-secondary" id="step3Back">Back</button>
+            <button type="button" class="btn btn-primary" id="step3Next">Next</button>
+          </div>
         </div>
-        </div>
-        <button type="button" class="btn btn-outline-secondary" id="step3Back">Back</button>
-        <button type="button" class="btn btn-primary" id="step3Next">Next</button>
       </section>
 
       <section id="step4" class="wizard-panel workspace-block d-none">

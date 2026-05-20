@@ -25,6 +25,14 @@ const PAGES = [
 
 /** page → required element ids (executeJavaScript in renderer). */
 const DOM_ASSERTIONS = {
+	"czi_wizard.html": [
+		"step2",
+		"step3",
+		"wizard-review-scroll",
+		"renamingTableBody",
+		"channelTableBody",
+		"step3Next",
+	],
 	"project_wizard.html": [
 		"step3",
 		"wizard-review-scroll",
@@ -134,6 +142,34 @@ async function assertDomIds(win, pageName, ids) {
 	}
 }
 
+async function assertCziWizardStepVisibility(win) {
+	var err = await win.webContents.executeJavaScript(
+		"(function () {\n" +
+			"  var panels = document.querySelectorAll('.wizard-panel');\n" +
+			"  for (var i = 0; i < panels.length; i++) {\n" +
+			"    panels[i].classList.add('d-none');\n" +
+			"    panels[i].setAttribute('hidden', '');\n" +
+			"  }\n" +
+			"  var step3 = document.getElementById('step3');\n" +
+			"  if (step3) {\n" +
+			"    step3.classList.remove('d-none');\n" +
+			"    step3.removeAttribute('hidden');\n" +
+			"  }\n" +
+			"  var s2 = document.getElementById('step2');\n" +
+			"  var s3 = document.getElementById('step3');\n" +
+			"  if (!s2 || !s3) return 'missing step2 or step3';\n" +
+			"  var d2 = window.getComputedStyle(s2).display;\n" +
+			"  var d3 = window.getComputedStyle(s3).display;\n" +
+			"  if (d2 !== 'none') return 'step2 display=' + d2;\n" +
+			"  if (d3 === 'none') return 'step3 display=none';\n" +
+			"  return '';\n" +
+			"})()",
+	);
+	if (err) {
+		throw new Error("czi_wizard.html step visibility: " + err);
+	}
+}
+
 app.whenReady().then(async function () {
 	var win = new BrowserWindow({
 		show: false,
@@ -152,6 +188,9 @@ app.whenReady().then(async function () {
 			var domIds = DOM_ASSERTIONS[pageName];
 			if (domIds) {
 				await assertDomIds(win, pageName, domIds);
+			}
+			if (pageName === "czi_wizard.html") {
+				await assertCziWizardStepVisibility(win);
 			}
 			console.log("OK:", pageName);
 		}

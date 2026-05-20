@@ -2,6 +2,7 @@
 
 var fs = require("fs");
 var path = require("path");
+var url = require("url");
 var pageInit = require("./page_init");
 var project = require("./project");
 var pipelineRuns = require("./pipeline_runs");
@@ -18,6 +19,8 @@ var wizardState = {
 	cziSourceDirs: [],
 	cziImport: cziImport.buildDefaultCziImport(""),
 	importResult: null,
+	repairMode: false,
+	repairTargets: [],
 };
 
 var extractRunning = false;
@@ -66,21 +69,30 @@ function setStep(step) {
 	var panels = document.querySelectorAll(".wizard-panel");
 	for (var i = 0; i < panels.length; i++) {
 		panels[i].classList.add("d-none");
+		panels[i].setAttribute("hidden", "");
 	}
 	var active = qs("step" + step);
 	if (active) {
 		active.classList.remove("d-none");
+		active.removeAttribute("hidden");
 	}
 	var pills = document.querySelectorAll("#wizardSteps .nav-link");
 	for (var p = 0; p < pills.length; p++) {
 		var pillStep = Number(pills[p].getAttribute("data-step"));
-		pills[p].classList.remove("active", "disabled");
-		if (pillStep <= step) {
+		pills[p].classList.remove("active", "disabled", "wizard-step-done");
+		if (pillStep === step) {
 			pills[p].classList.add("active");
+		} else if (pillStep < step) {
+			pills[p].classList.add("wizard-step-done");
 		} else {
 			pills[p].classList.add("disabled");
 		}
 	}
+	var parent = qs("parent");
+	if (parent) {
+		parent.scrollTop = 0;
+	}
+	window.scrollTo(0, 0);
 	updateWizardCancelVisibility();
 }
 
@@ -795,10 +807,15 @@ function renderChannelTable() {
 
 	renderGlobalChannelBar();
 	renderPrimarySignalSelect();
-	renderRenamingTable();
 	syncSliceNumberingRadios();
 	syncKeepAllCheckbox();
 	updateStep3Validation();
+}
+
+function renderStep3Panel() {
+	refreshSliceOrder();
+	renderRenamingTable();
+	renderChannelTable();
 }
 
 function defaultGeometry() {
@@ -817,32 +834,20 @@ function ensureGeometryMap() {
 	}
 }
 
+function fileUrlForPath(filePath) {
+	if (!filePath) {
+		return "";
+	}
+	return url.pathToFileURL(filePath).href;
+}
+
 function previewPathForSlice(sliceId) {
-	var bundle = wizardState.bundleRoot;
-	var dapi = path.join(bundle, project.CANONICAL_ROLES.dapi, sliceId + ".tif");
-	if (fs.existsSync(dapi)) {
-		return dapi;
-	}
-	var prevDir = path.join(bundle, "data/counting/_previews");
-	if (fs.existsSync(prevDir)) {
-		var entries = fs.readdirSync(prevDir);
-		for (var i = 0; i < entries.length; i++) {
-			if (entries[i].indexOf(sliceId) === 0) {
-				return path.join(prevDir, entries[i]);
-			}
-		}
-	}
-	var maxRoot = path.join(bundle, project.CANONICAL_ROLES.max);
-	if (fs.existsSync(maxRoot)) {
-		var rel = cziImport.primaryMaxRunRel(wizardState.cziImport, wizardState.importResult);
-		if (rel) {
-			var candidate = path.join(maxRoot, rel, sliceId + ".tif");
-			if (fs.existsSync(candidate)) {
-				return candidate;
-			}
-		}
-	}
-	return "";
+	return cziImport.resolveOrientPreviewPath(
+		wizardState.bundleRoot,
+		wizardState.cziImport,
+		wizardState.importResult,
+		sliceId,
+	);
 }
 
 function renderOrientationGrid() {
@@ -860,8 +865,9 @@ function renderOrientationGrid() {
 		tile.className = "czi-orient-tile";
 		tile.setAttribute("data-slice-id", sliceId);
 		var imgPath = previewPathForSlice(sliceId);
-		var imgHtml = imgPath
-			? '<img src="file://' + imgPath.replace(/\\/g, "/") + '" alt="' + sliceId + '" />'
+		var imgSrc = fileUrlForPath(imgPath);
+		var imgHtml = imgSrc
+			? '<img src="' + imgSrc + '" alt="' + sliceId + '" />'
 			: '<p class="small text-muted">No preview</p>';
 		tile.innerHTML =
 			"<strong>" +
@@ -914,11 +920,16 @@ function writeImportConfig() {
 	var meta = path.join(wizardState.bundleRoot, branding.META_DIR);
 	fs.mkdirSync(meta, { recursive: true });
 	var cfgPath = cziImport.importConfigPath(wizardState.bundleRoot);
-	fs.writeFileSync(
-		cfgPath,
-		JSON.stringify({ czi_import: wizardState.cziImport }, null, 2),
-		"utf8",
-	);
+	var payload = Object.assign({}, wizardState.cziImport);
+	payload.config_fingerprint = cziImport.cziImportFingerprint(payload);
+	if (wizardState.repairMode) {
+		payload.repair_mode = "previews";
+		payload.repair_targets = wizardState.repairTargets || [];
+	} else {
+		delete payload.repair_mode;
+		delete payload.repair_targets;
+	}
+	fs.writeFileSync(cfgPath, JSON.stringify({ czi_import: payload }, null, 2), "utf8");
 	return cfgPath;
 }
 
@@ -934,6 +945,12 @@ function persistCziSettings() {
 	if (wizardState.importResult && wizardState.importResult.max_runs) {
 		proj.settings.czi_import.max_runs = wizardState.importResult.max_runs;
 	}
+	proj.settings.czi_import.config_fingerprint = cziImport.cziImportFingerprint(
+		wizardState.cziImport,
+	);
+	proj.settings.czi_import.preview_format_version =
+		(wizardState.importResult && wizardState.importResult.preview_format_version) ||
+		cziImport.PREVIEW_FORMAT_VERSION;
 	proj.sources = proj.sources || {};
 	proj.sources.original_scans =
 		(wizardState.cziSourceDirs && wizardState.cziSourceDirs[0]) ||
@@ -1037,6 +1054,67 @@ async function runProbeAll() {
 	}
 }
 
+function hydrateWizardFromSavedCziImport(saved) {
+	wizardState.cziImport = JSON.parse(JSON.stringify(saved));
+	wizardState.cziSourceDirs = (saved.source_dirs || []).slice();
+	if (!wizardState.cziSourceDirs.length && saved.source_dir) {
+		wizardState.cziSourceDirs = [saved.source_dir];
+	}
+	wizardState.importResult = {
+		max_runs: saved.max_runs || {},
+		primary_signal_role: saved.primary_signal_role,
+		preview_format_version: saved.preview_format_version,
+	};
+}
+
+async function tryResumeCziImportAfterStep1() {
+	if (!wizardState.bundleRoot || !fs.existsSync(wizardState.bundleRoot)) {
+		return false;
+	}
+	project.openProject(wizardState.bundleRoot);
+	var proj = project.getProject();
+	var saved = proj && proj.settings && proj.settings.czi_import;
+	if (!saved || !saved.files || !saved.files.length) {
+		return false;
+	}
+	hydrateWizardFromSavedCziImport(saved);
+	var expectedFp = cziImport.cziImportFingerprint(saved);
+	if (saved.config_fingerprint && saved.config_fingerprint !== expectedFp) {
+		verboseExtractLog("Saved CZI import fingerprint mismatch — full wizard");
+		return false;
+	}
+	var audit = cziImport.auditCziImportCompletion(wizardState.bundleRoot, saved, {
+		importResult: wizardState.importResult,
+	});
+	if (!audit.extractComplete) {
+		return false;
+	}
+	if (audit.canSkipToOrient) {
+		verboseExtractLog("Resuming — extract already complete.");
+		renderOrientationGrid();
+		setStep(5);
+		return true;
+	}
+	if (audit.needsPreviewRepair) {
+		wizardState.repairMode = true;
+		wizardState.repairTargets = cziImport.buildRepairTargetsFromAudit(audit);
+		verboseExtractLog(
+			"Repairing " + wizardState.repairTargets.length + " preview(s) from existing z-stacks…",
+		);
+		try {
+			await runExtract({ repairOnly: true });
+			renderOrientationGrid();
+			setStep(5);
+			return true;
+		} catch (err) {
+			wizardState.repairMode = false;
+			wizardState.repairTargets = [];
+			throw err;
+		}
+	}
+	return false;
+}
+
 async function ensureBundleCreated() {
 	if (fs.existsSync(wizardState.bundleRoot)) {
 		project.openProject(wizardState.bundleRoot);
@@ -1053,8 +1131,13 @@ async function ensureBundleCreated() {
 	project.openProject(wizardState.bundleRoot);
 }
 
-async function runExtract() {
+async function runExtract(options) {
+	options = options || {};
 	extractRunning = true;
+	if (!options.repairOnly) {
+		wizardState.repairMode = false;
+		wizardState.repairTargets = [];
+	}
 	setStep(4);
 	var cancelBtn = qs("cancelExtract");
 	var logEl = qs("extractLog");
@@ -1067,7 +1150,9 @@ async function runExtract() {
 	setExtractNavDisabled(true);
 	updateWizardCancelVisibility();
 	setExtractActivity("Preparing bundle and config…", 2);
-	verboseExtractLog("Starting CZI extraction…");
+	verboseExtractLog(
+		wizardState.repairMode ? "Starting preview repair…" : "Starting CZI extraction…",
+	);
 
 	await ensureBundleCreated();
 	writeImportConfig();
@@ -1136,6 +1221,10 @@ async function runExtract() {
 			if (payload.max_runs) {
 				wizardState.cziImport.max_runs = payload.max_runs;
 			}
+			wizardState.cziImport.preview_format_version =
+				payload.preview_format_version || cziImport.PREVIEW_FORMAT_VERSION;
+			wizardState.repairMode = false;
+			wizardState.repairTargets = [];
 			persistCziSettings();
 			var primary = payload.primary_signal_role || wizardState.cziImport.primary_signal_role;
 			var summary =
@@ -1253,7 +1342,17 @@ function bindStep1() {
 			alert("Choose parent folder and project name.");
 			return;
 		}
-		setStep(2);
+		tryResumeCziImportAfterStep1()
+			.then(function (resumed) {
+				if (!resumed) {
+					setStep(2);
+				}
+			})
+			.catch(function (err) {
+				console.error("[CziWizard] resume", err);
+				alert(String(err.message || err));
+				setStep(2);
+			});
 	});
 }
 
@@ -1287,9 +1386,10 @@ function bindStep2() {
 		setStep(1);
 	});
 	qs("step2Next").addEventListener("click", function () {
-		refreshSliceOrder();
-		renderChannelTable();
 		setStep(3);
+		yieldToUi().then(function () {
+			renderStep3Panel();
+		});
 	});
 }
 
@@ -1300,8 +1400,7 @@ function bindStep3() {
 		wizardState.cziImport.slice_numbering = preserveRadio && preserveRadio.checked
 			? cziImport.SLICE_NUMBERING_PRESERVE
 			: cziImport.SLICE_NUMBERING_RENAME;
-		refreshSliceOrder();
-		renderChannelTable();
+		renderStep3Panel();
 	}
 	if (preserveRadio) {
 		preserveRadio.addEventListener("change", onSliceNumberingChange);
