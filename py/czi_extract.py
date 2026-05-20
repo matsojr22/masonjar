@@ -22,6 +22,7 @@ from czi_common import (
     clamp_preview_scale,
     collapse_z_stack_to_2d,
     dapi_preview_path,
+    orient_dapi_preview_path,
     default_slice_id,
     dim_size,
     emit_log,
@@ -134,17 +135,13 @@ def extract_z_stack(
 
     if preview_path is not None:
         preview_plane = planes[z_indices.index(mid_z)] if z_indices else planes[0]
-        preview = preview_plane_to_uint8(downscale_plane(preview_plane, preview_scale))
-        pparent = preview_path.parent
-        if not pparent.exists():
-            emit_log(f"  mkdir {pparent}")
-        pparent.mkdir(parents=True, exist_ok=True)
-        tiff.imwrite(str(preview_path), preview, photometric="minisblack")
-        try:
-            prev_rel = preview_path.relative_to(bundle_root) if bundle_root else preview_path.name
-        except ValueError:
-            prev_rel = preview_path.name
-        emit_log(f"  Writing preview -> {prev_rel}")
+        write_preview_at_path(
+            preview_path,
+            preview_plane,
+            preview_scale,
+            bundle_root,
+            slice_id=slice_id,
+        )
 
 
 def slice_id_for_scene(file_entry: dict, scene_index: int) -> str:
@@ -277,6 +274,14 @@ def preview_path_for_channel(bundle_root: Path, ch: dict, slice_id: str) -> Path
     return None
 
 
+def _write_preview_array(preview, preview_path: Path) -> None:
+    preview_path.parent.mkdir(parents=True, exist_ok=True)
+    if preview_path.suffix.lower() == ".png":
+        cv2.imwrite(str(preview_path), preview)
+    else:
+        tiff.imwrite(str(preview_path), preview, photometric="minisblack")
+
+
 def write_preview_at_path(
     preview_path: Path,
     plane,
@@ -285,13 +290,24 @@ def write_preview_at_path(
     slice_id: str = "",
 ) -> None:
     preview = preview_plane_to_uint8(downscale_plane(plane, preview_scale))
-    preview_path.parent.mkdir(parents=True, exist_ok=True)
-    tiff.imwrite(str(preview_path), preview, photometric="minisblack")
+    _write_preview_array(preview, preview_path)
     try:
         prev_rel = preview_path.relative_to(bundle_root) if bundle_root else preview_path.name
     except ValueError:
         prev_rel = preview_path.name
     emit_log(f"  Writing preview -> {prev_rel} ({slice_id})")
+    if (
+        bundle_root
+        and slice_id
+        and preview_path == dapi_preview_path(bundle_root, slice_id)
+    ):
+        orient_path = orient_dapi_preview_path(bundle_root, slice_id)
+        _write_preview_array(preview, orient_path)
+        try:
+            orient_rel = orient_path.relative_to(bundle_root)
+        except ValueError:
+            orient_rel = orient_path.name
+        emit_log(f"  Writing preview -> {orient_rel} ({slice_id})")
 
 
 def repair_preview_from_zstack(

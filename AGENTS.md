@@ -83,6 +83,8 @@ Renderer scripts use `require("electron").ipcRenderer`. Main handlers are `ipcMa
 | `killCollate` | once `killCollate` | — | Cancel for collate (renderer must send this name) |
 | `runSharpen` | `runSharpen` | `sharpen.py` | `sharpenResult`, `updateLoad` |
 | `killSharpen` | once `killSharpen` | — | |
+| `runDapiCleanup` | `runDapiCleanup` | `dapi_cleanup.py` | `dapiCleanupResult`, `updateLoad`. Args: input dir, output dir, isolate, CLAHE, saturation %, backup dir (in-place), slice list, re-backup, optional bg value. Separate `-i`/`-o` argv tokens for Windows paths with spaces. In-place mode backs up originals to `data/counting/00_dapi_backup/`; separate mode writes `data/counting/00_dapi_clean/` without touching `00_dapi`. |
+| `killDapiCleanup` | once `killDapiCleanup` | — | |
 | `runDetection` | `runDetection` | `find_neurons.py` | `detectResult`, `updateLoad`. Optional 10th IPC element: slice-list path (`--slice-list`). `-o` is the run output leaf directory. |
 | `killDetect` | once `killDetect` | — | |
 | `runCziProbe` | `runCziProbe` | `czi_probe.py` | `cziProbeResult` (JSON payload), `updateLoad`. Arg: CZI directory. |
@@ -157,7 +159,7 @@ Input-only roles (`dapi`, `original_scans`) stay flat at the role root; `active_
 
 [`py/adjust.py`](py/adjust.py) pairs DAPI images to annotation PKLs by **slice stem** (via [`py/slice_index.py`](py/slice_index.py)), not sorted folder order. In project mode, [`js/adjust.js`](js/adjust.js) passes a **`--slice-list`** from matched DAPI + **active slices** leaf pairs through IPC.
 
-The PyQt viewer shows a **Background channel** bar: **DAPI** from `00_dapi` plus optional low-res previews from `data/counting/_previews/{sliceId}_{branch}.tif` (see [`py/adjust_channels.py`](py/adjust_channels.py); optional `--previews-dir`). Switching channels reloads only the background image; annotation pairing stays keyed by slice id. **Refresh drawings** rebuilds the overlay from `current_label` without changing region IDs; **Convert Layers to Parents** still runs atlas layer→parent ID conversion.
+The PyQt viewer shows a **Background channel** bar: **DAPI** from `00_dapi` plus optional low-res previews from `data/counting/_previews/{sliceId}_{branch}.png` (legacy `.tif` still accepted; see [`py/adjust_channels.py`](py/adjust_channels.py); optional `--previews-dir`). Switching channels reloads only the background image; annotation pairing stays keyed by slice id. **Refresh drawings** rebuilds the overlay from `current_label` without changing region IDs; **Convert Layers to Parents** still runs atlas layer→parent ID conversion.
 
 ### Legacy workspace scan ([`js/workspace.js`](js/workspace.js))
 
@@ -225,7 +227,7 @@ Step 3 (**Channels / Renaming**) includes a **global channel bar**: pick channel
 
 Slice IDs default to `{czi_stem}_s{scene:03d}` when multi-scene; **rename on import** assigns `{projectStem}_s{ordinal:03d}` in natural sort order across all merged folders. Preview scale defaults to `0.05` (5% linear).
 
-**Orient previews (step 5):** On-disk previews are **uint8** TIFFs at **5% linear** width/height (`preview_scale` 0.05 — clamped in [`py/czi_extract.py`](py/czi_extract.py) if config differs). The orient grid loads them via `url.pathToFileURL` in [`js/czi_wizard.js`](js/czi_wizard.js) (`fileUrlForPath`); paths resolve through [`resolveOrientPreviewPath`](js/czi_import.js) (primary signal `_previews`, then `00_dapi`, then other `_previews` — **no max fallback**). `preview_format_version: 2` in `.masonjar/czi_import_state.json` marks uint8 previews; legacy 16-bit previews are invalid for resume.
+**Orient previews (step 5):** On-disk orient/adjust previews are **uint8 PNG** files at **5% linear** width/height (`preview_scale` 0.05 — clamped in [`py/czi_extract.py`](py/czi_extract.py) if config differs). Signal previews live under `data/counting/_previews/{sliceId}_{branch}.png`; DAPI orient thumbnails use `_previews/{sliceId}_dapi.png` while pipeline counting previews remain TIFF in `00_dapi`. The orient grid loads PNGs via `url.pathToFileURL` in [`js/czi_wizard.js`](js/czi_wizard.js) (`fileUrlForPath`); paths resolve through [`resolveOrientPreviewPath`](js/czi_import.js) (primary signal `_previews` PNG, orient DAPI PNG, other `_previews` PNG, then legacy `.tif` fallback — **no max fallback**). `preview_format_version: 3` in `.masonjar/czi_import_state.json` marks PNG orient previews; v2 TIFF previews require a one-time **Repair previews** run after upgrade.
 
 **CZI wizard resume:** After step 1 **Next**, if the bundle already exists and `settings.czi_import.config_fingerprint` matches [`cziImportFingerprint`](js/czi_import.js), [`auditCziImportCompletion`](js/czi_import.js) may **skip to step 5 (Orient)** when extract is complete and previews are valid, or land on **step 4** for **repair-only** extract (`repair_mode: "previews"`, `repair_targets` in config) to rebuild previews from existing `original_scans` z-stacks (no full CZI re-read when z-stack exists; max projection skipped if max runs already on disk). Fingerprint mismatch (different source dirs, slice plan, or channels) returns to the normal wizard from step 2.
 

@@ -306,7 +306,7 @@ function testResolveOrientPreviewPath() {
 	fs.mkdirSync(path.dirname(dapiPath), { recursive: true });
 	fs.mkdirSync(prevDir, { recursive: true });
 	fs.writeFileSync(dapiPath, "dapi");
-	var somataPrev = path.join(prevDir, sliceId + "_somata.tif");
+	var somataPrev = path.join(prevDir, sliceId + "_somata.png");
 	fs.writeFileSync(somataPrev, "somata");
 	var cziCfg = {
 		primary_signal_role: cziImport.ROLE_SIGNAL_SOMATA,
@@ -370,6 +370,9 @@ function testAuditCziImportCompletion() {
 	var dapiPrev = cziImport.dapiPreviewPath(bundle, sliceId);
 	fs.mkdirSync(path.dirname(dapiPrev), { recursive: true });
 	fs.writeFileSync(dapiPrev, "preview");
+	var orientDapiPrev = cziImport.orientDapiPreviewPath(bundle, sliceId);
+	fs.mkdirSync(path.dirname(orientDapiPrev), { recursive: true });
+	fs.writeFileSync(orientDapiPrev, "preview");
 	var somataPrev = cziImport.signalPreviewPath(bundle, sliceId, cziCfg.channels[1]);
 	fs.mkdirSync(path.dirname(somataPrev), { recursive: true });
 	fs.writeFileSync(somataPrev, "preview");
@@ -378,13 +381,27 @@ function testAuditCziImportCompletion() {
 	fs.writeFileSync(path.join(maxDir, sliceId + ".tif"), "max");
 	fs.writeFileSync(
 		path.join(meta, "czi_import_state.json"),
-		JSON.stringify({ phase: "complete", done: 2, total: 2, preview_format_version: 2 }),
+		JSON.stringify({
+			phase: "complete",
+			done: 2,
+			total: 2,
+			preview_format_version: cziImport.PREVIEW_FORMAT_VERSION,
+		}),
 	);
 	var audit = cziImport.auditCziImportCompletion(bundle, cziCfg, {
 		importResult: { max_runs: cziCfg.max_runs },
 	});
 	assert.strictEqual(audit.extractComplete, true);
 	assert.strictEqual(audit.canSkipToOrient, true);
+	fs.writeFileSync(
+		path.join(meta, "czi_import_state.json"),
+		JSON.stringify({ phase: "complete", done: 2, total: 2, preview_format_version: 2 }),
+	);
+	var auditV2Tiff = cziImport.auditCziImportCompletion(bundle, cziCfg, {
+		importResult: { max_runs: cziCfg.max_runs },
+	});
+	assert.strictEqual(auditV2Tiff.needsPreviewRepair, true);
+	assert.strictEqual(auditV2Tiff.canSkipToOrient, false);
 	fs.writeFileSync(
 		path.join(meta, "czi_import_state.json"),
 		JSON.stringify({ phase: "complete", done: 2, total: 2, preview_format_version: 1 }),

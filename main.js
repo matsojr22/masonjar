@@ -1366,6 +1366,72 @@ ipcMain.on("runSharpen", function (event, data) {
         pyshell.kill();
     });
 });
+// DAPI cleanup
+ipcMain.on("runDapiCleanup", function (event, data) {
+    let args = ["-i", String(data[0] || "").trim(), "-o", String(data[1] || "").trim()];
+    if (data[2]) {
+        args.push("--isolate");
+    }
+    else {
+        args.push("--no-isolate");
+    }
+    if (data[3]) {
+        args.push("--clahe");
+    }
+    args.push("--saturation", String(data[4] != null ? data[4] : 5));
+    const backupDir = data[5] != null ? String(data[5]).trim() : "";
+    if (backupDir.length > 0) {
+        args.push("--backup-dir", backupDir);
+    }
+    appendSliceListArg(args, data, 6);
+    if (data[7]) {
+        args.push("--re-backup");
+    }
+    const bgValue = data[8] != null ? String(data[8]).trim() : "";
+    if (bgValue.length > 0) {
+        args.push("--bg-value", bgValue);
+    }
+    let options = {
+        mode: "text",
+        pythonPath: path.join(envPythonPath, pyCommand),
+        scriptPath: pyScriptsPath,
+        args: args,
+    };
+    let pyshell = new PythonShell("dapi_cleanup.py", options);
+    attachPythonShellKillCleanup(pyshell, "killDapiCleanup");
+    var total = 0;
+    var current = 0;
+    pyshell.on("message", (message) => {
+        if (total === 0) {
+            total = Number(message);
+        }
+        else if (message == "Done!") {
+            pyshell.end((err, code, signal) => {
+                const pyFail = describePythonShellFailure(err, code, signal);
+                if (pyFail) {
+                    queueLogLineForUi(pyFail);
+                    console.error(pyFail, err);
+                }
+                else {
+                    console.log("The exit code was: " + code);
+                    console.log("The exit signal was: " + signal);
+                }
+                event.sender.send("dapiCleanupResult");
+                ipcMain.removeAllListeners("killDapiCleanup");
+            });
+        }
+        else {
+            current++;
+            event.sender.send("updateLoad", [
+                Math.round((current / total) * 100),
+                message,
+            ]);
+        }
+    });
+    ipcMain.once("killDapiCleanup", function (event, data) {
+        pyshell.kill();
+    });
+});
 // Cell Detection
 ipcMain.on("runDetection", function (event, data) {
     // Set model path

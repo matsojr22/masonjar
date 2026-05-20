@@ -587,7 +587,8 @@ def test_repair_preview_from_zstack(tmp_path: Path) -> None:
     assert repair_preview_from_zstack(bundle, ch, slice_id, 0.05) is True
     prev = signal_preview_path(bundle, slice_id, ch)
     assert prev.is_file()
-    arr = tifffile.imread(str(prev))
+    assert prev.suffix.lower() == ".png"
+    arr = cv2.imread(str(prev), cv2.IMREAD_UNCHANGED)
     assert arr.dtype == np.uint8
     assert arr.shape == (10, 10)
 

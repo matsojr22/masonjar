@@ -13,6 +13,7 @@ var CATEGORIES = {
 		tools: [
 			{ label: "Max Projection", href: "./max.html" },
 			{ label: "Sharpen", href: "./sharpen.html" },
+			{ label: "DAPI cleanup", href: "./dapi_cleanup.html" },
 		],
 	},
 	alignment: {

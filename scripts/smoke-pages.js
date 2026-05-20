@@ -19,6 +19,7 @@ const PAGES = [
 	"czi_wizard.html",
 	"workspace_menu.html",
 	"menu_category.html",
+	"dapi_cleanup.html",
 	"credits.html",
 	"batch_select.html",
 ];
@@ -44,6 +45,14 @@ const DOM_ASSERTIONS = {
 		"projectSubsetSection",
 		"subsetEnabled",
 		"subsetSliceList",
+	],
+	"dapi_cleanup.html": [
+		"indir",
+		"outputInPlace",
+		"outputSeparate",
+		"isolate",
+		"saturation",
+		"run",
 	],
 };
 

@@ -30,6 +30,7 @@ var FOLDER_LABELS = {
 var TOOL_PRESETS = {
 	max: { indir: "originalScans", outdir: "max" },
 	sharpen: { indir: "max", outdir: "max" },
+	dapi_cleanup: { indir: "dapi" },
 	align: { indir: "dapi", outdir: "slices" },
 	adjust: { imdir: "dapi", annodir: "slices" },
 	detect: { indir: "max", outdir: "predictions" },

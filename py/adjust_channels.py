@@ -45,11 +45,12 @@ def lowres_channels_for_slice(
             if not entry.is_file():
                 continue
             name = entry.name
-            if not name.lower().endswith(".tif"):
+            lower = name.lower()
+            if not (lower.endswith(".tif") or lower.endswith(".tiff") or lower.endswith(".png")):
                 continue
             if not name.startswith(prefix):
                 continue
-            suffix = name[len(prefix) : -4]  # strip .tif
+            suffix = entry.stem[len(slice_id) + 1 :]
             if not suffix:
                 continue
             preview_paths.append((_display_name_from_suffix(suffix), entry))

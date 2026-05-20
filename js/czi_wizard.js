@@ -838,7 +838,11 @@ function fileUrlForPath(filePath) {
 	if (!filePath) {
 		return "";
 	}
-	return url.pathToFileURL(filePath).href;
+	try {
+		return url.pathToFileURL(path.resolve(filePath)).href;
+	} catch (e) {
+		return url.pathToFileURL(filePath).href;
+	}
 }
 
 function previewPathForSlice(sliceId) {
@@ -866,15 +870,34 @@ function renderOrientationGrid() {
 		tile.setAttribute("data-slice-id", sliceId);
 		var imgPath = previewPathForSlice(sliceId);
 		var imgSrc = fileUrlForPath(imgPath);
-		var imgHtml = imgSrc
-			? '<img src="' + imgSrc + '" alt="' + sliceId + '" />'
-			: '<p class="small text-muted">No preview</p>';
-		tile.innerHTML =
-			"<strong>" +
-			sliceId +
-			"</strong>" +
-			imgHtml +
-			'<div class="btn-group btn-group-sm mt-1 w-100" role="group">' +
+		var titleEl = document.createElement("strong");
+		titleEl.textContent = sliceId;
+		tile.appendChild(titleEl);
+		if (imgSrc) {
+			var img = document.createElement("img");
+			img.src = imgSrc;
+			img.alt = sliceId;
+			img.title = imgPath;
+			img.onerror = function () {
+				var msg = document.createElement("p");
+				msg.className = "small text-muted";
+				msg.textContent = "No preview";
+				msg.title = imgPath;
+				if (img.parentNode) {
+					img.parentNode.replaceChild(msg, img);
+				}
+			};
+			tile.appendChild(img);
+		} else {
+			var noPrev = document.createElement("p");
+			noPrev.className = "small text-muted";
+			noPrev.textContent = "No preview";
+			tile.appendChild(noPrev);
+		}
+		var btnGroup = document.createElement("div");
+		btnGroup.className = "btn-group btn-group-sm mt-1 w-100";
+		btnGroup.setAttribute("role", "group");
+		btnGroup.innerHTML =
 			'<button type="button" class="btn btn-outline-secondary" data-geo="rot90" data-slice="' +
 			sliceId +
 			'">↻90°</button>' +
@@ -883,15 +906,18 @@ function renderOrientationGrid() {
 			'">↔</button>' +
 			'<button type="button" class="btn btn-outline-secondary" data-geo="flipY" data-slice="' +
 			sliceId +
-			'">↕</button>' +
-			"</div>" +
-			'<p class="small text-muted mb-0 mt-1">rot ' +
+			'">↕</button>';
+		tile.appendChild(btnGroup);
+		var status = document.createElement("p");
+		status.className = "small text-muted mb-0 mt-1";
+		status.textContent =
+			"rot " +
 			(geom.rotate || 0) +
 			"° flipX=" +
 			!!geom.flipX +
 			" flipY=" +
-			!!geom.flipY +
-			"</p>";
+			!!geom.flipY;
+		tile.appendChild(status);
 		grid.appendChild(tile);
 	}
 

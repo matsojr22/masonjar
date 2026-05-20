@@ -28,7 +28,7 @@ var CHANNEL_ROLE_OPTIONS = [
 
 var DEFAULT_PREVIEW_SCALE = 0.05;
 var PREVIEWS_REL = "data/counting/_previews";
-var PREVIEW_FORMAT_VERSION = 2;
+var PREVIEW_FORMAT_VERSION = 3;
 
 function branchForRole(role) {
 	return ROLE_TO_BRANCH[role] || "";
@@ -624,10 +624,14 @@ function dapiPreviewPath(bundleRoot, sliceId) {
 	return path.join(bundleRoot, "data/counting/00_dapi", sliceId + ".tif");
 }
 
+function orientDapiPreviewPath(bundleRoot, sliceId) {
+	return path.join(bundleRoot, PREVIEWS_REL, sliceId + "_dapi.png");
+}
+
 function signalPreviewPath(bundleRoot, sliceId, channel) {
 	var branch = branchForChannel(channel);
 	var suffix = branch || roleKeyForChannel(channel);
-	return path.join(bundleRoot, PREVIEWS_REL, sliceId + "_" + suffix + ".tif");
+	return path.join(bundleRoot, PREVIEWS_REL, sliceId + "_" + suffix + ".png");
 }
 
 function previewPathForChannel(bundleRoot, sliceId, channel) {
@@ -657,6 +661,19 @@ function findKeptChannelForRoleKey(cziImport, roleKey) {
 	return null;
 }
 
+function orientPreviewPathForChannel(bundleRoot, sliceId, channel) {
+	if (!channel || !channel.keep || channel.role === ROLE_UNUSED) {
+		return "";
+	}
+	if (channel.role === ROLE_DAPI) {
+		return orientDapiPreviewPath(bundleRoot, sliceId);
+	}
+	if (branchForChannel(channel)) {
+		return signalPreviewPath(bundleRoot, sliceId, channel);
+	}
+	return "";
+}
+
 function resolveOrientPreviewPath(bundleRoot, cziImport, importResult, sliceId) {
 	if (!bundleRoot || !sliceId) {
 		return "";
@@ -671,18 +688,37 @@ function resolveOrientPreviewPath(bundleRoot, cziImport, importResult, sliceId) 
 		if (fs.existsSync(primaryPrev)) {
 			return primaryPrev;
 		}
+		var legacyPrimaryPrev = path.join(
+			bundleRoot,
+			PREVIEWS_REL,
+			sliceId + "_" + (branchForChannel(primaryCh) || roleKeyForChannel(primaryCh)) + ".tif",
+		);
+		if (fs.existsSync(legacyPrimaryPrev)) {
+			return legacyPrimaryPrev;
+		}
 	}
-	var dapi = dapiPreviewPath(bundleRoot, sliceId);
-	if (fs.existsSync(dapi)) {
-		return dapi;
+	var orientDapi = orientDapiPreviewPath(bundleRoot, sliceId);
+	if (fs.existsSync(orientDapi)) {
+		return orientDapi;
 	}
 	var prevDir = path.join(bundleRoot, PREVIEWS_REL);
 	if (fs.existsSync(prevDir)) {
 		var prefix = sliceId + "_";
 		var entries = fs.readdirSync(prevDir);
 		for (var i = 0; i < entries.length; i++) {
-			if (entries[i].indexOf(prefix) === 0 && entries[i].endsWith(".tif")) {
+			if (entries[i].indexOf(prefix) === 0 && entries[i].toLowerCase().endsWith(".png")) {
 				return path.join(prevDir, entries[i]);
+			}
+		}
+	}
+	var dapi = dapiPreviewPath(bundleRoot, sliceId);
+	if (fs.existsSync(dapi)) {
+		return dapi;
+	}
+	if (fs.existsSync(prevDir)) {
+		for (var j = 0; j < entries.length; j++) {
+			if (entries[j].indexOf(prefix) === 0 && entries[j].toLowerCase().endsWith(".tif")) {
+				return path.join(prevDir, entries[j]);
 			}
 		}
 	}
@@ -860,6 +896,9 @@ function isPreviewFileValid(previewPath, previewFormatVersion) {
 	if (!previewPath || !fs.existsSync(previewPath)) {
 		return false;
 	}
+	if (previewFormatVersion >= PREVIEW_FORMAT_VERSION && !previewPath.toLowerCase().endsWith(".png")) {
+		return false;
+	}
 	try {
 		return fs.statSync(previewPath).size > 0;
 	} catch (e) {
@@ -895,7 +934,7 @@ function auditCziImportCompletion(bundleRoot, cziImport, options) {
 				role_key: item.role_key,
 			});
 		}
-		var prevPath = previewPathForChannel(bundleRoot, item.slice_id, item.channel);
+		var prevPath = orientPreviewPathForChannel(bundleRoot, item.slice_id, item.channel);
 		if (prevPath && !isPreviewFileValid(prevPath, previewFormatVersion)) {
 			invalidPreviews.push({
 				slice_id: item.slice_id,
@@ -1013,8 +1052,10 @@ module.exports = {
 	PREVIEW_FORMAT_VERSION: PREVIEW_FORMAT_VERSION,
 	originalScansPath: originalScansPath,
 	dapiPreviewPath: dapiPreviewPath,
+	orientDapiPreviewPath: orientDapiPreviewPath,
 	signalPreviewPath: signalPreviewPath,
 	previewPathForChannel: previewPathForChannel,
+	orientPreviewPathForChannel: orientPreviewPathForChannel,
 	resolveOrientPreviewPath: resolveOrientPreviewPath,
 	cziImportFingerprint: cziImportFingerprint,
 	importStatePath: importStatePath,

@@ -31,7 +31,7 @@ CANONICAL_REL = {
 }
 
 DEFAULT_PREVIEW_SCALE = 0.05
-PREVIEW_FORMAT_VERSION = 2
+PREVIEW_FORMAT_VERSION = 3
 
 
 def clamp_preview_scale(scale: float | None) -> float:
@@ -203,10 +203,14 @@ def dapi_preview_path(bundle_root: Path, slice_id: str) -> Path:
     return bundle_root / CANONICAL_REL["dapi"] / f"{slice_id}.tif"
 
 
+def orient_dapi_preview_path(bundle_root: Path, slice_id: str) -> Path:
+    return bundle_root / CANONICAL_REL["previews"] / f"{slice_id}_dapi.png"
+
+
 def signal_preview_path(bundle_root: Path, slice_id: str, channel: Mapping[str, Any]) -> Path:
     branch = branch_for_channel(channel)
     suffix = branch or role_key_for_channel(channel)
-    return bundle_root / CANONICAL_REL["previews"] / f"{slice_id}_{suffix}.tif"
+    return bundle_root / CANONICAL_REL["previews"] / f"{slice_id}_{suffix}.png"
 
 
 def max_input_dir(bundle_root: Path, role_key: str) -> Path:
