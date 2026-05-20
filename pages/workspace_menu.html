@@ -29,6 +29,35 @@
         <div id="projectChip" class="menu-project-chip d-none"></div>
       </header>
 
+      <section
+        id="projectSubsetSection"
+        class="menu-pipeline-section mb-4 d-none workspace-block text-start"
+        aria-label="Processing subset"
+      >
+        <h2 class="h6 text-muted mb-2">Processing subset (project)</h2>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" id="subsetEnabled" />
+          <label class="form-check-label" for="subsetEnabled">
+            Process only a subset of sections
+          </label>
+        </div>
+        <div id="subsetSliceList" class="border rounded p-2 mb-2 d-none" style="max-height: 200px; overflow: auto"></div>
+        <div class="d-flex flex-wrap gap-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary d-none" id="rescanProject">
+            Rescan project files
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-secondary d-none" id="addFilesToRole">
+            Add files to role…
+          </button>
+        </div>
+      </section>
+
+      <section
+        id="projectActiveRunsSection"
+        class="menu-pipeline-section mb-4 d-none workspace-block text-start"
+        aria-label="Active pipeline runs"
+      ></section>
+
       <section class="menu-pipeline-section mb-4" aria-label="Pipeline tools">
         <div id="pipelineGrid" class="menu-grid menu-categories">
           <a
@@ -72,6 +101,9 @@
 
       <div class="d-grid gap-2 d-sm-flex justify-content-center">
         <a class="btn btn-warning" href="./menu.html">Back to start</a>
+        <button type="button" class="btn btn-outline-secondary" id="toggleAppLog">
+          Application log
+        </button>
       </div>
     </div>
     <script

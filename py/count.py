@@ -1,10 +1,19 @@
 import argparse
+from pathlib import Path
+
+from slice_index import (
+    load_slice_list,
+    slice_id_allowed,
+    index_annotation_pkls,
+    pair_prediction_annotation_pkls,
+    slice_stem_from_annotation_pkl,
+    slice_stem_from_prediction_pkl,
+)
 import numpy as np
 import os
 import csv
 import cv2
 import pickle
-from pathlib import Path
 from find_neurons import DetectionResult
 from demons import resize_image_nearest_neighbor
 
@@ -119,19 +128,64 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
     )
+    parser.add_argument(
+        "--slice-list",
+        help="JSON file with slice ids to process",
+        default="",
+    )
     args = parser.parse_args()
     prediction_path = Path(args.predictions.strip())
     annotation_path = Path(args.annotations.strip())
     output_path = Path(args.output.strip())
 
-    annotation_files = os.listdir(annotation_path)
-    annotation_files = [name for name in annotation_files if name.endswith("pkl")]
-    annotation_files.sort()
-    print(len(annotation_files) + 1, flush=True)
+    annotation_files = [
+        name for name in os.listdir(annotation_path) if name.endswith("pkl")
+    ]
     predictionFiles = [
         name for name in os.listdir(prediction_path) if name.endswith("pkl")
     ]
-    predictionFiles.sort()
+    allowed_slices = load_slice_list(args.slice_list.strip() or None)
+
+    if allowed_slices is not None:
+        predictionFiles = [
+            n
+            for n in predictionFiles
+            if slice_id_allowed(slice_stem_from_prediction_pkl(n), allowed_slices)
+        ]
+        annotation_files = [
+            n
+            for n in annotation_files
+            if slice_id_allowed(slice_stem_from_annotation_pkl(n), allowed_slices)
+        ]
+
+    ann_by_stem = index_annotation_pkls(annotation_files)
+    pred_stems = {slice_stem_from_prediction_pkl(n) for n in predictionFiles}
+    for stem, a_name in sorted(ann_by_stem.items()):
+        if stem not in pred_stems:
+            print(
+                f"Skipping annotation {a_name}: no matching prediction stem {stem}",
+                flush=True,
+            )
+
+    paired = pair_prediction_annotation_pkls(predictionFiles, annotation_files)
+    paired_stems = {slice_stem_from_prediction_pkl(p) for p, _ in paired}
+    for p_name in sorted(
+        predictionFiles, key=lambda x: slice_stem_from_prediction_pkl(x)
+    ):
+        stem = slice_stem_from_prediction_pkl(p_name)
+        if stem not in paired_stems:
+            print(
+                f"Skipping prediction {p_name}: no matching annotation for stem {stem}",
+                flush=True,
+            )
+
+    if not paired:
+        print(2, flush=True)
+        print("No matching prediction/annotation pairs to count.", flush=True)
+        print("Done!", flush=True)
+        raise SystemExit(1)
+
+    print(len(paired) + 1, flush=True)
     # Reading in regions
     regions = {}
     acronym_to_region = {}
@@ -143,13 +197,13 @@ if __name__ == "__main__":
     sums = {}
     colocalized = {}
     region_areas = {}
-    for i, pName in enumerate(predictionFiles):
+    for pName, aName in paired:
         sums[pName] = {}
         region_areas[pName] = {}
         with open(prediction_path / pName, "rb") as predictionPkl, open(
-            annotation_path / annotation_files[i], "rb"
+            annotation_path / aName, "rb"
         ) as annotationPkl:
-            print(f"Counting {annotation_files[i].split('.')[0]}...", flush=True)
+            print(f"Counting {aName.split('.')[0]}...", flush=True)
             predictions = pickle.load(predictionPkl)
             predictions = [p for p in predictions]
             annotation = pickle.load(annotationPkl)
@@ -334,3 +388,16 @@ if __name__ == "__main__":
         writer = csv.writer(resultFile)
         writer.writerows(lines)
     print("Done!", flush=True)
+    from run_manifest import write_run_manifest
+
+    write_run_manifest(
+        output_path,
+        {
+            "step": "count",
+            "predictions_dir": args.predictions.strip(),
+            "annotations_dir": args.annotations.strip(),
+            "output_dir": str(output_path),
+            "layers": bool(args.layers),
+            "slice_list": args.slice_list.strip() if hasattr(args, "slice_list") else None,
+        },
+    )

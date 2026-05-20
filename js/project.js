@@ -4,6 +4,8 @@ var fs = require("fs");
 var path = require("path");
 var branding = require("./branding");
 var dialogs = require("./dialogs");
+var fileIndex = require("./file_index");
+var pipelineRuns = require("./pipeline_runs");
 
 var PROJECT_FILENAME = branding.PROJECT_FILENAME;
 var META_DIR = branding.META_DIR;
@@ -49,11 +51,91 @@ function nowIso() {
 	return new Date().toISOString();
 }
 
+/** Safe slug for bundle dir and project file (e.g. M528 → M528.masonjar in M528_masonjar/). */
+function sanitizeProjectSlug(name) {
+	var s = String(name || "").trim();
+	if (s.toLowerCase().endsWith(branding.BUNDLE_SUFFIX)) {
+		s = s.slice(0, -branding.BUNDLE_SUFFIX.length);
+	}
+	if (s.toLowerCase().endsWith(branding.LEGACY_BUNDLE_SUFFIX)) {
+		s = s.slice(0, -branding.LEGACY_BUNDLE_SUFFIX.length);
+	}
+	if (/_masonjar$/i.test(s)) {
+		s = s.replace(/_masonjar$/i, "");
+	}
+	s = s.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/\s+/g, "_");
+	s = s.replace(/^_+|_+$/g, "");
+	if (!s) {
+		s = "Project";
+	}
+	return s;
+}
+
+function bundleDirNameForSlug(slug) {
+	return sanitizeProjectSlug(slug) + "_masonjar";
+}
+
+function projectFilenameForSlug(slug) {
+	return sanitizeProjectSlug(slug) + ".masonjar";
+}
+
+/**
+ * New bundle layout: parent/M528_masonjar/ with M528.masonjar + data/ inside.
+ */
+function resolveNewBundlePath(parentDir, projectName) {
+	var slug = sanitizeProjectSlug(projectName);
+	var displayName =
+		String(projectName || "")
+			.trim()
+			.replace(/\.(masonjar|belljar)$/i, "") || slug;
+	var bundleRoot = path.join(path.resolve(parentDir), bundleDirNameForSlug(slug));
+	return {
+		slug: slug,
+		name: displayName,
+		bundleRoot: bundleRoot,
+		projectFilename: projectFilenameForSlug(slug),
+		bundleDirName: bundleDirNameForSlug(slug),
+	};
+}
+
 function findProjectFilename(bundleRoot) {
-	for (var i = 0; i < branding.PROJECT_FILENAMES.length; i++) {
-		var name = branding.PROJECT_FILENAMES[i];
-		if (fs.existsSync(path.join(bundleRoot, name))) {
-			return name;
+	if (!bundleRoot || !fs.existsSync(bundleRoot)) {
+		return PROJECT_FILENAME;
+	}
+	var entries;
+	try {
+		entries = fs.readdirSync(bundleRoot, { withFileTypes: true });
+	} catch (err) {
+		return PROJECT_FILENAME;
+	}
+	var namedMasonjar = [];
+	for (var i = 0; i < entries.length; i++) {
+		if (!entries[i].isFile()) {
+			continue;
+		}
+		var n = entries[i].name;
+		if (/\.masonjar$/i.test(n)) {
+			namedMasonjar.push(n);
+		}
+	}
+	if (namedMasonjar.length === 1) {
+		return namedMasonjar[0];
+	}
+	if (namedMasonjar.length > 1) {
+		var folderSlug = sanitizeProjectSlug(
+			path.basename(bundleRoot).replace(/_masonjar$/i, ""),
+		);
+		var expected = projectFilenameForSlug(folderSlug);
+		if (namedMasonjar.indexOf(expected) >= 0) {
+			return expected;
+		}
+		namedMasonjar.sort();
+		return namedMasonjar[0];
+	}
+	for (var j = 0; j < branding.PROJECT_FILENAMES.length; j++) {
+		var legacy = branding.PROJECT_FILENAMES[j];
+		if (fs.existsSync(path.join(bundleRoot, legacy))) {
+			return legacy;
 		}
 	}
 	return PROJECT_FILENAME;
@@ -77,12 +159,29 @@ function metaDir(bundleRoot) {
 	return path.join(bundleRoot, state.metaDirName || findMetaDirName(bundleRoot));
 }
 
+function metaDirPath(bundleRoot) {
+	return metaDir(bundleRoot || state.bundleRoot);
+}
+
 function isBundleRoot(dir) {
 	if (!dir || !fs.existsSync(dir)) {
 		return false;
 	}
-	for (var i = 0; i < branding.PROJECT_FILENAMES.length; i++) {
-		if (fs.existsSync(path.join(dir, branding.PROJECT_FILENAMES[i]))) {
+	var entries;
+	try {
+		entries = fs.readdirSync(dir, { withFileTypes: true });
+	} catch (err) {
+		return false;
+	}
+	for (var i = 0; i < entries.length; i++) {
+		if (!entries[i].isFile()) {
+			continue;
+		}
+		var n = entries[i].name;
+		if (/\.masonjar$/i.test(n)) {
+			return true;
+		}
+		if (branding.PROJECT_FILENAMES.indexOf(n) >= 0) {
 			return true;
 		}
 	}
@@ -126,6 +225,12 @@ function resolveLogicalPath(logicalKey) {
 	}
 	var role = LOGICAL_TO_ROLE[logicalKey];
 	if (role && state.active) {
+		if (pipelineRuns.isOutputRole(role)) {
+			var leaf = pipelineRuns.resolveActiveRunLeafAbs(role);
+			if (leaf) {
+				return leaf;
+			}
+		}
 		var resolved = resolveRolePath(role);
 		if (resolved) {
 			return resolved;
@@ -176,7 +281,11 @@ function syncWorkspaceFromProject(workspace) {
 	var roleKeys = ["dapi", "slices", "max", "predictions", "quantification", "pkls", "dual"];
 	for (var i = 0; i < roleKeys.length; i++) {
 		var k = roleKeys[i];
-		ws.paths[k] = resolveRolePath(k) || "";
+		if (pipelineRuns.isOutputRole(k)) {
+			ws.paths[k] = pipelineRuns.resolveActiveRunLeafAbs(k) || resolveRolePath(k) || "";
+		} else {
+			ws.paths[k] = resolveRolePath(k) || "";
+		}
 	}
 	workspace.saveWorkspace();
 }
@@ -261,9 +370,10 @@ function openProject(bundleRoot) {
 		throw new Error(
 			"Not a " +
 				branding.PRODUCT_NAME +
-				" project: missing project.masonjar or project.belljar",
+				" project: missing a .masonjar project file (e.g. M528.masonjar) or legacy project.belljar",
 		);
 	}
+	ensureBundleLayout(bundleRoot);
 	var data = loadProjectJson(bundleRoot);
 	if (!data.roles || Object.keys(data.roles).length === 0) {
 		data.roles = Object.assign({}, CANONICAL_ROLES);
@@ -271,8 +381,116 @@ function openProject(bundleRoot) {
 	if (!data.layout) {
 		data.layout = branding.LAYOUT_ID;
 	}
+	if (!data.processing) {
+		data.processing = defaultProcessing();
+	} else {
+		data.processing = Object.assign(defaultProcessing(), data.processing);
+		data.processing.active_runs = pipelineRuns.migrateActiveRuns(data.processing);
+		if (data.processing.active_prediction_run && !data.processing.active_runs.predictions) {
+			data.processing.active_runs.predictions = String(
+				data.processing.active_prediction_run,
+			)
+				.split(/[/\\]+/)
+				.filter(Boolean)
+				.join("/");
+		}
+		if (!data.processing.run_modes) {
+			data.processing.run_modes = defaultProcessing().run_modes;
+		} else {
+			data.processing.run_modes = Object.assign(
+				{},
+				defaultProcessing().run_modes,
+				data.processing.run_modes,
+			);
+		}
+	}
 	setActiveProject(bundleRoot, data);
+	refreshProjectIndex(bundleRoot).catch(function (err) {
+		console.warn("[project] refreshProjectIndex on open:", err);
+	});
 	return state.project;
+}
+
+function defaultProcessing() {
+	return {
+		subset_enabled: false,
+		slice_ids: [],
+		active_prediction_run: "",
+		active_runs: pipelineRuns.defaultActiveRuns(),
+		run_modes: {
+			align: "merge",
+			intensity: "merge",
+			count: "merge",
+			detect: "merge",
+			max: "merge",
+			sharpen: "merge",
+		},
+	};
+}
+
+function readProjectFileIndex(bundleRoot) {
+	bundleRoot = bundleRoot || state.bundleRoot;
+	if (!bundleRoot) {
+		return null;
+	}
+	return fileIndex.readFileIndex(bundleRoot, metaDir(bundleRoot));
+}
+
+function refreshProjectIndex(bundleRoot, options) {
+	options = options || {};
+	bundleRoot = bundleRoot || state.bundleRoot;
+	if (!bundleRoot) {
+		return Promise.reject(new Error("no bundle root"));
+	}
+	var roles;
+	if (state.project && state.bundleRoot === bundleRoot) {
+		roles = state.project.roles || CANONICAL_ROLES;
+	} else {
+		try {
+			roles = loadProjectJson(bundleRoot).roles || CANONICAL_ROLES;
+		} catch (err) {
+			roles = CANONICAL_ROLES;
+		}
+	}
+	var onProgress = options.onProgress;
+	return fileIndex
+		.buildFileIndex(bundleRoot, roles, {
+			appRoot: options.appRoot,
+			activeRuns:
+				(state.project &&
+					state.project.processing &&
+					state.project.processing.active_runs) ||
+				pipelineRuns.migrateActiveRuns(
+					state.project && state.project.processing
+						? state.project.processing
+						: null,
+				),
+		})
+		.then(function (index) {
+			if (typeof onProgress === "function") {
+				onProgress(80, "Writing file index…");
+			}
+			var mdir = metaDir(bundleRoot);
+			fileIndex.writeFileIndex(bundleRoot, mdir, index);
+			pipelineRuns.writeRunsCatalog(bundleRoot, mdir, roles);
+			var activeRuns =
+				(state.project &&
+					state.project.processing &&
+					state.project.processing.active_runs) ||
+				pipelineRuns.defaultActiveRuns();
+			var report = fileIndex.computeMatchReport(index, fileIndex.INPUT_MATCH_ROLES, {
+				activeRuns: activeRuns,
+				bundleRoot: bundleRoot,
+				roles: roles,
+			});
+			var manifestV2 = fileIndex.buildManifestV2(bundleRoot, index, report);
+			var manifestPath = path.join(mdir, "manifest.json");
+			fs.writeFileSync(manifestPath, JSON.stringify(manifestV2, null, 2), "utf8");
+			if (typeof onProgress === "function") {
+				onProgress(100, "Index complete (" + report.matchedSliceIds.length + " matched)");
+			}
+			return { index: index, report: report, manifestPath: manifestPath };
+		});
 }
 
 function tryRestoreActiveProject() {
@@ -297,12 +515,14 @@ function createProject(options) {
 	options = options || {};
 	var bundleRoot = path.resolve(options.bundleRoot);
 	var name = options.name || path.basename(bundleRoot);
+	var slug = options.projectSlug || sanitizeProjectSlug(name);
 	var referenceOnly = !!options.referenceOnly;
 	var roles = options.roles || Object.assign({}, CANONICAL_ROLES);
 	var sources = options.sources || {};
 	var now = nowIso();
 
-	state.projectFilename = PROJECT_FILENAME;
+	state.projectFilename =
+		options.projectFilename || projectFilenameForSlug(slug);
 	state.metaDirName = META_DIR;
 	ensureBundleLayout(bundleRoot);
 
@@ -318,6 +538,7 @@ function createProject(options) {
 		pipeline: options.pipeline || {},
 		reference_only: referenceOnly,
 		alignments: {},
+		processing: defaultProcessing(),
 	};
 
 	fs.writeFileSync(
@@ -454,6 +675,169 @@ function copyDirRecursiveAsync(src, dest, options) {
 		})(entries[i]);
 	}
 	return chain;
+}
+
+function classifySourceLayout(sourcePath, role) {
+	if (!sourcePath || !fs.existsSync(sourcePath)) {
+		return { layout: "flat", runs: [], flatFiles: [], warnings: ["missing source"] };
+	}
+	var stat = fs.statSync(sourcePath);
+	if (!stat.isDirectory()) {
+		return { layout: "flat", runs: [], flatFiles: [path.basename(sourcePath)], warnings: [] };
+	}
+	var isOutput = pipelineRuns.isOutputRole(role);
+	var entries;
+	try {
+		entries = fs.readdirSync(sourcePath, { withFileTypes: true });
+	} catch (err) {
+		return { layout: "flat", runs: [], flatFiles: [], warnings: [String(err.message || err)] };
+	}
+	var runs = [];
+	var flatFiles = [];
+	var warnings = [];
+	if (isOutput) {
+		var roleStep = null;
+		var cfgKeys = Object.keys(pipelineRuns.RUN_STEP_CONFIG);
+		for (var c = 0; c < cfgKeys.length; c++) {
+			if (pipelineRuns.RUN_STEP_CONFIG[cfgKeys[c]].outputRole === role) {
+				roleStep = cfgKeys[c];
+				break;
+			}
+		}
+		if (roleStep) {
+			runs = pipelineRuns.discoverOutputRuns(sourcePath, roleStep, 2);
+		}
+		for (var i = 0; i < entries.length; i++) {
+			if (entries[i].isFile()) {
+				flatFiles.push(entries[i].name);
+			}
+		}
+		var layout = "flat";
+		if (runs.length && flatFiles.length) {
+			layout = "mixed";
+		} else if (runs.length) {
+			layout = "nested_runs";
+		}
+		return { layout: layout, runs: runs, flatFiles: flatFiles, warnings: warnings };
+	}
+	for (var j = 0; j < entries.length; j++) {
+		if (entries[j].isDirectory()) {
+			warnings.push("unexpected subdirectory in input role import: " + entries[j].name);
+		} else if (entries[j].isFile()) {
+			flatFiles.push(entries[j].name);
+		}
+	}
+	return { layout: "flat", runs: [], flatFiles: flatFiles, warnings: warnings };
+}
+
+function importSourceToRoleWithLayout(sourcePath, role, mode, bundleRoot, roles, options) {
+	options = options || {};
+	bundleRoot = bundleRoot || state.bundleRoot;
+	roles = roles || (state.project && state.project.roles) || CANONICAL_ROLES;
+	var relDest = roles[role] || CANONICAL_ROLES[role];
+	var dest = path.isAbsolute(relDest) ? relDest : path.join(bundleRoot, relDest);
+
+	if (!sourcePath || !fs.existsSync(sourcePath)) {
+		return { role: role, source: sourcePath, error: "missing source" };
+	}
+	if (mode === "reference") {
+		roles[role] = sourcePath;
+		return { role: role, source: sourcePath, dest: sourcePath, mode: mode };
+	}
+
+	var classified = classifySourceLayout(sourcePath, role);
+	if (pipelineRuns.isOutputRole(role) && classified.layout !== "flat") {
+		fs.mkdirSync(dest, { recursive: true });
+		if (options.yieldFn) {
+			var chain = Promise.resolve();
+			for (var ri = 0; ri < classified.runs.length; ri++) {
+				(function (runRel) {
+					var srcRun = runRel
+						? path.join(sourcePath, runRel.split("/").join(path.sep))
+						: sourcePath;
+					var destRun = runRel
+						? path.join(dest, runRel.split("/").join(path.sep))
+						: dest;
+					chain = chain.then(function () {
+						fs.mkdirSync(path.dirname(destRun), { recursive: true });
+						return copyDirRecursiveAsync(srcRun, destRun, options);
+					});
+				})(classified.runs[ri].rel);
+			}
+			return chain.then(function () {
+				if (classified.flatFiles.length) {
+					var stamp = new Date().toISOString().replace(/[:.]/g, "-");
+					var flatDest = path.join(dest, "import_" + stamp);
+					fs.mkdirSync(flatDest, { recursive: true });
+					for (var ff = 0; ff < classified.flatFiles.length; ff++) {
+						fs.copyFileSync(
+							path.join(sourcePath, classified.flatFiles[ff]),
+							path.join(flatDest, classified.flatFiles[ff]),
+						);
+					}
+				}
+				if (
+					state.active &&
+					state.project &&
+					state.project.processing &&
+					classified.runs.length &&
+					!pipelineRuns.getActiveRunRelForRole(role)
+				) {
+					pipelineRuns.setActiveRunRelForRole(role, classified.runs[0].rel);
+				}
+				return {
+					role: role,
+					source: sourcePath,
+					dest: relDest,
+					mode: mode,
+					layout: classified.layout,
+					runs: classified.runs,
+					warnings: classified.warnings,
+				};
+			});
+		}
+		var importedRuns = [];
+		for (var r = 0; r < classified.runs.length; r++) {
+			var runRel = classified.runs[r].rel;
+			var srcRun = runRel
+				? path.join(sourcePath, runRel.split("/").join(path.sep))
+				: sourcePath;
+			var destRun = runRel ? path.join(dest, runRel.split("/").join(path.sep)) : dest;
+			fs.mkdirSync(path.dirname(destRun), { recursive: true });
+			copyDirRecursive(srcRun, destRun, options);
+			importedRuns.push(runRel);
+		}
+		if (classified.flatFiles.length) {
+			var stamp = new Date().toISOString().replace(/[:.]/g, "-");
+			var flatDest = path.join(dest, "import_" + stamp);
+			fs.mkdirSync(flatDest, { recursive: true });
+			for (var f = 0; f < classified.flatFiles.length; f++) {
+				fs.copyFileSync(
+					path.join(sourcePath, classified.flatFiles[f]),
+					path.join(flatDest, classified.flatFiles[f]),
+				);
+			}
+		}
+		if (
+			state.active &&
+			state.project &&
+			state.project.processing &&
+			classified.runs.length &&
+			!pipelineRuns.getActiveRunRelForRole(role)
+		) {
+			pipelineRuns.setActiveRunRelForRole(role, classified.runs[0].rel);
+		}
+		return {
+			role: role,
+			source: sourcePath,
+			dest: relDest,
+			mode: mode,
+			layout: classified.layout,
+			runs: classified.runs,
+			warnings: classified.warnings,
+		};
+	}
+	return importSourceToRole(sourcePath, role, mode, bundleRoot, roles, options);
 }
 
 function importSourceToRole(sourcePath, role, mode, bundleRoot, roles, options) {
@@ -774,7 +1158,12 @@ function resolvePathsForBundle(bundleRoot, stepId) {
 	var keys = Object.keys(mapping);
 	for (var i = 0; i < keys.length; i++) {
 		var key = keys[i];
-		out[key] = resolveRolePathForBundle(bundleRoot, roles, mapping[key]);
+		var mappedRole = mapping[key];
+		if (pipelineRuns.isOutputRole(mappedRole)) {
+			out[key] = resolveRoleLeafAbsForBundle(bundleRoot, roles, mappedRole);
+		} else {
+			out[key] = resolveRolePathForBundle(bundleRoot, roles, mappedRole);
+		}
 	}
 	return out;
 }
@@ -828,6 +1217,64 @@ function preflightBatchPlan(plan) {
 	return warnings;
 }
 
+function resolveRoleLeafAbsForBundle(bundleRoot, roles, role) {
+	var rel = roles[role] || CANONICAL_ROLES[role];
+	var base = path.isAbsolute(rel) ? rel : path.join(bundleRoot, rel);
+	if (!pipelineRuns.isOutputRole(role)) {
+		return base;
+	}
+	var proj;
+	try {
+		proj = readProjectJson(bundleRoot);
+	} catch (err) {
+		proj = null;
+	}
+	var activeRuns = pipelineRuns.migrateActiveRuns(
+		proj && proj.processing ? proj.processing : null,
+	);
+	var activeRel = activeRuns[role] || "";
+	if (!activeRel) {
+		return base;
+	}
+	return path.join(base, activeRel.split("/").join(path.sep));
+}
+
+function resolvePredictionsRoleBase() {
+	return resolveRolePath("predictions") || "";
+}
+
+function resolvePredictionsLeafAbs() {
+	return pipelineRuns.resolveActiveRunLeafAbs("predictions");
+}
+
+function listPredictionRunChoices() {
+	return listRunChoicesForRole("predictions");
+}
+
+function listRunChoicesForRole(role) {
+	return pipelineRuns.listRunChoicesForRole(role);
+}
+
+function setActivePredictionRun(rel) {
+	return setActiveRunForRole("predictions", rel);
+}
+
+function setActiveRunForRole(role, rel) {
+	return pipelineRuns.setActiveRunRelForRole(role, rel);
+}
+
+function setActiveRunForStep(stepId, rel) {
+	return pipelineRuns.setActiveRunRel(stepId, rel);
+}
+
+function ensureDefaultActivePredictionRun() {
+	pipelineRuns.ensureDefaultActiveRunForRole("predictions");
+}
+
+function ensureDefaultActiveRunForRole(role) {
+	pipelineRuns.ensureDefaultActiveRunForRole(role);
+}
+
 function chooseNewBundleLocation(callback) {
 	dialogs.pickDirectory({ tag: "newProjectBundle" }).then(function (selected) {
 		if (typeof callback === "function") {
@@ -838,6 +1285,10 @@ function chooseNewBundleLocation(callback) {
 
 module.exports = {
 	PROJECT_FILENAME: PROJECT_FILENAME,
+	sanitizeProjectSlug: sanitizeProjectSlug,
+	bundleDirNameForSlug: bundleDirNameForSlug,
+	projectFilenameForSlug: projectFilenameForSlug,
+	resolveNewBundlePath: resolveNewBundlePath,
 	CANONICAL_ROLES: CANONICAL_ROLES,
 	LOGICAL_TO_ROLE: LOGICAL_TO_ROLE,
 	isBundleRoot: isBundleRoot,
@@ -853,9 +1304,20 @@ module.exports = {
 	tryRestoreActiveProject: tryRestoreActiveProject,
 	saveProjectJson: saveProjectJson,
 	ensureBundleLayout: ensureBundleLayout,
+	metaDirPath: metaDirPath,
 	importSourceToRole: importSourceToRole,
+	importSourceToRoleWithLayout: importSourceToRoleWithLayout,
+	classifySourceLayout: classifySourceLayout,
 	writeImportLog: writeImportLog,
 	buildManifest: buildManifest,
+	refreshProjectIndex: refreshProjectIndex,
+	readProjectFileIndex: readProjectFileIndex,
+	defaultProcessing: defaultProcessing,
+	computeMatchReport: fileIndex.computeMatchReport,
+	planRun: fileIndex.planRun,
+	getProcessingSliceIds: fileIndex.getProcessingSliceIds,
+	scanOutputsForStep: fileIndex.scanOutputsForStep,
+	buildPreviewIndexFromSources: fileIndex.buildPreviewIndexFromSources,
 	chooseProjectBundle: chooseProjectBundle,
 	chooseNewBundleLocation: chooseNewBundleLocation,
 	getRecentProjects: getRecentProjects,
@@ -866,6 +1328,16 @@ module.exports = {
 	resolvePathsForBundle: resolvePathsForBundle,
 	preflightBatchPlan: preflightBatchPlan,
 	countAnnotationPkls: countAnnotationPkls,
+	ensureDefaultActivePredictionRun: ensureDefaultActivePredictionRun,
+	listPredictionRunChoices: listPredictionRunChoices,
+	resolvePredictionsLeafAbs: resolvePredictionsLeafAbs,
+	resolvePredictionsRoleBase: resolvePredictionsRoleBase,
+	setActivePredictionRun: setActivePredictionRun,
+	setActiveRunForRole: setActiveRunForRole,
+	setActiveRunForStep: setActiveRunForStep,
+	listRunChoicesForRole: listRunChoicesForRole,
+	ensureDefaultActiveRunForRole: ensureDefaultActiveRunForRole,
+	resolveRoleLeafAbsForBundle: resolveRoleLeafAbsForBundle,
 	loadProjectJson: loadProjectJson,
 	readProjectJson: readProjectJson,
 };

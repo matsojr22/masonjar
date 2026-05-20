@@ -1,7 +1,11 @@
+var fs = require("fs");
+var path = require("path");
 var ipc = require("electron").ipcRenderer;
 var workspace = require("./workspace");
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
+var pipelineRun = require("./pipeline_run");
+var pipelineRuns = require("./pipeline_runs");
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
 var run = document.getElementById("run");
@@ -15,8 +19,12 @@ var loadmessage = document.getElementById("loadmessage");
 var back = document.getElementById("back");
 var whole = document.getElementById("whole");
 var half = document.getElementById("half");
+var flatOutput = document.getElementById("flatOutput");
 var alignmentMethod = "True";
 var methods = document.querySelector("#methods");
+var lastRunRel = "";
+
+pipelineRun.ensureRunModeUi("runModePanel", "intensity");
 
 if (usedapi && dapidir) {
 	usedapi.addEventListener("change", function () {
@@ -30,13 +38,11 @@ if (usedapi && dapidir) {
 whole.addEventListener("click", function () {
 	methods.textContent = "Whole Slice";
 	alignmentMethod = "True";
-	console.log(alignmentMethod);
 });
 
 half.addEventListener("click", function () {
 	methods.textContent = "Hemisphere Only";
 	alignmentMethod = "False";
-	console.log(alignmentMethod);
 });
 
 run.addEventListener("click", function () {
@@ -47,19 +53,61 @@ run.addEventListener("click", function () {
 				return;
 			}
 		}
+		if (project.isActive()) {
+			var maxLeaf = pipelineRuns.resolveActiveRunLeafAbs("max");
+			var slicesLeaf = pipelineRuns.resolveActiveRunLeafAbs("slices");
+			if (maxLeaf) {
+				indir.value = maxLeaf;
+			}
+			if (slicesLeaf) {
+				annodir.value = slicesLeaf;
+			}
+		}
+		var mode = pipelineRun.getSelectedRunMode("intensity");
+		var plan = pipelineRun.preparePipelineRun("intensity", mode);
+		if (project.isActive() && !plan.toProcess.length) {
+			alert("No slices to process (all outputs exist or subset is empty).");
+			return;
+		}
+		var sortedStems = pipelineRuns.listImageSliceStems(indir.value);
+		var slug = pipelineRuns.buildRunSlug("intensity", {
+			sortedStems: sortedStems,
+			whole: alignmentMethod,
+			useDapi: usedapi && usedapi.checked,
+			subsetCount: plan.toProcess.length,
+		});
+		var useFlat = flatOutput && flatOutput.checked;
+		var finalOut = pipelineRuns.resolveRunLeaf(
+			outdir.value,
+			"intensity",
+			slug,
+			useFlat,
+		);
+		try {
+			fs.mkdirSync(finalOut, { recursive: true });
+		} catch (mkdirErr) {
+			alert("Could not create output directory: " + (mkdirErr.message || mkdirErr));
+			return;
+		}
+		lastRunRel = useFlat ? "" : pipelineRuns.relFromRoleBase("intensity", finalOut);
+
 		run.classList.add("disabled");
 		back.classList.remove("btn-warning");
 		back.classList.add("btn-danger");
 		back.innerHTML = "Cancel";
 		run.innerHTML = "<i class='fas fa-spinner fa-spin'></i>";
+		if (plan.summary && loadmessage) {
+			loadmessage.textContent = plan.summary;
+		}
 		var dapiPath =
 			usedapi && usedapi.checked && dapidir && dapidir.value ? dapidir.value : "";
 		ipc.send("runIntensity", [
 			indir.value,
-			outdir.value,
+			finalOut,
 			annodir.value,
 			alignmentMethod,
 			dapiPath,
+			plan.sliceListPath || "",
 		]);
 	}
 });
@@ -84,10 +132,12 @@ ipc.on("intensityResult", function (event, response) {
 	back.classList.add("btn-warning");
 	back.classList.remove("btn-danger");
 	back.innerHTML = "Back";
-	run.innerHTML = "Run";
-	run.classList.remove("disabled");
 	loadmessage.innerHTML = "";
 	loadbar.style.width = "0";
+	if (project.isActive() && lastRunRel) {
+		pipelineRuns.setActiveRunRel("intensity", lastRunRel);
+		project.refreshProjectIndex().catch(function () {});
+	}
 });
 
 ipc.on("intensityError", function (event, response) {

@@ -169,7 +169,9 @@ function renderSteps() {
 
 function addProjectPath(bundleRoot) {
 	if (!bundleRoot || !project.isBundleRoot(bundleRoot)) {
-		alert("Not a valid project bundle (missing project.masonjar / project.belljar).");
+		alert(
+			"Not a valid project bundle (missing a .masonjar project file or legacy project.belljar).",
+		);
 		return;
 	}
 	var data;

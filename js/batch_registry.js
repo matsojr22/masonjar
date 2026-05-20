@@ -8,6 +8,8 @@ var BATCH_DEFAULTS_KEY = "masonjar.batchDefaults";
 /** Pipeline order for heavy compute steps (align/adjust excluded). */
 var BATCH_STEP_ORDER = ["max", "sharpen", "detect", "count", "intensity", "dual"];
 
+/** Batch resolves per-project paths via project.resolvePathsForBundle (active run leaves). */
+
 var STEP_META = {
 	max: {
 		id: "max",

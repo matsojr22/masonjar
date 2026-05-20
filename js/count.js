@@ -1,69 +1,194 @@
-var ipc = require('electron').ipcRenderer;
-var workspace = require('./workspace');
-var project = require('./project');
-var pipelineGate = require('./pipeline_gate');
+"use strict";
+
+var fs = require("fs");
+var path = require("path");
+var ipc = require("electron").ipcRenderer;
+var workspace = require("./workspace");
+var project = require("./project");
+var pipelineGate = require("./pipeline_gate");
+var pipelineRun = require("./pipeline_run");
+var pipelineRuns = require("./pipeline_runs");
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
-var run = document.getElementById('run');
-var preddir = document.getElementById('preddir');
-var annodir = document.getElementById('annodir');
-var outdir = document.getElementById('outdir');
-var loadbar = document.getElementById('loadbar');
-var loadmessage = document.getElementById('loadmessage');
-var layerinfo = document.getElementById('layerinfo');
-var back = document.getElementById('back');
+var run = document.getElementById("run");
+var preddir = document.getElementById("preddir");
+var annodir = document.getElementById("annodir");
+var outdir = document.getElementById("outdir");
+var loadbar = document.getElementById("loadbar");
+var loadmessage = document.getElementById("loadmessage");
+var layerinfo = document.getElementById("layerinfo");
+var back = document.getElementById("back");
+var predictionRunRow = document.getElementById("predictionRunRow");
+var predictionRunSelect = document.getElementById("predictionRunSelect");
+var slicesRunRow = document.getElementById("slicesRunRow");
+var slicesRunSelect = document.getElementById("slicesRunSelect");
+var flatOutput = document.getElementById("flatOutput");
+var lastRunRel = "";
 
-run.addEventListener('click', function(){
-    if (preddir && annodir && outdir && preddir.value && annodir.value && outdir.value) {
-        run.classList.add('disabled');
-        back.classList.remove('btn-warning');
-        back.classList.add('btn-danger')
-        back.innerHTML = "Cancel";
-        run.innerHTML = "<i class='fas fa-spinner fa-spin'></i>";
+pipelineRun.ensureRunModeUi("runModePanel", "count");
 
-        var should_layer = layerinfo.checked;
+function populateRunSelect(selectEl, role, onChange) {
+	if (!selectEl) {
+		return;
+	}
+	project.ensureDefaultActiveRunForRole(role);
+	var choices = project.listRunChoicesForRole(role);
+	selectEl.innerHTML = "";
+	if (!choices.length) {
+		return;
+	}
+	var active = pipelineRuns.getActiveRunRelForRole(role);
+	for (var i = 0; i < choices.length; i++) {
+		var opt = document.createElement("option");
+		opt.value = choices[i].rel;
+		opt.textContent = choices[i].label;
+		if (choices[i].rel === active) {
+			opt.selected = true;
+		}
+		selectEl.appendChild(opt);
+	}
+	if (typeof onChange === "function") {
+		onChange(active);
+	}
+}
 
-        ipc.send('runCount', [preddir.value, annodir.value, outdir.value, should_layer]);
-    }
+function refreshPredictionRunUi() {
+	if (!preddir || !predictionRunSelect || !predictionRunRow) {
+		return;
+	}
+	if (!project.isActive()) {
+		predictionRunRow.classList.add("d-none");
+		if (slicesRunRow) {
+			slicesRunRow.classList.add("d-none");
+		}
+		return;
+	}
+	predictionRunRow.classList.remove("d-none");
+	if (slicesRunRow) {
+		slicesRunRow.classList.remove("d-none");
+	}
+	populateRunSelect(predictionRunSelect, "predictions", function () {
+		var leaf = pipelineRuns.resolveActiveRunLeafAbs("predictions");
+		if (leaf) {
+			preddir.value = leaf;
+		}
+	});
+	populateRunSelect(slicesRunSelect, "slices", function () {
+		var slicesLeaf = pipelineRuns.resolveActiveRunLeafAbs("slices");
+		if (slicesLeaf) {
+			annodir.value = slicesLeaf;
+		}
+	});
+}
+
+if (predictionRunSelect) {
+	predictionRunSelect.addEventListener("change", function () {
+		if (!project.isActive()) {
+			return;
+		}
+		project.setActiveRunForRole("predictions", predictionRunSelect.value);
+		refreshPredictionRunUi();
+	});
+}
+
+if (slicesRunSelect) {
+	slicesRunSelect.addEventListener("change", function () {
+		if (!project.isActive()) {
+			return;
+		}
+		project.setActiveRunForRole("slices", slicesRunSelect.value);
+		refreshPredictionRunUi();
+	});
+}
+
+run.addEventListener("click", function () {
+	if (preddir && annodir && outdir && preddir.value && annodir.value && outdir.value) {
+		if (project.isActive()) {
+			refreshPredictionRunUi();
+		}
+		var mode = pipelineRun.getSelectedRunMode("count");
+		var plan = pipelineRun.preparePipelineRun("count", mode);
+		if (project.isActive() && !plan.toProcess.length) {
+			alert("No slices to process (subset empty or all filtered).");
+			return;
+		}
+		var predRel = pipelineRuns.getActiveRunRelForRole("predictions");
+		var slicesRel = pipelineRuns.getActiveRunRelForRole("slices");
+		var slug = pipelineRuns.buildRunSlug("count", {
+			predictionRunRel: predRel,
+			slicesRunRel: slicesRel,
+			layerinfo: layerinfo.checked,
+			subsetCount: plan.toProcess.length,
+		});
+		var useFlat = flatOutput && flatOutput.checked;
+		var finalOut = pipelineRuns.resolveRunLeaf(outdir.value, "count", slug, useFlat);
+		try {
+			fs.mkdirSync(finalOut, { recursive: true });
+		} catch (mkdirErr) {
+			alert("Could not create output directory: " + (mkdirErr.message || mkdirErr));
+			return;
+		}
+		lastRunRel = useFlat ? "" : pipelineRuns.relFromRoleBase("count", finalOut);
+
+		run.classList.add("disabled");
+		back.classList.remove("btn-warning");
+		back.classList.add("btn-danger");
+		back.innerHTML = "Cancel";
+		run.innerHTML = "<i class='fas fa-spinner fa-spin'></i>";
+		if (plan.summary && loadmessage) {
+			loadmessage.innerHTML = plan.summary;
+		}
+		var should_layer = layerinfo.checked;
+		ipc.send("runCount", [
+			preddir.value,
+			annodir.value,
+			finalOut,
+			should_layer,
+			plan.sliceListPath || "",
+		]);
+	}
 });
 
-back.addEventListener('click', function (event){
-    if (back.classList.contains('btn-danger')){
-        event.preventDefault();
-        ipc.send('killCount', []);
-        back.classList.add('btn-warning');
-        back.classList.remove('btn-danger')
-        back.innerHTML = "Back";
-        run.innerHTML = "Run";
-        run.classList.remove('disabled');
-        loadmessage.innerHTML = "";
-        loadbar.style.width = "0";
-    }
+back.addEventListener("click", function (event) {
+	if (back.classList.contains("btn-danger")) {
+		event.preventDefault();
+		ipc.send("killCount", []);
+		back.classList.add("btn-warning");
+		back.classList.remove("btn-danger");
+		back.innerHTML = "Back";
+		run.innerHTML = "Run";
+		run.classList.remove("disabled");
+		loadmessage.innerHTML = "";
+		loadbar.style.width = "0";
+	}
 });
 
-ipc.on('countResult', function(event, response){
-    run.innerHTML = "Run";
-    run.classList.remove('disabled');
-    back.classList.add('btn-warning');
-    back.classList.remove('btn-danger')
-    back.innerHTML = "Back";
-    run.innerHTML = "Run";
-    run.classList.remove('disabled');
-    loadmessage.innerHTML = "";
-    loadbar.style.width = "0";
+ipc.on("countResult", function (event, response) {
+	run.innerHTML = "Run";
+	run.classList.remove("disabled");
+	back.classList.add("btn-warning");
+	back.classList.remove("btn-danger");
+	back.innerHTML = "Back";
+	loadmessage.innerHTML = "";
+	loadbar.style.width = "0";
+	if (project.isActive() && lastRunRel) {
+		pipelineRuns.setActiveRunRel("count", lastRunRel);
+		project.refreshProjectIndex().catch(function () {});
+	}
 });
 
-ipc.on('countError', function(event, response){
-    run.innerHTML = "Run";
-    run.classList.remove('disabled');
+ipc.on("countError", function (event, response) {
+	run.innerHTML = "Run";
+	run.classList.remove("disabled");
 });
 
-ipc.on('updateLoad', function (event, response) {
-    loadbar.style.width = String(response[0]) + "%";
-    loadmessage.innerHTML = response[1];
+ipc.on("updateLoad", function (event, response) {
+	loadbar.style.width = String(response[0]) + "%";
+	loadmessage.innerHTML = response[1];
 });
 
-workspace.applyPreset('count');
-workspace.bindPathPicker(preddir, 'preddir', 'predictions');
-workspace.bindPathPicker(annodir, 'annodir', 'slices');
-workspace.bindPathPicker(outdir, 'outdir', 'quantification');
+workspace.applyPreset("count");
+workspace.bindPathPicker(preddir, "preddir", "predictions");
+workspace.bindPathPicker(annodir, "annodir", "slices");
+workspace.bindPathPicker(outdir, "outdir", "quantification");
+refreshPredictionRunUi();

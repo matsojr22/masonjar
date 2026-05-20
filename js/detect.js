@@ -1,7 +1,14 @@
+"use strict";
+
+var fs = require("fs");
+var path = require("path");
+var crypto = require("crypto");
 var ipc = require("electron").ipcRenderer;
 var workspace = require("./workspace");
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
+var pipelineRun = require("./pipeline_run");
+var pipelineRuns = require("./pipeline_runs");
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
 var run = document.getElementById("run");
@@ -21,133 +28,291 @@ var methods = document.querySelector("#methods");
 var somata = document.getElementById("somata");
 var nuclei = document.getElementById("nuclei");
 var area = document.getElementById("area");
+var flatOutput = document.getElementById("flatOutput");
 var detectionMethod = "somata";
+var lastDetectionRunRel = "";
+
+pipelineRun.ensureRunModeUi("runModePanel", "detect");
+
+var IMAGE_EXT_RE = /\.(tif|tiff|png|jpe?g)$/i;
+
+function sliceStemFromImageBasename(basename) {
+	var stem = path.parse(basename).name;
+	if (/\.ome$/i.test(stem)) {
+		stem = path.parse(stem).name;
+	}
+	var dot = stem.indexOf(".");
+	return dot >= 0 ? stem.slice(0, dot) : stem;
+}
+
+function listInputSliceStems(indirPath) {
+	if (!indirPath || !fs.existsSync(indirPath)) {
+		return [];
+	}
+	var entries;
+	try {
+		entries = fs.readdirSync(indirPath, { withFileTypes: true });
+	} catch (err) {
+		return [];
+	}
+	var stems = [];
+	for (var i = 0; i < entries.length; i++) {
+		if (!entries[i].isFile()) {
+			continue;
+		}
+		var n = entries[i].name;
+		if (IMAGE_EXT_RE.test(n) || n.toLowerCase().indexOf(".ome.") !== -1) {
+			stems.push(sliceStemFromImageBasename(n));
+		}
+	}
+	stems.sort();
+	return stems;
+}
+
+function decToken(num) {
+	return String(num).replace(/\./g, "p");
+}
+
+function sanitizeSlugPart(s) {
+	return String(s || "")
+		.replace(/[/\\:*?"<>|]+/g, "_")
+		.replace(/\s+/g, "_")
+		.replace(/_+/g, "_")
+		.replace(/^_|_$/g, "")
+		.slice(0, 80);
+}
+
+function modelBranchForSlug(detectionMethod, modelPath) {
+	var m = (modelPath || "").trim();
+	if (m) {
+		var base = path.basename(m).replace(/\.pt$/i, "");
+		return sanitizeSlugPart(base) || "custom";
+	}
+	return detectionMethod === "nuclei" ? "nuclei" : "somata";
+}
+
+function sliceSpanToken(sortedStems) {
+	var seen = {};
+	var uniq = [];
+	for (var i = 0; i < sortedStems.length; i++) {
+		var s = sortedStems[i];
+		if (!seen[s]) {
+			seen[s] = true;
+			uniq.push(s);
+		}
+	}
+	uniq.sort();
+	if (!uniq.length) {
+		return "noslices";
+	}
+	if (uniq.length === 1) {
+		return sanitizeSlugPart(uniq[0]);
+	}
+	var first = uniq[0];
+	var last = uniq[uniq.length - 1];
+	if (uniq.length === 2) {
+		return sanitizeSlugPart(first + "-" + last);
+	}
+	var h = crypto.createHash("sha1").update(uniq.join("|")).digest("hex").slice(0, 4);
+	return sanitizeSlugPart(first + "-" + last) + "_h" + h;
+}
+
+function buildDetectRunSlug(options) {
+	var c = options.confidence;
+	var t = options.tile;
+	var a = options.area;
+	var e = options.eccentricity;
+	var params =
+		"c" +
+		decToken(c) +
+		"_t" +
+		String(Math.round(t)) +
+		"_a" +
+		String(Math.round(a)) +
+		"_e" +
+		decToken(e);
+	var span = sliceSpanToken(options.sortedStems || []);
+	var subset = "";
+	if (options.subsetCount && options.subsetCount > 0) {
+		subset = "_subset_" + String(options.subsetCount);
+	}
+	return sanitizeSlugPart(span + "_" + params + subset);
+}
 
 somata.addEventListener("click", function () {
-  methods.textContent = "Somata";
-  detectionMethod = "somata";
+	methods.textContent = "Somata";
+	detectionMethod = "somata";
 });
 
 nuclei.addEventListener("click", function () {
-  methods.textContent = "Nuclei";
-  detectionMethod = "nuclei";
+	methods.textContent = "Nuclei";
+	detectionMethod = "nuclei";
 });
 
 advance.addEventListener("click", function () {
-  arrow.classList.toggle("down");
+	arrow.classList.toggle("down");
 });
 
 function checkNumber(value, message) {
-  var str = value.toString();
-  if (!str.match(/^-?\d*\.?\d*$/)) {
-    alert(`${message}`);
-    return false;
-  }
-  return true;
+	var str = value.toString();
+	if (!str.match(/^-?\d*\.?\d*$/)) {
+		alert(`${message}`);
+		return false;
+	}
+	return true;
 }
 
 run.addEventListener("click", function () {
-  var c = 0.5;
-  var e = 0.2;
-  var a = 200;
-  var t = 640;
-  var m = "";
-  var mc = false;
+	var c = 0.5;
+	var e = 0.2;
+	var a = 200;
+	var t = 640;
+	var m = "";
+	var mc = false;
 
-  if (indir && outdir && indir.value && outdir.value) {
-    if (confidence.value && confidence.value < 1 && confidence.value > 0) {
-      c = checkNumber(
-        confidence.value,
-        "Confidence should be a float between 0-1, using default."
-      )
-        ? confidence.value
-        : 0.5;
-    }
+	if (indir && outdir && indir.value && outdir.value) {
+		if (confidence.value && confidence.value < 1 && confidence.value > 0) {
+			c = checkNumber(
+				confidence.value,
+				"Confidence should be a float between 0-1, using default.",
+			)
+				? confidence.value
+				: 0.5;
+		}
 
-    if (
-      eccentricity.value &&
-      eccentricity.value < 1 &&
-      eccentricity.value > 0
-    ) {
-      e = checkNumber(
-        eccentricity.value,
-        "Eccentricity should be a float between 0-1, using default."
-      )
-        ? eccentricity.value
-        : 0.5;
-    }
+		if (
+			eccentricity.value &&
+			eccentricity.value < 1 &&
+			eccentricity.value > 0
+		) {
+			e = checkNumber(
+				eccentricity.value,
+				"Eccentricity should be a float between 0-1, using default.",
+			)
+				? eccentricity.value
+				: 0.5;
+		}
 
-    if (area.value && area.value > 0) {
-      a = checkNumber(area.value, "Area should be an integer, using default.")
-        ? area.value
-        : 200;
-    }
+		if (area.value && area.value > 0) {
+			a = checkNumber(area.value, "Area should be an integer, using default.")
+				? area.value
+				: 200;
+		}
 
-    if (tile.value && tile.value > 0) {
-      t = checkNumber(tile.value, "Tile should be an integer, using default.")
-        ? tile.value
-        : 640;
-    }
-    if (model.value) {
-      m = model.value;
-    }
-    if (multichannel.checked) {
-      mc = true;
-    }
+		if (tile.value && tile.value > 0) {
+			t = checkNumber(tile.value, "Tile should be an integer, using default.")
+				? tile.value
+				: 640;
+		}
+		if (model.value) {
+			m = model.value;
+		}
+		if (multichannel.checked) {
+			mc = true;
+		}
 
-    run.classList.add("disabled");
-    back.classList.remove("btn-warning");
-    back.classList.add("btn-danger");
-    back.innerHTML = "Cancel";
-    run.innerHTML = "<i class='fas fa-spinner fa-spin'></i>";
-    loadmessage.innerHTML = "Intializing...";
+		var mode = pipelineRun.getSelectedRunMode("detect");
+		var plan = pipelineRun.preparePipelineRun("detect", mode);
+		if (project.isActive() && !plan.toProcess.length) {
+			alert("No slices to process (subset empty or all filtered).");
+			return;
+		}
 
-    ipc.send("runDetection", [
-      indir.value,
-      outdir.value,
-      c,
-      t,
-      m,
-      mc,
-      detectionMethod,
-      a,
-      e,
-    ]);
-  }
+		var sortedStems = listInputSliceStems(indir.value);
+		var branch = modelBranchForSlug(detectionMethod, m);
+		var slug = buildDetectRunSlug({
+			confidence: Number(c),
+			tile: Number(t),
+			area: Number(a),
+			eccentricity: Number(e),
+			sortedStems: sortedStems,
+			subsetCount: plan.toProcess ? plan.toProcess.length : 0,
+		});
+		var outBase = outdir.value;
+		var useFlat = flatOutput && flatOutput.checked;
+		var finalOut = useFlat ? outBase : path.join(outBase, branch, slug);
+		try {
+			fs.mkdirSync(finalOut, { recursive: true });
+		} catch (err) {
+			alert("Could not create output directory: " + (err.message || err));
+			return;
+		}
+
+		if (project.isActive() && !useFlat) {
+			lastDetectionRunRel = path
+				.relative(outBase, finalOut)
+				.split(path.sep)
+				.join("/");
+		} else {
+			lastDetectionRunRel = "";
+		}
+
+		run.classList.add("disabled");
+		back.classList.remove("btn-warning");
+		back.classList.add("btn-danger");
+		back.innerHTML = "Cancel";
+		run.innerHTML = "<i class='fas fa-spinner fa-spin'></i>";
+		var msg = plan.summary || "";
+		if (!useFlat) {
+			msg =
+				(msg ? msg + " " : "") +
+				"Run folder: " +
+				path.relative(outBase, finalOut).split(path.sep).join("/");
+		}
+		loadmessage.innerHTML = msg || "Initializing...";
+
+		ipc.send("runDetection", [
+			indir.value,
+			finalOut,
+			c,
+			t,
+			m,
+			mc,
+			detectionMethod,
+			a,
+			e,
+			plan.sliceListPath || "",
+		]);
+	}
 });
 
 back.addEventListener("click", function (event) {
-  if (back.classList.contains("btn-danger")) {
-    event.preventDefault();
-    ipc.send("killDetect", []);
-    back.classList.add("btn-warning");
-    back.classList.remove("btn-danger");
-    back.innerHTML = "Back";
-    run.innerHTML = "Run";
-    run.classList.remove("disabled");
-    loadmessage.innerHTML = "";
-    loadbar.style.width = "0";
-  }
+	if (back.classList.contains("btn-danger")) {
+		event.preventDefault();
+		ipc.send("killDetect", []);
+		back.classList.add("btn-warning");
+		back.classList.remove("btn-danger");
+		back.innerHTML = "Back";
+		run.innerHTML = "Run";
+		run.classList.remove("disabled");
+		loadmessage.innerHTML = "";
+		loadbar.style.width = "0";
+	}
 });
 
 ipc.on("detectResult", function (event, response) {
-  back.classList.add("btn-warning");
-  back.classList.remove("btn-danger");
-  back.innerHTML = "Back";
-  run.innerHTML = "Run";
-  run.classList.remove("disabled");
-  loadmessage.innerHTML = "";
-  loadbar.style.width = "0";
+	back.classList.add("btn-warning");
+	back.classList.remove("btn-danger");
+	back.innerHTML = "Back";
+	run.innerHTML = "Run";
+	run.classList.remove("disabled");
+	loadmessage.innerHTML = "";
+	loadbar.style.width = "0";
+	if (project.isActive() && lastDetectionRunRel) {
+		pipelineRuns.setActiveRunRel("detect", lastDetectionRunRel);
+		project.refreshProjectIndex().catch(function () {});
+	}
 });
 
 ipc.on("detectError", function (event, response) {
-  run.innerHTML = "Run";
-  run.classList.remove("disabled");
+	run.innerHTML = "Run";
+	run.classList.remove("disabled");
 });
 
 ipc.on("updateLoad", function (event, response) {
-  loadbar.style.width = String(response[0]) + "%";
-  loadmessage.innerHTML = response[1];
+	var pct = Math.min(100, Math.max(0, Number(response[0]) || 0));
+	loadbar.style.width = String(pct) + "%";
+	loadmessage.innerHTML = response[1];
 });
 
 workspace.applyPreset("detect");

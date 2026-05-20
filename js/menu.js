@@ -7,6 +7,7 @@ var project = require("./project");
 var workspace = require("./workspace");
 var pipelineGate = require("./pipeline_gate");
 var dialogs = require("./dialogs");
+var branding = require("./branding");
 
 var WORKSPACE_MENU = "./workspace_menu.html";
 
@@ -15,8 +16,44 @@ var projectChip = null;
 var versionEl = null;
 var recentProjectsList = null;
 var openPipelineBtn = null;
+var checkUpdatesBtn = null;
+var rescanHubBtn = null;
+var toggleAppLogBtn = null;
 
 var coldStartHadContext = false;
+
+function readShowLogPreference() {
+	try {
+		var v = localStorage.getItem(branding.SHOW_LOG_WINDOW_KEY);
+		if (v === null) {
+			v = localStorage.getItem(branding.LEGACY_SHOW_LOG_WINDOW_KEY);
+		}
+		return v === "1" || v === "true";
+	} catch (_err) {
+		return false;
+	}
+}
+
+function setShowLogPreference(on) {
+	try {
+		localStorage.setItem(branding.SHOW_LOG_WINDOW_KEY, on ? "1" : "0");
+	} catch (_err) {
+		// ignore
+	}
+}
+
+function bindAppLogToggle() {
+	if (!toggleAppLogBtn) {
+		return;
+	}
+	toggleAppLogBtn.addEventListener("click", function () {
+		ipc.send("toggleLogWindow");
+		setShowLogPreference(true);
+	});
+	if (readShowLogPreference()) {
+		ipc.send("showLogWindow");
+	}
+}
 
 function readAppVersion() {
 	return appPaths.readPackageVersion();
@@ -139,6 +176,12 @@ function refreshHubState() {
 	refreshProjectChip();
 	refreshRecentList();
 	refreshContinuePipeline();
+	if (checkUpdatesBtn) {
+		checkUpdatesBtn.classList.remove("d-none");
+	}
+	if (rescanHubBtn) {
+		rescanHubBtn.classList.toggle("d-none", !project.isActive());
+	}
 }
 
 function cacheDom() {
@@ -147,6 +190,9 @@ function cacheDom() {
 	versionEl = document.getElementById("version");
 	recentProjectsList = document.getElementById("recentProjects");
 	openPipelineBtn = document.getElementById("openPipeline");
+	checkUpdatesBtn = document.getElementById("checkUpdates");
+	rescanHubBtn = document.getElementById("rescanProjectHub");
+	toggleAppLogBtn = document.getElementById("toggleAppLog");
 }
 
 function bindOpenProject() {
@@ -192,5 +238,30 @@ pageInit.onReady(function () {
 	}
 
 	bindOpenProject();
+	bindAppLogToggle();
+	if (checkUpdatesBtn) {
+		checkUpdatesBtn.addEventListener("click", function () {
+			ipc.send("checkForUpdates", []);
+		});
+	}
+	if (rescanHubBtn) {
+		rescanHubBtn.addEventListener("click", function () {
+			if (!project.isActive()) {
+				return;
+			}
+			rescanHubBtn.disabled = true;
+			project
+				.refreshProjectIndex()
+				.then(function () {
+					alert("Project file index refreshed.");
+				})
+				.catch(function (err) {
+					alert(String(err.message || err));
+				})
+				.finally(function () {
+					rescanHubBtn.disabled = false;
+				});
+		});
+	}
 	refreshHubState();
 });

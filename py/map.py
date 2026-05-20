@@ -1,4 +1,6 @@
 import os
+import json
+from datetime import datetime, timezone
 import numpy as np
 import cv2
 import pickle
@@ -26,6 +28,7 @@ from qtpy.QtWidgets import (
     QSlider,
     QWidget,
     QMainWindow,
+    QInputDialog,
 )
 from segment_anything import SamPredictor, sam_model_registry
 from qtpy import QtCore, QtGui
@@ -292,6 +295,7 @@ class AlignmentController:
         spacing=None,
         is_whole=True,
         use_legacy=False,
+        slice_filter=None,
     ):
         self.nrrd_path = nrrd_path
         self.input_path = input_path
@@ -302,6 +306,7 @@ class AlignmentController:
         self.spacing = spacing
         self.is_whole = is_whole
         self.use_legacy = use_legacy
+        self.slice_filter = slice_filter
         self.viewer = napari.Viewer(
             title="Atlas Alignment",
         )
@@ -392,6 +397,17 @@ class AlignmentController:
         self.mask_button = QPushButton("Set Mask")
         self.mask_button.clicked.connect(self.update_mask)
 
+        # Section title + progress (left dock)
+        self.section_info_label = QLabel("")
+        self.section_info_label.setWordWrap(True)
+        self.section_info_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
+        )
+        self.section_info_label.setMinimumWidth(220)
+
+        self.flag_section_button = QPushButton("Flag section…")
+        self.flag_section_button.clicked.connect(self.flag_current_section)
+
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(1, self.num_slices)
@@ -439,6 +455,8 @@ class AlignmentController:
 
         self.viewer.window.add_dock_widget(
             [
+                self.section_info_label,
+                self.flag_section_button,
                 self.progress_bar,
                 QLabel("Region"),
                 self.region_selection,
@@ -470,6 +488,11 @@ class AlignmentController:
 
         self.start_viewer()
 
+    @staticmethod
+    def _slice_id_from_filename(name: str) -> str:
+        stem = ".".join(name.split(".")[:-1]) if "." in name else name
+        return stem.split(".")[0]
+
     def scan_input(self):
         """Scan the input path for valid images and add to file_list"""
         img_ext = [".png", ".jpg", ".jpeg"]
@@ -481,6 +504,12 @@ class AlignmentController:
             and name.endswith(tuple(img_ext))
         ]
         self.file_list.sort()
+        if self.slice_filter is not None:
+            self.file_list = [
+                name
+                for name in self.file_list
+                if self._slice_id_from_filename(name) in self.slice_filter
+            ]
         self.num_slices = len(self.file_list)
         print(4 + self.num_slices, flush=True)
         print("Scanned input path for images...", flush=True)
@@ -490,6 +519,57 @@ class AlignmentController:
         self.progress_bar.setRange(1, self.num_slices)
         self.progress_bar.setValue(1)
         self.progress_bar.setFormat(f"1 / {self.num_slices}")
+        self.update_section_header()
+
+    def _alignment_flags_path(self) -> Path:
+        """Per AGENTS.md: flags next to alignment outputs under ``<slices>/.masonjar/``."""
+        return Path(self.output_path) / ".masonjar" / "alignment_flags.json"
+
+    def update_section_header(self):
+        """Slice index + filename in the dock; sync Napari / OS window title."""
+        if not self.file_list or self.num_slices == 0:
+            self.section_info_label.setText("")
+            return
+        idx = self.current_section
+        fname = self.file_list[idx]
+        n = idx + 1
+        m = self.num_slices
+        line1 = f"Slice {n:02d} of {m:02d}"
+        self.section_info_label.setText(f"{line1}\n{fname}")
+        title = f"Atlas Alignment — {line1} — {fname}"
+        self.viewer.title = title
+        try:
+            win = getattr(self.viewer.window, "_qt_window", None)
+            if win is not None:
+                win.setWindowTitle(title)
+        except Exception:
+            pass
+
+    def flag_current_section(self):
+        """Append one JSON object per line to ``<output>/.masonjar/alignment_flags.json``."""
+        if not self.file_list or self.num_slices == 0:
+            return
+        fname = self.file_list[self.current_section]
+        slice_id = self._slice_id_from_filename(fname)
+        note, ok = QInputDialog.getText(
+            None,
+            "Flag section",
+            "Note (saved next to alignment outputs):",
+        )
+        if not ok:
+            return
+        record = {
+            "sliceId": slice_id,
+            "filename": fname,
+            "index": int(self.current_section),
+            "note": note or "",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        out_path = self._alignment_flags_path()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        print(f"Recorded flag for {slice_id} in {out_path}", flush=True)
 
     def load_alignment(self):
         """Check the input path for a saved alignment pkl"""
@@ -731,6 +811,8 @@ class AlignmentController:
             if self.atlas_slices[self.file_list[self.current_section]].mask is None
             else "Update Mask"
         )
+
+        self.update_section_header()
 
     def update_linkage(self):
         """Update the linkage of the current slice"""
@@ -986,6 +1068,20 @@ class AlignmentController:
                 pickle.dump(warped_labels, f)
 
         self.viewer.close()
+        from run_manifest import write_run_manifest
+
+        write_run_manifest(
+            self.output_path,
+            {
+                "step": "align",
+                "input_dir": self.input_path,
+                "output_dir": self.output_path,
+                "whole": self.is_whole,
+                "spacing": self.spacing,
+                "legacy": self.use_legacy,
+                "slice_filter": self.slice_filter,
+            },
+        )
         print("Done!", flush=True)
 
     def start_viewer(self):
@@ -1016,7 +1112,16 @@ if __name__ == "__main__":
     )
     parser.add_argument("-l", "--legacy", help="use legacy atlas", default=False)
     parser.add_argument("-c", "--map", help="map file", default="../csv/class_map.pkl")
+    parser.add_argument(
+        "--slice-list",
+        help="JSON file with slice ids to process",
+        default="",
+    )
     args = parser.parse_args()
+
+    from slice_index import load_slice_list
+
+    slice_filter = load_slice_list(args.slice_list.strip() or None)
 
     align_controller = AlignmentController(
         nrrd_path=args.nrrd.strip(),
@@ -1028,4 +1133,5 @@ if __name__ == "__main__":
         spacing=args.spacing if args.spacing else None,
         is_whole=args.whole.strip().lower() == "true",
         use_legacy=args.legacy.strip().lower() == "true",
+        slice_filter=slice_filter,
     )

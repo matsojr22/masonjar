@@ -1,6 +1,8 @@
 import cv2
 import pickle
 import os
+import json
+from datetime import datetime, timezone
 from skimage.measure import label, regionprops
 from skimage.filters import threshold_otsu
 import numpy as np
@@ -62,6 +64,41 @@ def check_eccentricity(box, threshold, image):
 
 def xyxy_to_area(box):
     return (box[2] - box[0]) * (box[3] - box[1])
+
+
+def make_tile_progress_printer(label):
+    """Emit stdout lines so Mason Jar's progress bar updates during SAHI tiling."""
+    state = {"last": 0}
+
+    def progress_callback(current, total):
+        if not total:
+            return
+        step = max(1, total // 25)
+        if current == 1 or current == total or current - state["last"] >= step:
+            print(f"{label}: tile {current}/{total}", flush=True)
+            state["last"] = current
+
+    return progress_callback
+
+
+def run_sliced_detection(image, detection_model, tile_size, label):
+    print(
+        f"{label}: starting tiled detection ({image.shape[1]}×{image.shape[0]} px, "
+        f"tile {tile_size})…",
+        flush=True,
+    )
+    result = get_sliced_prediction(
+        image,
+        detection_model,
+        slice_height=tile_size,
+        slice_width=tile_size,
+        overlap_height_ratio=0.1,
+        overlap_width_ratio=0.1,
+        verbose=1,
+        progress_bar=False,
+        progress_callback=make_tile_progress_printer(label),
+    )
+    return result
 
 
 def screen_predictions(prediction_objects, area_threshold, eccentricity_threshold=None, image=None, sam_model_path=None):
@@ -132,17 +169,32 @@ if __name__ == "__main__":
         help="area threshold for screening",
         default=200,
     )
+    parser.add_argument(
+        "--slice-list",
+        help="JSON file with slice ids to process (filters input images)",
+        default="",
+    )
     args = parser.parse_args()
 
     input_dir = Path(args.input.strip())
     output_dir = Path(args.output.strip())
+    output_dir.mkdir(parents=True, exist_ok=True)
     tile_size = int(args.tile)
     model_path = args.model.strip()
 
-    # add mps device if available
-    if torch.cuda.is_available():
+    from slice_index import load_slice_list, slice_id_allowed
+
+    # add mps device if available (MASONJAR_DETECT_CPU=1 forces CPU on Mac when MPS hangs)
+    force_cpu = os.environ.get("MASONJAR_DETECT_CPU", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if force_cpu:
+        device = "cpu"
+    elif torch.cuda.is_available():
         device = "cuda:0"
-    elif torch.backends.mps.is_built():
+    elif torch.backends.mps.is_available():
         device = "mps"
     else:
         device = "cpu"
@@ -152,7 +204,37 @@ if __name__ == "__main__":
     files = os.listdir(input_dir)
     files = [f for f in files if f.split(".")[-1].lower() in endings]
     files.sort()
-    print(5 + len(files) * 2, flush=True)  # update users on steps
+
+    def _image_slice_id(fname: str) -> str:
+        stem = Path(fname).stem
+        if stem.lower().endswith(".ome"):
+            stem = Path(stem).stem
+        dot = stem.find(".")
+        return stem[:dot] if dot >= 0 else stem
+
+    allowed = load_slice_list(args.slice_list.strip() or None)
+    if allowed is not None:
+        files = [f for f in files if slice_id_allowed(_image_slice_id(f), allowed)]
+
+    manifest = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "input_dir": str(input_dir),
+        "output_dir": str(output_dir),
+        "model": model_path,
+        "confidence": args.confidence,
+        "tile": args.tile,
+        "area": args.area,
+        "eccentricity": args.eccentricity,
+        "multichannel": bool(args.multichannel),
+        "sam": args.sam,
+        "slice_list": args.slice_list.strip() or None,
+        "input_files": sorted(files),
+    }
+    with open(output_dir / "run_manifest.json", "w", encoding="utf-8") as mf:
+        json.dump(manifest, mf, indent=2)
+
+    # Extra headroom in step count for per-tile progress lines (IPC progress bar).
+    print(5 + len(files) * 40, flush=True)
     print(f"Using device: {device}", flush=True)
     print(f"Using model: {model_path}", flush=True)
     print(f"Using confidence level {float(args.confidence)}", flush=True)
@@ -214,15 +296,17 @@ if __name__ == "__main__":
                 chan_img = (chan_img * 255).astype(np.uint8)
                 # convert to BGR
                 chan_img = cv2.cvtColor(chan_img, cv2.COLOR_GRAY2BGR)
-                result = get_sliced_prediction(
+                result = run_sliced_detection(
                     chan_img,
                     detection_model,
-                    slice_height=tile_size,
-                    slice_width=tile_size,
-                    overlap_height_ratio=0.1,
-                    overlap_width_ratio=0.1,
+                    tile_size,
+                    f"{file} ch{i + 1}",
                 )
 
+                print(
+                    f"Screening {len(result.object_prediction_list)} detections on {file} ch{i + 1}…",
+                    flush=True,
+                )
                 predicted_objects = screen_predictions(
                     result.object_prediction_list, 
                     float(args.area.strip()),
@@ -255,15 +339,17 @@ if __name__ == "__main__":
             # convert to BGR
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
-            result = get_sliced_prediction(
+            result = run_sliced_detection(
                 img,
                 detection_model,
-                slice_height=tile_size,
-                slice_width=tile_size,
-                overlap_height_ratio=0.1,
-                overlap_width_ratio=0.1,
+                tile_size,
+                file,
             )
 
+            print(
+                f"Screening {len(result.object_prediction_list)} detections on {file}…",
+                flush=True,
+            )
             predicted_objects = screen_predictions(result.object_prediction_list, 
                                                    float(args.area.strip()), 
                                                    image=img, 

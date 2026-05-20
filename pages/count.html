@@ -61,6 +61,22 @@
           />
         </div>
       </div>
+      <div id="predictionRunRow" class="row align-items-center m-1 d-none">
+        <div class="col d-grid justify-content-start">
+          <h5 class="fs-6">Active prediction run (project)</h5>
+        </div>
+        <div class="col d-grid">
+          <select id="predictionRunSelect" class="form-select text-start"></select>
+        </div>
+      </div>
+      <div id="slicesRunRow" class="row align-items-center m-1 d-none">
+        <div class="col d-grid justify-content-start">
+          <h5 class="fs-6">Active slices run (project)</h5>
+        </div>
+        <div class="col d-grid">
+          <select id="slicesRunSelect" class="form-select text-start"></select>
+        </div>
+      </div>
       <div class="row align-items-center m-1">
         <div class="col d-grid justify-content-start">
           <h5>
@@ -118,6 +134,13 @@
             ></i>
           </h5>
           <input type="checkbox" id="layerinfo" name="layerinfo" value="true" />
+        </div>
+      </div>
+      <div id="runModePanel" class="row m-2 d-none workspace-block"></div>
+      <div class="row align-items-center m-1 workspace-block">
+        <div class="col form-check text-start">
+          <input class="form-check-input" type="checkbox" id="flatOutput" />
+          <label class="form-check-label" for="flatOutput">Write outputs directly to the output folder (legacy flat layout)</label>
         </div>
       </div>
       <div class="row align-items-center m-4">

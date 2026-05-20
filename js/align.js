@@ -1,7 +1,11 @@
+var fs = require("fs");
+var path = require("path");
 var ipc = require("electron").ipcRenderer;
 var workspace = require("./workspace");
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
+var pipelineRun = require("./pipeline_run");
+var pipelineRuns = require("./pipeline_runs");
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
 var run = document.getElementById("run");
@@ -14,93 +18,123 @@ var whole = document.getElementById("whole");
 var half = document.getElementById("half");
 var spacing = document.getElementById("spacing");
 var legacy = document.getElementById("legacy");
+var flatOutput = document.getElementById("flatOutput");
 var alignmentMethod = "True";
 var useLegacy = "False";
 var methods = document.querySelector("#methods");
+var lastRunRel = "";
+
+pipelineRun.ensureRunModeUi("runModePanel", "align");
 
 whole.addEventListener("click", function () {
-  methods.textContent = "Both Hemispheres";
-  alignmentMethod = "True";
-  console.log(alignmentMethod);
+	methods.textContent = "Both Hemispheres";
+	alignmentMethod = "True";
 });
 
 half.addEventListener("click", function () {
-  methods.textContent = "Single Hemisphere";
-  alignmentMethod = "False";
-  console.log(alignmentMethod);
+	methods.textContent = "Single Hemisphere";
+	alignmentMethod = "False";
 });
 
 run.addEventListener("click", function () {
-  if (indir && outdir && indir.value && outdir.value) {
-    var a = spacing.value;
-    // use try catch to check if a is a number
-    try {
-      a = Number(a);
-    } catch (err) {
-      console.log(err);
-      alert("Spacing must be a integer!");
-      return;
-    }
+	if (indir && outdir && indir.value && outdir.value) {
+		var a = spacing.value;
+		try {
+			a = Number(a);
+		} catch (err) {
+			alert("Spacing must be a integer!");
+			return;
+		}
 
-    if (a % 1 != 0) {
-      a = Math.round(a);
-    }
+		if (a % 1 != 0) {
+			a = Math.round(a);
+		}
 
-    if (legacy.checked) {
-      useLegacy = "True";
-    } else {
-      useLegacy = "False";
-    }
-    run.classList.add("disabled");
-    back.classList.remove("btn-warning");
-    back.classList.add("btn-danger");
-    back.innerHTML = "Cancel";
-    run.innerHTML = "<i class='fas fa-spinner fa-spin'></i>";
-    loadmessage.innerHTML = "Initializing...";
-    ipc.send("runAlign", [
-      indir.value,
-      outdir.value,
-      alignmentMethod,
-      a,
-      useLegacy,
-    ]);
-  }
+		if (legacy.checked) {
+			useLegacy = "True";
+		} else {
+			useLegacy = "False";
+		}
+
+		var mode = pipelineRun.getSelectedRunMode("align");
+		var plan = pipelineRun.preparePipelineRun("align", mode);
+		if (project.isActive() && !plan.toProcess.length) {
+			alert("No slices to process (all outputs exist or subset is empty).");
+			return;
+		}
+
+		var sortedStems = pipelineRuns.listImageSliceStems(indir.value);
+		var slug = pipelineRuns.buildRunSlug("align", {
+			sortedStems: sortedStems,
+			spacing: a,
+			whole: alignmentMethod,
+			legacy: useLegacy,
+			subsetCount: plan.toProcess.length,
+		});
+		var useFlat = flatOutput && flatOutput.checked;
+		var finalOut = pipelineRuns.resolveRunLeaf(outdir.value, "align", slug, useFlat);
+		try {
+			fs.mkdirSync(finalOut, { recursive: true });
+		} catch (mkdirErr) {
+			alert("Could not create output directory: " + (mkdirErr.message || mkdirErr));
+			return;
+		}
+		lastRunRel = useFlat ? "" : pipelineRuns.relFromRoleBase("align", finalOut);
+
+		run.classList.add("disabled");
+		back.classList.remove("btn-warning");
+		back.classList.add("btn-danger");
+		back.innerHTML = "Cancel";
+		run.innerHTML = "<i class='fas fa-spinner fa-spin'></i>";
+		var msg = plan.summary || "";
+		if (!useFlat && lastRunRel) {
+			msg = (msg ? msg + " " : "") + "Run folder: " + lastRunRel;
+		}
+		if (loadmessage) {
+			loadmessage.innerHTML = msg;
+		}
+		ipc.send("runAlign", [
+			indir.value,
+			finalOut,
+			alignmentMethod,
+			a,
+			useLegacy,
+			plan.sliceListPath || "",
+		]);
+	}
 });
 
 back.addEventListener("click", function (event) {
-  if (back.classList.contains("btn-danger")) {
-    event.preventDefault();
-    ipc.send("killAlign", []);
-    back.classList.add("btn-warning");
-    back.classList.remove("btn-danger");
-    back.innerHTML = "Back";
-    run.innerHTML = "Run";
-    run.classList.remove("disabled");
-    loadmessage.innerHTML = "";
-    loadbar.style.width = "0";
-  }
+	if (back.classList.contains("btn-danger")) {
+		event.preventDefault();
+		ipc.send("killAlign", []);
+		back.classList.add("btn-warning");
+		back.classList.remove("btn-danger");
+		back.innerHTML = "Back";
+		run.innerHTML = "Run";
+		run.classList.remove("disabled");
+		loadmessage.innerHTML = "";
+		loadbar.style.width = "0";
+	}
 });
 
 ipc.on("alignResult", function (event, response) {
-  run.innerHTML = "Run";
-  run.classList.remove("disabled");
-  back.classList.add("btn-warning");
-  back.classList.remove("btn-danger");
-  back.innerHTML = "Back";
-  run.innerHTML = "Run";
-  run.classList.remove("disabled");
-  loadmessage.innerHTML = "";
-  loadbar.style.width = "0";
-});
-
-ipc.once("alignError", function (event, response) {
-  run.innerHTML = "Run";
-  run.classList.remove("disabled");
+	run.innerHTML = "Run";
+	run.classList.remove("disabled");
+	back.classList.add("btn-warning");
+	back.classList.remove("btn-danger");
+	back.innerHTML = "Back";
+	loadmessage.innerHTML = "";
+	loadbar.style.width = "0";
+	if (project.isActive() && lastRunRel) {
+		pipelineRuns.setActiveRunRel("align", lastRunRel);
+		project.refreshProjectIndex().catch(function () {});
+	}
 });
 
 ipc.on("updateLoad", function (event, response) {
-  loadbar.style.width = String(response[0]) + "%";
-  loadmessage.innerHTML = response[1];
+	loadbar.style.width = String(response[0]) + "%";
+	loadmessage.innerHTML = response[1];
 });
 
 workspace.applyPreset("align");

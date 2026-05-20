@@ -126,6 +126,18 @@ def main() -> int:
             print(f"Skip {pkl.name}: {e}", file=sys.stderr, flush=True)
             print(f"Skip {pkl.name}: {e}", flush=True)
     print("Done!", flush=True)
+    from run_manifest import write_run_manifest
+
+    write_run_manifest(
+        out_dir,
+        {
+            "step": "dual",
+            "input_dir": str(in_dir),
+            "output_dir": str(out_dir),
+            "input_files": [p.name for p in pkls],
+            "exported": ok,
+        },
+    )
     return 0 if ok else 1
 
 

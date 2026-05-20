@@ -39,6 +39,40 @@ const CANONICAL_ROLES = {
 };
 const IMAGE_EXT_RE = /\.(tif|tiff|png|jpe?g)$/i;
 function findProjectFilename(bundleRoot) {
+    if (!bundleRoot || !fs.existsSync(bundleRoot)) {
+        return PROJECT_FILENAMES[0];
+    }
+    const namedMasonjar = [];
+    let entries;
+    try {
+        entries = fs.readdirSync(bundleRoot, { withFileTypes: true });
+    }
+    catch (_a) {
+        return PROJECT_FILENAMES[0];
+    }
+    for (const ent of entries) {
+        if (!ent.isFile()) {
+            continue;
+        }
+        if (/\.masonjar$/i.test(ent.name)) {
+            namedMasonjar.push(ent.name);
+        }
+    }
+    if (namedMasonjar.length === 1) {
+        return namedMasonjar[0];
+    }
+    if (namedMasonjar.length > 1) {
+        const folderSlug = path
+            .basename(bundleRoot)
+            .replace(/_masonjar$/i, "")
+            .replace(/\.(masonjar|belljar)$/i, "");
+        const expected = `${folderSlug}.masonjar`;
+        if (namedMasonjar.includes(expected)) {
+            return expected;
+        }
+        namedMasonjar.sort();
+        return namedMasonjar[0];
+    }
     for (const name of PROJECT_FILENAMES) {
         if (fs.existsSync(path.join(bundleRoot, name))) {
             return name;
@@ -50,8 +84,21 @@ function isBundleRoot(dir) {
     if (!dir || !fs.existsSync(dir)) {
         return false;
     }
-    for (const name of PROJECT_FILENAMES) {
-        if (fs.existsSync(path.join(dir, name))) {
+    let entries;
+    try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+    }
+    catch (_a) {
+        return false;
+    }
+    for (const ent of entries) {
+        if (!ent.isFile()) {
+            continue;
+        }
+        if (/\.masonjar$/i.test(ent.name)) {
+            return true;
+        }
+        if (PROJECT_FILENAMES.includes(ent.name)) {
             return true;
         }
     }
@@ -92,6 +139,63 @@ const STEP_ROLE_MAP = {
     },
     dual: { indir: "pkls", outdir: "dual" },
 };
+const OUTPUT_ROLES = new Set([
+    "max",
+    "slices",
+    "predictions",
+    "quantification",
+    "pkls",
+    "dual",
+]);
+function normalizeRel(rel) {
+    return String(rel || "")
+        .split(/[/\\]+/)
+        .filter(Boolean)
+        .join("/");
+}
+function migrateActiveRuns(processing) {
+    const runs = {};
+    for (const role of OUTPUT_ROLES) {
+        runs[role] = "";
+    }
+    if (processing === null || processing === void 0 ? void 0 : processing.active_runs) {
+        for (const [role, rel] of Object.entries(processing.active_runs)) {
+            runs[role] = normalizeRel(rel);
+        }
+    }
+    if (!runs.predictions && (processing === null || processing === void 0 ? void 0 : processing.active_prediction_run)) {
+        runs.predictions = normalizeRel(processing.active_prediction_run);
+    }
+    return runs;
+}
+function resolveActiveRunLeaf(bundleRoot, roles, role, processing) {
+    const base = resolveRolePath(bundleRoot, roles, role);
+    if (!base || !OUTPUT_ROLES.has(role)) {
+        return base;
+    }
+    const activeRuns = migrateActiveRuns(processing);
+    const rel = activeRuns[role] || "";
+    if (!rel) {
+        return base;
+    }
+    return path.join(base, rel.split("/").join(path.sep));
+}
+function resolveInputLeafForStep(bundleRoot, stepId, role, roles, processing) {
+    if (role === "dapi" || role === "original_scans") {
+        return resolveRolePath(bundleRoot, roles, role);
+    }
+    if (stepId === "sharpen" && role === "max") {
+        const base = resolveRolePath(bundleRoot, roles, "max");
+        const activeRuns = migrateActiveRuns(processing);
+        const rel = activeRuns.max || "";
+        if (rel && rel.split("/")[0] === "max") {
+            return path.join(base, rel.split("/").join(path.sep));
+        }
+        const branchDir = path.join(base, "max");
+        return fs.existsSync(branchDir) ? branchDir : base;
+    }
+    return resolveActiveRunLeaf(bundleRoot, roles, role, processing);
+}
 function resolvePathsForStep(bundleRoot, stepId) {
     const project = loadProjectJson(bundleRoot);
     const roles = project.roles || CANONICAL_ROLES;
@@ -101,7 +205,12 @@ function resolvePathsForStep(bundleRoot, stepId) {
     }
     const out = {};
     for (const [key, role] of Object.entries(mapping)) {
-        out[key] = resolveRolePath(bundleRoot, roles, role);
+        if (key === "outdir") {
+            out[key] = resolveActiveRunLeaf(bundleRoot, roles, role, project.processing);
+        }
+        else {
+            out[key] = resolveInputLeafForStep(bundleRoot, stepId, role, roles, project.processing);
+        }
     }
     return out;
 }

@@ -19,10 +19,16 @@ from qtpy.QtWidgets import (
     QMessageBox,
     QLineEdit,
     QListWidget,
+    QButtonGroup,
 )
 from qtpy.QtGui import QImage, QPixmap, QPainter, QColor
 from qtpy.QtCore import Qt, QPoint, QEvent
 from slice_atlas import add_outlines
+from adjust_channels import (
+    lowres_channels_for_slice,
+    resolve_previews_dir,
+)
+from slice_index import build_adjust_pairs
 
 
 def numpy_array_to_qimage(array):
@@ -113,12 +119,22 @@ class FileSelector(QMainWindow):
 
 
 class AnnotationViewer(QMainWindow):
-    def __init__(self, img_dir, annotation_dir, structure_map):
+    def __init__(self, pairs, structure_map, images_dir=None, previews_dir=None):
         super().__init__()
 
-        self.img_dir = img_dir
-        self.annotation_dir = annotation_dir
+        self.pairs = pairs
         self.structure_map = structure_map
+        self.images_dir = (
+            Path(images_dir) if images_dir else Path(pairs[0][0]).parent
+        )
+        self.previews_dir = (
+            Path(previews_dir)
+            if previews_dir
+            else resolve_previews_dir(self.images_dir)
+        )
+        self.active_channel_name = "DAPI"
+        self.active_channel_path = None
+        self.channel_sources: list[tuple[str, Path]] = []
         self.current_index = 0
         self.current_delta = 0
         self.deltas = []
@@ -130,24 +146,9 @@ class AnnotationViewer(QMainWindow):
         self.zoom_level = 100
         self.selected_region_id = None
         self.selected_region_name = "None"
-        # Load images and annotations
-        self.images = sorted(
-            [
-                os.path.join(img_dir, f)
-                for f in os.listdir(img_dir)
-                if f.endswith(".png")
-            ]
-        )
-        self.annotations = sorted(
-            [
-                os.path.join(annotation_dir, f)
-                for f in os.listdir(annotation_dir)
-                if f.endswith(".pkl")
-            ]
-        )
 
         self.current_label = None
-        with open(self.annotations[self.current_index], "rb") as f:
+        with open(self.pairs[self.current_index][1], "rb") as f:
             self.current_label = pickle.load(f)
 
         # GUI Components
@@ -156,6 +157,20 @@ class AnnotationViewer(QMainWindow):
     def initUI(self):
         ui_layout = QVBoxLayout()
 
+        self.section_info_label = QLabel("", self)
+        self.section_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ui_layout.addWidget(self.section_info_label)
+
+        channel_row = QHBoxLayout()
+        channel_row.addWidget(QLabel("Background channel:", self))
+        self.channel_buttons_container = QHBoxLayout()
+        channel_row.addLayout(self.channel_buttons_container)
+        channel_row.addStretch()
+        self.channel_button_group = QButtonGroup(self)
+        self.channel_button_group.setExclusive(True)
+        self.channel_button_group.idClicked.connect(self._on_channel_selected)
+        ui_layout.addLayout(channel_row)
+
         # images
         image_layout = QHBoxLayout()
         self.img_view = QGraphicsView(self)
@@ -163,21 +178,11 @@ class AnnotationViewer(QMainWindow):
         self.anno_scene = QGraphicsScene(self)
         self.anno_view.setScene(self.anno_scene)
 
-        # Show base image
-        self.img_pixmap = QPixmap(self.images[self.current_index])
         self.img_scene = QGraphicsScene(self)
-        self.setWindowTitle(
-            f"Adjustment Viewer - {Path(self.images[self.current_index]).stem}"
-        )
-        # Load the current annotation
-        # Scale img_pixmap to the size of the label array
-        self.img_pixmap = self.img_pixmap.scaled(
-            self.current_label.shape[1],
-            self.current_label.shape[0],
-            Qt.AspectRatioMode.KeepAspectRatio,
-        )
-        self.img_scene.addPixmap(self.img_pixmap)
+        self.img_pixmap = QPixmap()
         self.img_view.setScene(self.img_scene)
+        self._update_section_labels()
+        self.rebuild_channel_buttons()
 
         self.is_drawing = False
         self.last_draw_point = None
@@ -241,11 +246,18 @@ class AnnotationViewer(QMainWindow):
         self.allow_adjustment.setChecked(False)
         self.convert_button = QPushButton("Convert Layers to Parents", self)
         self.convert_button.clicked.connect(self.convert_to_parents)
+        self.refresh_button = QPushButton("Refresh drawings", self)
+        self.refresh_button.setToolTip(
+            "Redraw annotation overlay from current edits "
+            "(does not change region IDs)."
+        )
+        self.refresh_button.clicked.connect(self.refresh_drawings)
         self.undo_button = QPushButton("Undo", self)
         self.undo_button.clicked.connect(self.undo_last_delta)
 
         self.save_button = QPushButton("Save", self)
         self.save_button.clicked.connect(self.save_changes)
+        adjustment_layout.addWidget(self.refresh_button)
         adjustment_layout.addWidget(self.undo_button)
         adjustment_layout.addWidget(self.save_button)
         adjustment_layout.addWidget(self.convert_button)
@@ -271,6 +283,88 @@ class AnnotationViewer(QMainWindow):
         container.setLayout(ui_layout)
         self.setCentralWidget(container)
 
+        self.show_image_with_overlay()
+
+    def _update_section_labels(self):
+        """Primary slice id, section ordinal, and file basenames."""
+        if not self.pairs:
+            self.section_info_label.setText("")
+            self.setWindowTitle("Adjustment Viewer")
+            return
+        _, anno_path, slice_id = self.pairs[self.current_index]
+        n = self.current_index + 1
+        m = len(self.pairs)
+        anno_base = Path(anno_path).name
+        bg = self.active_channel_name or "DAPI"
+        bg_file = (
+            self.active_channel_path.name
+            if self.active_channel_path
+            else ""
+        )
+        self.section_info_label.setText(
+            f"{slice_id}\nSection {n} of {m}\n"
+            f"Background: {bg}"
+            + (f" ({bg_file})" if bg_file else "")
+            + f"\n{anno_base}"
+        )
+        self.setWindowTitle(f"Adjustment Viewer — {slice_id}")
+
+    def rebuild_channel_buttons(self):
+        """Rebuild channel buttons for the current slice."""
+        while self.channel_buttons_container.count():
+            item = self.channel_buttons_container.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        for button in list(self.channel_button_group.buttons()):
+            self.channel_button_group.removeButton(button)
+
+        _, _, slice_id = self.pairs[self.current_index]
+        self.channel_sources = lowres_channels_for_slice(
+            self.images_dir, slice_id, self.previews_dir
+        )
+
+        default_id = 0
+        for i, (name, _) in enumerate(self.channel_sources):
+            btn = QPushButton(name, self)
+            btn.setCheckable(True)
+            self.channel_button_group.addButton(btn, i)
+            self.channel_buttons_container.addWidget(btn)
+            if name == "DAPI":
+                default_id = i
+
+        if not self.channel_sources:
+            return
+
+        self.channel_button_group.button(default_id).setChecked(True)
+        name, path = self.channel_sources[default_id]
+        self.switch_channel(path, name)
+
+    def _on_channel_selected(self, button_id: int):
+        if button_id < 0 or button_id >= len(self.channel_sources):
+            return
+        name, path = self.channel_sources[button_id]
+        self.switch_channel(path, name)
+
+    def switch_channel(self, path, display_name):
+        """Load a low-res background image and refresh the annotation overlay."""
+        path = Path(path)
+        self.active_channel_path = path
+        self.active_channel_name = display_name
+        self.img_pixmap = QPixmap(str(path))
+        self.img_pixmap = self.img_pixmap.scaled(
+            self.current_label.shape[1],
+            self.current_label.shape[0],
+            Qt.AspectRatioMode.KeepAspectRatio,
+        )
+        if self.img_scene.items():
+            self.img_scene.removeItem(self.img_scene.items()[0])
+        self.img_scene.addPixmap(self.img_pixmap)
+        self._update_section_labels()
+        self.show_image_with_overlay()
+
+    def refresh_drawings(self):
+        """Redraw annotation overlay from current_label without changing region IDs."""
         self.show_image_with_overlay()
 
     def update_zoom(self):
@@ -421,56 +515,45 @@ class AnnotationViewer(QMainWindow):
             return
 
         # Save the current label
-        with open(self.annotations[self.current_index], "wb") as f:
+        _, anno_path, _ = self.pairs[self.current_index]
+        with open(anno_path, "wb") as f:
             pickle.dump(self.current_label, f)
         self.was_changed = False
 
     def prev_image(self):
         if self.current_index > 0:
-            self.setWindowTitle(
-                f"Adjustment Viewer - {Path(self.images[self.current_index]).stem}"
-            )
-
             if self.was_changed:
                 if not self.warn_unsaved_changes():
                     return
             self.current_index -= 1
-            with open(self.annotations[self.current_index], "rb") as f:
+            _, anno_path, _ = self.pairs[self.current_index]
+            with open(anno_path, "rb") as f:
                 self.current_label = pickle.load(f)
 
-            # Load the current image
-            self.img_pixmap = QPixmap(self.images[self.current_index])
-            self.img_scene.removeItem(self.img_scene.items()[0])
-            self.img_scene.addPixmap(self.img_pixmap)
             self.current_delta = 0
             self.deltas = []
             self.originals = []
             self.was_changed = False
-            self.show_image_with_overlay()
+            self._update_section_labels()
+            self.rebuild_channel_buttons()
 
     def next_image(self):
-        if self.current_index < len(self.images) - 1:
-            self.setWindowTitle(
-                f"Adjustment Viewer - {Path(self.images[self.current_index]).stem}"
-            )
-
+        if self.current_index < len(self.pairs) - 1:
             if self.was_changed:
                 if not self.warn_unsaved_changes():
                     return
 
             self.current_index += 1
-            with open(self.annotations[self.current_index], "rb") as f:
+            _, anno_path, _ = self.pairs[self.current_index]
+            with open(anno_path, "rb") as f:
                 self.current_label = pickle.load(f)
 
-            # Load the current image
-            self.img_pixmap = QPixmap(self.images[self.current_index])
-            self.img_scene.removeItem(self.img_scene.items()[0])
-            self.img_scene.addPixmap(self.img_pixmap)
             self.current_delta = 0
             self.deltas = []
             self.originals = []
             self.was_changed = False
-            self.show_image_with_overlay()
+            self._update_section_labels()
+            self.rebuild_channel_buttons()
 
     def view_to_image_coordinates(self, view, point):
         # Transform the point from view coordinates to scene coordinates
@@ -672,6 +755,16 @@ if __name__ == "__main__":
         "--structures",
         help="structures map",
     )
+    parser.add_argument(
+        "--slice-list",
+        default="",
+        help="Optional JSON file with slice_ids to restrict pairing",
+    )
+    parser.add_argument(
+        "--previews-dir",
+        default="",
+        help="Optional low-res preview directory (default: sibling _previews of images dir)",
+    )
     args = parser.parse_args()
     print(2, flush=True)
     print("Viewing...", flush=True)
@@ -684,11 +777,47 @@ if __name__ == "__main__":
     structure_map_path = Path(args.structures.strip())
     structure_map = pickle.load(open(structure_map_path, "rb"))
 
+    pairs, orphan_images, orphan_annos = build_adjust_pairs(
+        images_path, annotations_path, args.slice_list.strip() or None
+    )
+    if orphan_images:
+        print(
+            f"Unpaired images ({len(orphan_images)}): "
+            + ", ".join(orphan_images[:20])
+            + ("..." if len(orphan_images) > 20 else ""),
+            file=sys.stderr,
+            flush=True,
+        )
+    if orphan_annos:
+        print(
+            f"Unpaired annotations ({len(orphan_annos)}): "
+            + ", ".join(orphan_annos[:20])
+            + ("..." if len(orphan_annos) > 20 else ""),
+            file=sys.stderr,
+            flush=True,
+        )
+
     app = QApplication(sys.argv)
+
+    if not pairs:
+        QMessageBox.critical(
+            None,
+            "No matched pairs",
+            "No image/annotation pairs matched by slice ID.\n"
+            "Check that DAPI images and annotation PKLs share the same filename stem "
+            "(e.g. M528_s027.tif and Annotation_M528_s027.pkl).",
+        )
+        sys.exit(1)
 
     app.aboutToQuit.connect(on_app_exit)
 
-    window = AnnotationViewer(images_path, annotations_path, structure_map)
+    previews_dir = None
+    if args.previews_dir.strip():
+        previews_dir = Path(args.previews_dir.strip())
+
+    window = AnnotationViewer(
+        pairs, structure_map, images_path, previews_dir
+    )
     window.show()
 
     sys.exit(app.exec_())

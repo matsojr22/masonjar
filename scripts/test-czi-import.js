@@ -1,0 +1,225 @@
+"use strict";
+
+var assert = require("assert");
+var path = require("path");
+var cziImport = require("../js/czi_import");
+
+function testDefaultSliceId() {
+	assert.strictEqual(cziImport.defaultSliceId("M528.czi", 0, 1), "M528");
+	assert.strictEqual(cziImport.defaultSliceId("M528.czi", 1, 2), "M528_s001");
+}
+
+function testSuggestRole() {
+	assert.strictEqual(cziImport.suggestRoleFromLabel("DAPI-405"), cziImport.ROLE_DAPI);
+	assert.strictEqual(
+		cziImport.suggestRoleFromLabel("Rabies"),
+		cziImport.ROLE_SIGNAL_SOMATA,
+	);
+}
+
+function testMergeProbe() {
+	var imp = cziImport.buildDefaultCziImport("/scans");
+	var probe = {
+		files: [
+			{
+				path: "/scans/M528.czi",
+				basename: "M528.czi",
+				scenes: [{ index: 0, sliceId: "M528" }],
+				channels: [
+					{ index: 0, label: "DAPI", suggested_role: "dapi" },
+					{ index: 1, label: "Unknown", suggested_role: "unused" },
+				],
+			},
+		],
+	};
+	cziImport.mergeProbeIntoImport(imp, probe);
+	assert.strictEqual(imp.channels.length, 2);
+	assert.strictEqual(imp.channels[0].role, cziImport.ROLE_DAPI);
+	assert.strictEqual(imp.channels[0].keep, true);
+	assert.strictEqual(imp.channels[1].keep, true);
+	assert.strictEqual(imp.channel_defaults["0"].role, cziImport.ROLE_DAPI);
+	assert.strictEqual(imp.channel_defaults["1"].role, cziImport.ROLE_UNUSED);
+}
+
+function testSanitizeOtherName() {
+	assert.strictEqual(cziImport.sanitizeOtherName(" rabies red "), "rabies_red");
+	assert.strictEqual(cziImport.sanitizeOtherName("bad/name"), "badname");
+	assert.strictEqual(cziImport.sanitizeOtherName(""), null);
+	assert.strictEqual(cziImport.sanitizeOtherName("!!!"), null);
+}
+
+function testBranchForChannelOther() {
+	var ch = { role: cziImport.ROLE_OTHER, other_name: "rabies_red" };
+	assert.strictEqual(cziImport.branchForChannel(ch), "rabies_red");
+	assert.strictEqual(cziImport.roleKeyForChannel(ch), "other:rabies_red");
+}
+
+function testApplyChannelDefaults() {
+	var imp = {
+		channel_defaults: {},
+		channels: [
+			{ file: "A.czi", index: 0, role: cziImport.ROLE_UNUSED, keep: true },
+			{ file: "B.czi", index: 0, role: cziImport.ROLE_UNUSED, keep: true },
+			{ file: "A.czi", index: 1, role: cziImport.ROLE_DAPI, keep: true },
+		],
+	};
+	cziImport.applyChannelDefaults(imp, 0, {
+		role: cziImport.ROLE_OTHER,
+		other_name: "custom_sig",
+	});
+	assert.strictEqual(imp.channels[0].role, cziImport.ROLE_OTHER);
+	assert.strictEqual(imp.channels[0].other_name, "custom_sig");
+	assert.strictEqual(imp.channels[1].role, cziImport.ROLE_OTHER);
+	assert.strictEqual(imp.channels[2].role, cziImport.ROLE_DAPI);
+	assert.strictEqual(imp.channel_defaults["0"].other_name, "custom_sig");
+}
+
+function testCollectChannelIndices() {
+	var imp = {
+		channels: [{ index: 2 }, { index: 0 }, { index: 1 }, { index: 0 }],
+	};
+	assert.deepStrictEqual(cziImport.collectChannelIndices(imp), [0, 1, 2]);
+}
+
+function testMaxRunRel() {
+	assert.strictEqual(
+		cziImport.maxRunRelForRole(cziImport.ROLE_SIGNAL_SOMATA, "M528-M529"),
+		"somata/max/M528-M529",
+	);
+	assert.strictEqual(
+		cziImport.maxRunRelForRole("other:rabies_red", "M528"),
+		"rabies_red/max/M528",
+	);
+}
+
+function testCollectSliceIds() {
+	var imp = {
+		slice_order: [
+			{ ordinal: 1, sliceId: "M528_s061" },
+			{ ordinal: 2, sliceId: "M528_s062" },
+		],
+		files: [{ scenes: [{ sliceId: "M528_s062" }, { sliceId: "M528_s061" }] }],
+	};
+	assert.deepStrictEqual(cziImport.collectSliceIds(imp), ["M528_s061", "M528_s062"]);
+}
+
+function testNaturalCompareSectionOrder() {
+	var ids = ["M528_s100", "M528_s20", "M528_s9", "M528_s112"];
+	ids.sort(function (a, b) {
+		return cziImport.naturalCompare({ sliceId: a }, { sliceId: b });
+	});
+	assert.deepStrictEqual(ids, ["M528_s9", "M528_s20", "M528_s100", "M528_s112"]);
+}
+
+function testBuildSliceOrderRenameMultiDir() {
+	var imp = cziImport.buildDefaultCziImport("");
+	cziImport.mergeProbeDirIntoImport(
+		imp,
+		{
+			files: [
+				{
+					path: "/scan1/A.czi",
+					basename: "A.czi",
+					scene_count: 25,
+					channels: [{ index: 0, label: "DAPI" }],
+					scenes: Array.from({ length: 25 }, function (_, i) {
+						return { index: i, sliceId: "A_s" + String(i).padStart(3, "0") };
+					}),
+				},
+			],
+		},
+		"/scan1",
+		0,
+	);
+	cziImport.mergeProbeDirIntoImport(
+		imp,
+		{
+			files: [
+				{
+					path: "/scan2/B.czi",
+					basename: "B.czi",
+					scene_count: 25,
+					channels: [{ index: 0, label: "DAPI" }],
+					scenes: Array.from({ length: 25 }, function (_, i) {
+						return { index: i, sliceId: "B_s" + String(i).padStart(3, "0") };
+					}),
+				},
+			],
+		},
+		"/scan2",
+		1,
+	);
+	imp.slice_numbering = cziImport.SLICE_NUMBERING_RENAME;
+	cziImport.buildSliceOrder(imp, "M528");
+	assert.strictEqual(imp.slice_order.length, 50);
+	assert.strictEqual(imp.slice_order[0].sliceId, "M528_s001");
+	assert.strictEqual(imp.slice_order[49].sliceId, "M528_s050");
+}
+
+function testValidateSliceOrderDuplicate() {
+	var imp = {
+		slice_order: [
+			{ ordinal: 1, sliceId: "M528_s001", path: "/a.czi", scene_index: 0 },
+			{ ordinal: 2, sliceId: "M528_s001", path: "/b.czi", scene_index: 0 },
+		],
+		files: [],
+	};
+	assert.match(cziImport.validateSliceOrder(imp), /Duplicate slice ID/);
+}
+
+function testCollectKeptSignalRoleKeys() {
+	var imp = {
+		channels: [
+			{ role: cziImport.ROLE_DAPI, keep: true },
+			{ role: cziImport.ROLE_SIGNAL_SOMATA, keep: true },
+			{ role: cziImport.ROLE_SIGNAL_NUCLEI, keep: false },
+			{
+				role: cziImport.ROLE_OTHER,
+				other_name: "rabies_red",
+				keep: true,
+			},
+		],
+	};
+	assert.deepStrictEqual(cziImport.collectKeptSignalRoleKeys(imp), [
+		cziImport.ROLE_SIGNAL_SOMATA,
+		"other:rabies_red",
+	]);
+}
+
+function testImportConfigPath() {
+	var p = cziImport.importConfigPath("/tmp/Brain_masonjar");
+	assert.ok(p.endsWith(path.join(".masonjar", "czi_import_config.json")));
+}
+
+function testCountExtractWorkItems() {
+	var cfg = {
+		files: [
+			{
+				basename: "M528.czi",
+				scenes: [{ index: 0, sliceId: "M528" }, { index: 1, sliceId: "M528_s001" }],
+			},
+		],
+		channels: [
+			{ file: "M528.czi", index: 0, role: cziImport.ROLE_DAPI, keep: true },
+			{ file: "M528.czi", index: 1, role: cziImport.ROLE_UNUSED, keep: false },
+		],
+	};
+	assert.strictEqual(cziImport.countExtractWorkItems(cfg), 2);
+}
+
+testDefaultSliceId();
+testSuggestRole();
+testMergeProbe();
+testSanitizeOtherName();
+testBranchForChannelOther();
+testApplyChannelDefaults();
+testCollectChannelIndices();
+testMaxRunRel();
+testCollectSliceIds();
+testNaturalCompareSectionOrder();
+testBuildSliceOrderRenameMultiDir();
+testValidateSliceOrderDuplicate();
+testCollectKeptSignalRoleKeys();
+testImportConfigPath();
+testCountExtractWorkItems();
+console.log("test-czi-import.js: OK");

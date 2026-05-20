@@ -5,6 +5,8 @@ import pickle
 import argparse
 import sys
 from pathlib import Path
+
+from slice_index import load_slice_list, slice_id_allowed
 import tifffile
 import numpy as np
 from demons import resize_image_nearest_neighbor
@@ -192,6 +194,11 @@ if __name__ == "__main__":
         ".png/.tif/.jpg or stem_dapi.png/.tif)",
         default="",
     )
+    parser.add_argument(
+        "--slice-list",
+        help="JSON file with slice ids to process (array or {slice_ids: []})",
+        default="",
+    )
     args = parser.parse_args()
 
     # Intensity files: only image-like names so sort order is not thrown off by .DS_Store, etc.
@@ -210,9 +217,13 @@ if __name__ == "__main__":
     print("Setting up...", flush=True)
 
     structure_map = pickle.load(open(args.map.strip(), "rb"))
+    allowed_slices = load_slice_list(args.slice_list.strip() or None)
 
     for iName in intensityFiles:
         stem = _intensity_slice_stem(iName)
+        if not slice_id_allowed(stem, allowed_slices):
+            print(f"Skipping {iName} (not in slice list)", flush=True)
+            continue
         anno_pkl = _resolve_annotation_pkl(annotation_dir, iName)
         if anno_pkl is None:
             tried = ", ".join(_annotation_pkl_candidate_names(iName)[:4])
@@ -362,3 +373,17 @@ if __name__ == "__main__":
                     pickle.dump(pkg, f)
 
     print("Done!", flush=True)
+    from run_manifest import write_run_manifest
+
+    write_run_manifest(
+        args.output.strip(),
+        {
+            "step": "intensity",
+            "input_dir": args.images.strip(),
+            "annotation_dir": args.annotations.strip(),
+            "output_dir": args.output.strip(),
+            "whole": bool(args.whole),
+            "dapi_dir": args.dapi_dir.strip(),
+            "slice_list": args.slice_list.strip() or None,
+        },
+    )

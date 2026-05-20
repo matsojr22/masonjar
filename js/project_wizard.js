@@ -1,5 +1,6 @@
 "use strict";
 
+var fs = require("fs");
 var path = require("path");
 var workspace = require("./workspace");
 var project = require("./project");
@@ -8,9 +9,30 @@ var branding = require("./branding");
 var wizardState = {
 	mode: "new",
 	step: 1,
+	parentDir: "",
 	bundleRoot: "",
+	projectFilename: "",
 	sources: {},
 };
+
+function updateBundlePathPreview() {
+	var parentDir = wizardState.parentDir;
+	var nameEl = qs("projectName");
+	var pathEl = qs("bundlePath");
+	if (!pathEl) {
+		return;
+	}
+	if (!parentDir || !nameEl || !nameEl.value.trim()) {
+		pathEl.value = "";
+		wizardState.bundleRoot = "";
+		wizardState.projectFilename = "";
+		return;
+	}
+	var resolved = project.resolveNewBundlePath(parentDir, nameEl.value);
+	pathEl.value = resolved.bundleRoot;
+	wizardState.bundleRoot = resolved.bundleRoot;
+	wizardState.projectFilename = resolved.projectFilename;
+}
 
 var ROLE_LABELS = [
 	{ role: "original_scans", label: "Original scans", logical: "originalScans" },
@@ -183,8 +205,8 @@ function setActivity(msg, pct) {
 }
 
 function setBuildNavDisabled(disabled) {
-	var back = qs("step3Back");
-	var build = qs("step3Next");
+	var back = qs("step4Back");
+	var build = qs("step4Next");
 	if (back) {
 		back.disabled = disabled;
 	}
@@ -202,9 +224,108 @@ function importProgressPct(roleIndex, roleCount, fileIndex, fileTotal) {
 	return Math.round(roleBase + (fileIndex / fileTotal) * roleSpan);
 }
 
+function roleCheckmark(bySlice, sid, role) {
+	return bySlice[sid] && bySlice[sid].roles[role] ? "✓" : "—";
+}
+
+function renderReviewStep(report) {
+	var tbody = qs("reviewTableBody");
+	var status = qs("reviewStatus");
+	var orphansEl = qs("reviewOrphans");
+	if (!tbody) {
+		return;
+	}
+	tbody.innerHTML = "";
+	var matched = report.matchedSliceIds || [];
+	var issuesBySlice = {};
+	var q = report.qualityIssues || [];
+	for (var i = 0; i < q.length; i++) {
+		var iss = q[i];
+		if (!issuesBySlice[iss.sliceId]) {
+			issuesBySlice[iss.sliceId] = [];
+		}
+		issuesBySlice[iss.sliceId].push(iss.message);
+	}
+	for (var m = 0; m < matched.length; m++) {
+		var sid = matched[m];
+		var tr = document.createElement("tr");
+		var quality = (issuesBySlice[sid] || []).join(" ") || "OK";
+		tr.innerHTML =
+			"<td>" +
+			sid +
+			"</td><td>" +
+			roleCheckmark(report.bySlice, sid, "dapi") +
+			"</td><td>" +
+			roleCheckmark(report.bySlice, sid, "max") +
+			"</td><td>" +
+			roleCheckmark(report.bySlice, sid, "slices") +
+			'</td><td class="small text-warning">' +
+			quality +
+			"</td>";
+		tbody.appendChild(tr);
+	}
+	if (status) {
+		status.textContent =
+			matched.length +
+			" matched slice(s); " +
+			(report.qualityIssues || []).length +
+			" quality note(s).";
+	}
+	if (orphansEl && report.orphansByRole) {
+		var parts = [];
+		var roles = Object.keys(report.orphansByRole);
+		for (var r = 0; r < roles.length; r++) {
+			var orphans = report.orphansByRole[roles[r]];
+			if (orphans && orphans.length) {
+				parts.push(roles[r] + ": " + orphans.length + " unmatched");
+			}
+		}
+		orphansEl.textContent = parts.length
+			? "Unmatched by role — " + parts.join("; ")
+			: "";
+	}
+}
+
+async function loadReviewStep() {
+	var status = qs("reviewStatus");
+	var confirm = qs("reviewConfirm");
+	var nextBtn = qs("step3Next");
+	if (confirm) {
+		confirm.checked = false;
+	}
+	if (nextBtn) {
+		nextBtn.disabled = true;
+	}
+	if (status) {
+		status.textContent = "Scanning sources for matches…";
+	}
+	await yieldToUi();
+	try {
+		var index = await project.buildPreviewIndexFromSources(wizardState.sources, {
+			appRoot: path.join(__dirname, ".."),
+		});
+		var report = project.computeMatchReport(index, ["dapi", "max", "slices"]);
+		wizardState.previewReport = report;
+		renderReviewStep(report);
+		var fs = require("fs");
+		var predSrc = wizardState.sources.predictions;
+		if (predSrc && fs.existsSync(predSrc)) {
+			var fileIndex = require("./file_index");
+			var scan = fileIndex.resolvePredictionsScan(predSrc, 2);
+			if (scan.warning && status) {
+				status.textContent = (status.textContent || "") + " " + scan.warning;
+			}
+		}
+	} catch (err) {
+		if (status) {
+			status.textContent = "Review scan failed: " + (err.message || err);
+		}
+	}
+}
+
 async function runBuildAsync() {
 	setBuildNavDisabled(true);
-	setStep(4);
+	setStep(5);
 	var logEl = qs("wizardLog");
 	if (logEl) {
 		logEl.textContent = "";
@@ -244,12 +365,15 @@ async function runBuildAsync() {
 		project.createProject({
 			bundleRoot: bundleRoot,
 			name: name,
+			projectFilename: wizardState.projectFilename,
 			referenceOnly: referenceOnly,
 			roles: roles,
 			sources: Object.assign({}, wizardState.sources),
 		});
 		setActivity("Project bundle created", 10);
-		verboseLog("Wrote " + branding.PROJECT_FILENAME);
+		verboseLog(
+			"Wrote " + (wizardState.projectFilename || branding.PROJECT_FILENAME),
+		);
 		await yieldToUi();
 
 		var entries = [];
@@ -268,7 +392,7 @@ async function runBuildAsync() {
 				verboseLog("Import " + role + " from " + src);
 				await yieldToUi();
 
-				var entry = project.importSourceToRole(src, role, mode, bundleRoot, roles, {
+				var entry = project.importSourceToRoleWithLayout(src, role, mode, bundleRoot, roles, {
 					yieldFn: yieldToUi,
 					yieldEvery: 10,
 					onProgress: function (ev) {
@@ -316,13 +440,16 @@ async function runBuildAsync() {
 		verboseLog("Import log written");
 		await yieldToUi();
 
-		setActivity("Building manifest…", 75);
-		verboseLog("Scanning roles for manifest…");
+		project.ensureBundleLayout(bundleRoot);
+		setActivity("Building file index…", 75);
+		verboseLog("Scanning roles and outputs…");
 		await yieldToUi();
-		await project.buildManifest(bundleRoot, async function (pct, msg) {
-			setActivity(msg, 75 + Math.round(pct * 0.2));
-			verboseLog(msg);
-			await yieldToUi();
+		await project.refreshProjectIndex(bundleRoot, {
+			onProgress: async function (pct, msg) {
+				setActivity(msg, 75 + Math.round(pct * 0.2));
+				verboseLog(msg);
+				await yieldToUi();
+			},
 		});
 
 		setActivity("Project ready: " + name, 100);
@@ -373,24 +500,46 @@ function init() {
 	qs("chooseBundle").addEventListener("click", function () {
 		project.chooseNewBundleLocation(function (selected) {
 			if (selected) {
-				wizardState.bundleRoot = selected;
-				qs("bundlePath").value = selected;
-				if (!qs("projectName").value) {
-					qs("projectName").value = path
-						.basename(selected)
-						.replace(/\.(masonjar|belljar)$/i, "");
+				wizardState.parentDir = selected;
+				var parentEl = qs("parentDir");
+				if (parentEl) {
+					parentEl.value = selected;
 				}
+				updateBundlePathPreview();
 			}
 		});
 	});
 
+	var projectNameEl = qs("projectName");
+	if (projectNameEl) {
+		projectNameEl.addEventListener("input", updateBundlePathPreview);
+	}
+
 	qs("step1Next").addEventListener("click", function () {
-		var bundle = qs("bundlePath").value;
-		if (!bundle) {
-			alert("Choose a bundle folder.");
+		var name = projectNameEl ? projectNameEl.value.trim() : "";
+		if (!name) {
+			alert("Enter a project name.");
 			return;
 		}
-		wizardState.bundleRoot = bundle;
+		if (!wizardState.parentDir) {
+			alert("Choose a parent folder for the project.");
+			return;
+		}
+		var resolved = project.resolveNewBundlePath(wizardState.parentDir, name);
+		wizardState.bundleRoot = resolved.bundleRoot;
+		wizardState.projectFilename = resolved.projectFilename;
+		if (fs.existsSync(resolved.bundleRoot) && project.isBundleRoot(resolved.bundleRoot)) {
+			alert("A project already exists at:\n" + resolved.bundleRoot);
+			return;
+		}
+		try {
+			fs.mkdirSync(resolved.bundleRoot, { recursive: true });
+			project.ensureBundleLayout(resolved.bundleRoot);
+			qs("bundlePath").value = resolved.bundleRoot;
+		} catch (layoutErr) {
+			alert(String(layoutErr.message || layoutErr));
+			return;
+		}
 		setStep(2);
 	});
 
@@ -413,13 +562,31 @@ function init() {
 			}
 		}
 		setStep(3);
-		updateImportWarning();
+		loadReviewStep();
 	});
 
 	qs("step3Back").addEventListener("click", function () {
 		setStep(2);
 	});
 	qs("step3Next").addEventListener("click", function () {
+		setStep(4);
+		updateImportWarning();
+	});
+
+	var reviewConfirm = qs("reviewConfirm");
+	if (reviewConfirm) {
+		reviewConfirm.addEventListener("change", function () {
+			var nextBtn = qs("step3Next");
+			if (nextBtn) {
+				nextBtn.disabled = !reviewConfirm.checked;
+			}
+		});
+	}
+
+	qs("step4Back").addEventListener("click", function () {
+		setStep(3);
+	});
+	qs("step4Next").addEventListener("click", function () {
 		runBuildAsync();
 	});
 

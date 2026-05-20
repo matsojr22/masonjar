@@ -4,56 +4,164 @@
  * Load key renderer pages in a headless Electron window and fail on load alerts.
  * Run: ./node_modules/.bin/electron scripts/smoke-pages.js
  */
+const fs = require("fs");
 const path = require("path");
-const { app, BrowserWindow, dialog } = require("electron");
+const { app, BrowserWindow } = require("electron");
+const branding = require("../js/branding");
+const project = require("../js/project");
+const helpers = require("./test-helpers");
 
 const PAGES = [
 	"loading.html",
 	"menu.html",
 	"project_start.html",
 	"project_wizard.html",
+	"czi_wizard.html",
 	"workspace_menu.html",
 	"menu_category.html",
 	"credits.html",
 	"batch_select.html",
 ];
 
+/** page → required element ids (executeJavaScript in renderer). */
+const DOM_ASSERTIONS = {
+	"project_wizard.html": [
+		"step3",
+		"wizard-review-scroll",
+		"reviewTable",
+		"reviewTableBody",
+		"reviewConfirm",
+	],
+	"workspace_menu.html": [
+		"projectSubsetSection",
+		"subsetEnabled",
+		"subsetSliceList",
+	],
+};
+
 const repoRoot = path.join(__dirname, "..");
+
+function setupSmokeProjectBundle() {
+	var bundle = helpers.tmpDir("mj-smoke-");
+	var now = new Date().toISOString();
+	var roles = project.CANONICAL_ROLES;
+	var roleKeys = Object.keys(roles);
+	for (var i = 0; i < roleKeys.length; i++) {
+		fs.mkdirSync(path.join(bundle, roles[roleKeys[i]]), { recursive: true });
+	}
+	fs.mkdirSync(path.join(bundle, branding.META_DIR), { recursive: true });
+	var projectData = {
+		version: "1.0",
+		name: "SmokeTest",
+		layout: branding.LAYOUT_ID,
+		created: now,
+		modified: now,
+		roles: Object.assign({}, roles),
+		sources: {},
+		settings: {},
+		pipeline: {},
+		reference_only: false,
+		alignments: {},
+		processing: project.defaultProcessing(),
+	};
+	var projectFile = path.join(bundle, "M528.masonjar");
+	fs.writeFileSync(projectFile, JSON.stringify(projectData, null, 2), "utf8");
+	helpers.writeFileIndex(bundle, [
+		{
+			sliceId: "M528_s061",
+			role: "dapi",
+			relPath: "data/counting/00_dapi/M528_s061.tif",
+			metadata: { width: 512, height: 512 },
+		},
+		{
+			sliceId: "M528_s061",
+			role: "max",
+			relPath: "data/counting/03_max/M528_s061.tif",
+			metadata: { width: 512, height: 512 },
+		},
+	]);
+	return bundle;
+}
+
+async function seedActiveProject(win, bundlePath) {
+	await win.webContents.executeJavaScript(
+		"localStorage.setItem(" +
+			JSON.stringify(branding.ACTIVE_KEY) +
+			", " +
+			JSON.stringify(bundlePath) +
+			");",
+	);
+}
+
+async function loadPage(win, pageName) {
+	await new Promise(function (resolve, reject) {
+		function onFail(_event, errorCode, errorDescription) {
+			win.webContents.removeListener("did-fail-load", onFail);
+			reject(
+				new Error(
+					pageName +
+						" did-fail-load " +
+						errorCode +
+						": " +
+						errorDescription,
+				),
+			);
+		}
+		win.webContents.once("did-fail-load", onFail);
+		win.webContents.once("did-finish-load", function () {
+			win.webContents.removeListener("did-fail-load", onFail);
+			setTimeout(resolve, 200);
+		});
+		win.loadFile(path.join(repoRoot, "pages", pageName)).catch(reject);
+	});
+}
+
+async function assertDomIds(win, pageName, ids) {
+	var missing = await win.webContents.executeJavaScript(
+		"(function () {\n" +
+			"  var ids = " +
+			JSON.stringify(ids) +
+			";\n" +
+			"  return ids.filter(function (id) { return !document.getElementById(id); });\n" +
+			"})()",
+	);
+	if (missing && missing.length) {
+		throw new Error(
+			pageName +
+				" missing required DOM ids: " +
+				missing.join(", "),
+		);
+	}
+}
 
 app.whenReady().then(async function () {
 	var win = new BrowserWindow({
 		show: false,
 		webPreferences: { nodeIntegration: true, contextIsolation: false },
 	});
+	var smokeBundle = null;
 
-	for (var i = 0; i < PAGES.length; i++) {
-		var pageName = PAGES[i];
-		await new Promise(function (resolve, reject) {
-			function onFail(_event, errorCode, errorDescription) {
-				win.webContents.removeListener("did-fail-load", onFail);
-				reject(
-					new Error(
-						pageName +
-							" did-fail-load " +
-							errorCode +
-							": " +
-							errorDescription,
-					),
-				);
+	try {
+		for (var i = 0; i < PAGES.length; i++) {
+			var pageName = PAGES[i];
+			if (pageName === "workspace_menu.html") {
+				smokeBundle = setupSmokeProjectBundle();
+				await seedActiveProject(win, smokeBundle);
 			}
-			win.webContents.once("did-fail-load", onFail);
-			win.webContents.once("did-finish-load", function () {
-				win.webContents.removeListener("did-fail-load", onFail);
-				setTimeout(resolve, 200);
-			});
-			win
-				.loadFile(path.join(repoRoot, "pages", pageName))
-				.catch(reject);
-		});
-		console.log("OK:", pageName);
+			await loadPage(win, pageName);
+			var domIds = DOM_ASSERTIONS[pageName];
+			if (domIds) {
+				await assertDomIds(win, pageName, domIds);
+			}
+			console.log("OK:", pageName);
+		}
+	} finally {
+		if (smokeBundle) {
+			helpers.rmDir(smokeBundle);
+		}
+		win.destroy();
+		app.quit();
 	}
-	win.destroy();
-	app.quit();
 });
 
 app.on("window-all-closed", function () {

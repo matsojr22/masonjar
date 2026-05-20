@@ -69,3 +69,15 @@ if __name__ == "__main__":
         process_file(file, outputDirectory, args.tophat, args.dendrite)
 
     print("Done!")
+    from run_manifest import write_run_manifest
+
+    write_run_manifest(
+        outputDirectory,
+        {
+            "step": "max",
+            "input_dir": inputDirectory,
+            "input_files": files,
+            "dendrite": bool(args.dendrite),
+            "tophat": bool(args.tophat),
+        },
+    )

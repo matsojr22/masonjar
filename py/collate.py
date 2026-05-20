@@ -167,6 +167,17 @@ def collateCount(objectsFile, safeRegions, resultFile):
         resultWriter.writerows(lines)
 
         print("Done!", flush=True)
+        from run_manifest import write_run_manifest
+
+        write_run_manifest(
+            args.output.strip(),
+            {
+                "step": "collate",
+                "input": args.input.strip(),
+                "structures": args.structures.strip(),
+                "output_dir": args.output.strip(),
+            },
+        )
 
 
 if __name__ == "__main__":

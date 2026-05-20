@@ -20,3 +20,4 @@ wandb
 pytorch-msssim
 timm
 segment-anything-py
+aicspylibczi~=3.3.1

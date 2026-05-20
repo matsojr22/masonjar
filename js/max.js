@@ -1,7 +1,11 @@
+var fs = require("fs");
+var path = require("path");
 var ipc = require("electron").ipcRenderer;
 var workspace = require("./workspace");
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
+var pipelineRun = require("./pipeline_run");
+var pipelineRuns = require("./pipeline_runs");
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
 var run = document.getElementById("run");
@@ -10,18 +14,43 @@ var outdir = document.getElementById("outdir");
 var loadbar = document.getElementById("loadbar");
 var loadmessage = document.getElementById("loadmessage");
 var back = document.getElementById("back");
-var dendrites = document.getElementById("dendrites");
-var cells = document.getElementById("cells");
+var flatOutput = document.getElementById("flatOutput");
+var lastRunRel = "";
+
+pipelineRun.ensureRunModeUi("runModePanel", "max");
 
 run.addEventListener("click", function () {
 	if (indir && outdir && indir.value && outdir.value) {
+		var mode = pipelineRun.getSelectedRunMode("max");
+		var plan = pipelineRun.preparePipelineRun("max", mode);
+		if (project.isActive() && !plan.toProcess.length) {
+			alert("No slices to process (subset empty or all filtered).");
+			return;
+		}
+		var sortedStems = pipelineRuns.listImageSliceStems(indir.value);
+		var slug = pipelineRuns.buildRunSlug("max", {
+			sortedStems: sortedStems,
+			subsetCount: plan.toProcess.length,
+		});
+		var useFlat = flatOutput && flatOutput.checked;
+		var finalOut = pipelineRuns.resolveRunLeaf(outdir.value, "max", slug, useFlat);
+		try {
+			fs.mkdirSync(finalOut, { recursive: true });
+		} catch (mkdirErr) {
+			alert("Could not create output directory: " + (mkdirErr.message || mkdirErr));
+			return;
+		}
+		lastRunRel = useFlat ? "" : pipelineRuns.relFromRoleBase("max", finalOut);
+
 		run.classList.add("disabled");
 		back.classList.remove("btn-warning");
 		back.classList.add("btn-danger");
 		back.innerHTML = "Cancel";
 		run.innerHTML = "<i class='fas fa-spinner fa-spin'></i>";
-
-		ipc.send("runMax", [indir.value, outdir.value, false, false]);
+		if (loadmessage) {
+			loadmessage.innerHTML = plan.summary || "";
+		}
+		ipc.send("runMax", [indir.value, finalOut, false, false]);
 	}
 });
 
@@ -45,10 +74,12 @@ ipc.on("maxResult", function (event, response) {
 	back.classList.add("btn-warning");
 	back.classList.remove("btn-danger");
 	back.innerHTML = "Back";
-	run.innerHTML = "Run";
-	run.classList.remove("disabled");
 	loadmessage.innerHTML = "";
 	loadbar.style.width = "0";
+	if (project.isActive() && lastRunRel) {
+		pipelineRuns.setActiveRunRel("max", lastRunRel);
+		project.refreshProjectIndex().catch(function () {});
+	}
 });
 
 ipc.once("maxError", function (event, response) {

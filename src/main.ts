@@ -154,9 +154,50 @@ const pyScriptsPath = path.join(appDir, "/py");
 const CURRENT_VERSION_TAG = getVersion();
 const GITHUB_API_RELEASES = `https://api.github.com/repos/${BRANDING.GITHUB_REPO}/releases/latest`;
 
-async function checkForUpdates() {
+function loadMenuAndCheckUpdates(targetWin: typeof BrowserWindow) {
+  targetWin.loadFile("pages/menu.html");
+  targetWin.webContents.once("did-finish-load", () => {
+    const url = targetWin.webContents.getURL();
+    if (url.includes("menu.html")) {
+      checkForUpdates(targetWin);
+    }
+  });
+}
+
+function appendSliceListArg(args: string[], data: any[], index: number) {
+  if (data.length > index && data[index] != null) {
+    const sliceListPath = String(data[index]).trim();
+    if (sliceListPath.length > 0) {
+      // Long options must be separate argv entries (or --slice-list=path) for argparse.
+      args.push("--slice-list", sliceListPath);
+    }
+  }
+}
+
+/** CZI scripts: separate -b/-j argv tokens so Windows paths with spaces parse correctly. */
+function appendCziPathArgs(
+  args: string[],
+  bundleRoot: string,
+  configPath?: string,
+) {
+  args.push("-b", String(bundleRoot || "").trim());
+  if (configPath != null && String(configPath).trim().length > 0) {
+    args.push("-j", String(configPath).trim());
+  }
+}
+
+function appendCziInputArg(args: string[], inputDir: string) {
+  args.push("-i", String(inputDir || "").trim());
+}
+
+async function checkForUpdates(parentWin?: typeof BrowserWindow) {
   try {
-    const response = await serverFetch(GITHUB_API_RELEASES);
+    const response = await serverFetch(GITHUB_API_RELEASES, {
+      headers: {
+        "User-Agent": `MasonJar/${CURRENT_VERSION_TAG}`,
+        Accept: "application/vnd.github+json",
+      },
+    });
     // No published releases yet — normal for a new fork; do not alarm the user.
     if (response.status === 404) {
       console.log("No GitHub releases published yet; skipping update check.");
@@ -181,15 +222,18 @@ async function checkForUpdates() {
       currentCoerced &&
       semver.gt(latestCoerced, currentCoerced)
     ) {
-      const userResponse = await dialog.showMessageBox({
-        type: "info",
-        title: "Update Available",
-        message: "A new version of Mason Jar is available.",
-        detail: `The latest version is ${latestCoerced.version}. Would you like to download it?`,
-        buttons: ["Yes", "No"],
-        defaultId: 0,
-        cancelId: 1,
-      });
+      const userResponse = await dialog.showMessageBox(
+        parentWin || undefined,
+        {
+          type: "info",
+          title: "Update Available",
+          message: "A new version of Mason Jar is available.",
+          detail: `The latest version is ${latestCoerced.version}. Would you like to download it?`,
+          buttons: ["Yes", "No"],
+          defaultId: 0,
+          cancelId: 1,
+        }
+      );
 
       if (userResponse.response === 0 && data.html_url) {
         shell.openExternal(data.html_url);
@@ -665,7 +709,7 @@ function setupEnvironment(win: typeof BrowserWindow) {
       .then(({ stdout, stderr }) => {
         console.log(stdout);
         win.webContents.send("updateStatus", "Setup complete!");
-        win.loadFile("pages/menu.html");
+        loadMenuAndCheckUpdates(win);
       })
       .catch((error) => {
         console.log("An error occurred during setup:", error);
@@ -762,18 +806,33 @@ function createWindow() {
 }
 
 function createLogWindow() {
-  const logWin = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 500,
     height: 250,
     resizable: true,
     autoHideMenuBar: true,
     webPreferences: { nodeIntegration: true, contextIsolation: false },
-    closeable: false,
+    closeable: true,
   });
 
-  logWin.loadFile("pages/log.html");
+  win.loadFile("pages/log.html");
+  win.on("closed", () => {
+    logWin = null;
+  });
 
-  return logWin;
+  return win;
+}
+
+function ensureLogWindowVisible(): boolean {
+  if (!logWin || logWin.isDestroyed()) {
+    logWin = createLogWindow();
+    return true;
+  }
+  if (!logWin.isVisible()) {
+    logWin.show();
+  }
+  logWin.focus();
+  return true;
 }
 
 app.on("ready", () => {
@@ -793,15 +852,15 @@ app.on("ready", () => {
       e.preventDefault();
     } else {
       try {
-        logWin.webContents.send("savelogs", []);
-        logWin.close();
+        if (logWin && !logWin.isDestroyed()) {
+          logWin.webContents.send("savelogs", []);
+          logWin.close();
+        }
       } catch (error) {
         // do nothing window was closed
       }
     }
   });
-
-  checkForUpdates();
 
   win.webContents.once("did-finish-load", () => {
     // Make a directory to house enviornment, settings, etc.yarn
@@ -819,7 +878,7 @@ app.on("ready", () => {
             // Check for new patch
             // Check if any directories are missing
             fixMissingDirectories(win).then(() => {
-              win.loadFile("pages/menu.html");
+              loadMenuAndCheckUpdates(win);
             });
           });
         }
@@ -839,6 +898,11 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", function () {
   app.quit();
+});
+
+ipcMain.on("checkForUpdates", (event: any) => {
+  const parent = BrowserWindow.fromWebContents(event.sender);
+  checkForUpdates(parent || win);
 });
 
 ipcMain.on("getVersion", (event: any) => {
@@ -903,11 +967,11 @@ function directoryDialogOptions(
   if (tag === "projectBundle") {
     options.title = `Open ${BRANDING.PRODUCT_NAME} project`;
     options.message =
-      "Select the project folder (e.g. MyBrain.masonjar) that contains project.masonjar or project.belljar.";
+      "Select the project folder (e.g. M528_masonjar) that contains its .masonjar project file or legacy project.belljar.";
   } else if (tag === "newProjectBundle") {
     options.title = `New ${BRANDING.PRODUCT_NAME} project location`;
     options.message =
-      "Choose a parent folder where the new project bundle will be created.";
+      "Choose a parent folder. Mason Jar will create Name_masonjar/ with Name.masonjar and data/ inside.";
   } else if (tag === "brainRoot") {
     options.title = "Legacy brain folder";
     options.message =
@@ -1017,6 +1081,15 @@ function cleanupPythonKillListener(killChannel: string) {
 }
 
 /** Drop orphaned kill-* IPC listeners on Python child error or exit. Scoped to this process only (no single-instance lock). */
+/** Avoid MPS hangs on ops like torchvision::nms during detection on Apple Silicon. */
+function pythonShellEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (process.platform === "darwin") {
+    env.PYTORCH_ENABLE_MPS_FALLBACK = "1";
+  }
+  return env;
+}
+
 function attachPythonShellKillCleanup(
   pyshell: InstanceType<typeof PythonShell>,
   killChannel: string,
@@ -1127,7 +1200,7 @@ ipcMain.on("runAdjust", function (event: any, data: any[]) {
     scriptPath: pyScriptsPath,
     args: [`-i ${data[0]}`, `-s ${structPath}`, `-a ${data[1]}`],
   };
-
+  appendSliceListArg(options.args, data, 2);
   let pyshell = new PythonShell("adjust.py", options);
   attachPythonShellKillCleanup(pyshell, "killAdjust");
   var total: number = 0;
@@ -1185,6 +1258,7 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
       `-l ${data[4]}`,
     ],
   };
+  appendSliceListArg(options.args, data, 5);
   let pyshell = new PythonShell("map.py", options);
   attachPythonShellKillCleanup(pyshell, "killAlign");
   var total: number = 0;
@@ -1241,6 +1315,7 @@ ipcMain.on("runIntensity", function (event: any, data: any[]) {
   if (dapiDir.length > 0) {
     args.push(`-d ${dapiDir}`);
   }
+  appendSliceListArg(args, data, 5);
 
   let options = {
     mode: "text",
@@ -1347,6 +1422,7 @@ ipcMain.on("runCount", function (event: any, data: any[]) {
   if (data[3]) {
     custom_args.push(`--layers`);
   }
+  appendSliceListArg(custom_args, data, 4);
 
   let options = {
     mode: "text",
@@ -1511,11 +1587,14 @@ ipcMain.on("runDetection", function (event: any, data: any[]) {
     custom_args.push(`--multichannel`);
   }
 
+  appendSliceListArg(custom_args, data, 9);
+
   let options = {
     mode: "text",
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args: custom_args,
+    env: pythonShellEnv(),
   };
 
   let pyshell = new PythonShell("find_neurons.py", options);
@@ -1555,6 +1634,178 @@ ipcMain.on("runDetection", function (event: any, data: any[]) {
   ipcMain.once("killDetect", function (event: any, data: any[]) {
     pyshell.kill();
   });
+});
+
+function mapStartupProgressPct(startupPct: number): number {
+  return 3 + Math.round(Math.min(100, Math.max(0, startupPct)) * 0.15);
+}
+
+function mapExtractItemProgressPct(itemPct: number): number {
+  return 22 + Math.round(Math.min(100, Math.max(0, itemPct)) * 0.70);
+}
+
+function runCziPythonScript(
+  event: any,
+  scriptName: string,
+  args: string[],
+  killChannel: string,
+  resultChannel: string,
+) {
+  const pythonExe = path.join(envPythonPath, pyCommand);
+  queueLogLineForUi(`Launching Python: ${scriptName} (${pythonExe})`);
+  event.sender.send("cziJobLog", `Launching Python: ${scriptName}`);
+
+  const options = {
+    mode: "text" as const,
+    pythonPath: pythonExe,
+    scriptPath: pyScriptsPath,
+    args: args,
+    env: pythonShellEnv(),
+  };
+  const pyshell = new PythonShell(scriptName, options);
+  attachPythonShellKillCleanup(pyshell, killChannel);
+  let total = 0;
+  let current = 0;
+  let resultPayload: unknown = null;
+  let processStarted = false;
+
+  function ackProcessStarted() {
+    if (!processStarted) {
+      processStarted = true;
+      queueLogLineForUi("Python process started");
+      event.sender.send("cziJobLog", "Python process started");
+    }
+  }
+
+  pyshell.on("stderr", function (stderr: string) {
+    ackProcessStarted();
+    queueLogLineForUi(stderr);
+    const trimmed = stderr.trim();
+    if (trimmed) {
+      event.sender.send("cziJobLog", trimmed);
+    }
+  });
+  pyshell.on("message", (message: string) => {
+    ackProcessStarted();
+    if (message.startsWith("LOG:")) {
+      const detail = message.slice(4);
+      queueLogLineForUi(detail);
+      event.sender.send("cziJobLog", detail);
+      return;
+    }
+    if (message.startsWith("PROGRESS:")) {
+      const body = message.slice("PROGRESS:".length);
+      const colon = body.indexOf(":");
+      if (colon >= 0) {
+        const startupPct = Number(body.slice(0, colon));
+        const text = body.slice(colon + 1);
+        if (!Number.isNaN(startupPct)) {
+          const displayPct = mapStartupProgressPct(startupPct);
+          event.sender.send("updateLoad", [displayPct, text]);
+          event.sender.send("cziJobLog", text);
+        }
+      }
+      return;
+    }
+    if (message.startsWith("RESULT:")) {
+      try {
+        resultPayload = JSON.parse(message.slice("RESULT:".length));
+      } catch (parseErr) {
+        queueLogLineForUi("CZI: failed to parse result JSON");
+        console.error(parseErr);
+      }
+      return;
+    }
+    if (total === 0) {
+      const n = Number(message);
+      if (!Number.isNaN(n) && n > 0) {
+        total = n;
+        const readyMsg = `Ready — ${n} extraction items`;
+        queueLogLineForUi(readyMsg);
+        event.sender.send("updateLoad", [20, readyMsg]);
+        event.sender.send("cziJobLog", readyMsg);
+        return;
+      }
+    }
+    if (message === "Done!") {
+      pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        const pyFail = describePythonShellFailure(err, code, signal);
+        if (pyFail) {
+          queueLogLineForUi(pyFail);
+          console.error(pyFail, err);
+        }
+        event.sender.send(resultChannel, pyFail ? { ok: false, error: pyFail } : resultPayload);
+        cleanupPythonKillListener(killChannel);
+      });
+    } else {
+      current++;
+      const itemPct = total > 0 ? Math.round((current / total) * 100) : 0;
+      const displayPct = mapExtractItemProgressPct(itemPct);
+      event.sender.send("updateLoad", [displayPct, message]);
+    }
+  });
+
+  ipcMain.once(killChannel, function () {
+    pyshell.kill();
+  });
+}
+
+ipcMain.on("runCziProbe", function (event: any, data: any[]) {
+  const inputDir = data[0] || "";
+  const probeArgs: string[] = [];
+  appendCziInputArg(probeArgs, inputDir);
+  runCziPythonScript(
+    event,
+    "czi_probe.py",
+    probeArgs,
+    "killCziProbe",
+    "cziProbeResult",
+  );
+});
+
+ipcMain.on("runCziImport", function (event: any, data: any[]) {
+  const bundleRoot = data[0] || "";
+  const configPath = data[1] || "";
+  const importArgs: string[] = [];
+  appendCziPathArgs(importArgs, bundleRoot, configPath);
+  runCziPythonScript(
+    event,
+    "czi_extract.py",
+    importArgs,
+    "killCziImport",
+    "cziImportResult",
+  );
+});
+
+ipcMain.on("showLogWindow", function () {
+  ensureLogWindowVisible();
+});
+
+ipcMain.on("toggleLogWindow", function () {
+  if (!logWin || logWin.isDestroyed()) {
+    ensureLogWindowVisible();
+    return;
+  }
+  if (logWin.isVisible()) {
+    logWin.hide();
+  } else {
+    logWin.show();
+    logWin.focus();
+  }
+});
+
+ipcMain.on("runApplyGeometry", function (event: any, data: any[]) {
+  const bundleRoot = data[0] || "";
+  const configPath = data[1] || "";
+  const geometryArgs: string[] = [];
+  appendCziPathArgs(geometryArgs, bundleRoot, configPath);
+  runCziPythonScript(
+    event,
+    "apply_geometry.py",
+    geometryArgs,
+    "killApplyGeometry",
+    "applyGeometryResult",
+  );
 });
 
 function getBatchQueueDeps() {

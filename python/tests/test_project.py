@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from belljar.io import project as project_io
+from belljar.io import file_index as file_index_io
 from belljar.types import (
     CANONICAL_ROLE_PATHS,
     LAYOUT_BELLJAR_V1,
@@ -88,6 +89,26 @@ def test_build_manifest_slice_index(tmp_path: Path) -> None:
     assert data["version"] == 1
     assert len(data["slices"]) == 1
     assert data["slices"][0]["sliceId"] == "M528_s061"
+
+
+def test_compute_match_report_quality(tmp_path: Path) -> None:
+    index = {
+        "files": [
+            {
+                "sliceId": "M528_s061",
+                "role": "dapi",
+                "metadata": {"width": 512, "height": 512},
+            },
+            {
+                "sliceId": "M528_s061",
+                "role": "max",
+                "metadata": {"width": 2048, "height": 2048},
+            },
+        ]
+    }
+    report = file_index_io.compute_match_report(index)
+    assert report["matchedSliceIds"] == ["M528_s061"]
+    assert any(q["code"] == "resolution_mismatch" for q in report["qualityIssues"])
 
 
 def test_import_role_copy(tmp_path: Path) -> None:

@@ -114,3 +114,16 @@ if __name__ == "__main__":
                 print(f"An error occurred: {e}", flush=True)
 
     print("Done!", flush=True)
+    from run_manifest import write_run_manifest
+
+    write_run_manifest(
+        output_path,
+        {
+            "step": "sharpen",
+            "input_dir": str(input_path),
+            "input_files": [str(f.name) for f in input_files],
+            "radius": radius,
+            "amount": amount,
+            "equalize": bool(args.equalize),
+        },
+    )

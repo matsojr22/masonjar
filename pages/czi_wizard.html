@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="../css/style.css" />
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC"
+      crossorigin="anonymous"
+    />
+    <link rel="stylesheet" href="../css/theme.css" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net/; font-src 'self' https://fonts.gstatic.com; img-src 'self' file: data:;"
+    />
+    <title>CZI import — Mason Jar</title>
+    <style>
+      .czi-orient-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 0.75rem;
+        text-align: left;
+      }
+      .czi-orient-tile {
+        border: 1px solid var(--mj-border, #ccc);
+        border-radius: 0.375rem;
+        padding: 0.5rem;
+        background: var(--mj-surface, #fff);
+      }
+      .czi-orient-tile img {
+        width: 100%;
+        height: auto;
+        max-height: 140px;
+        object-fit: contain;
+        background: #111;
+      }
+      .czi-channel-table td {
+        vertical-align: middle;
+      }
+    </style>
+  </head>
+  <body class="wizard-page">
+    <div id="parent" class="container py-4 workspace-block text-start">
+      <h1>Import from Zeiss CZI</h1>
+      <p class="text-muted">
+        Probe <code>.czi</code> files, assign channels, extract z-stacks and previews, max-project
+        signal channels, then confirm slice orientation before opening the pipeline.
+      </p>
+
+      <ul class="nav nav-pills mb-3" id="wizardSteps">
+        <li class="nav-item"><span class="nav-link active" data-step="1">1. Location</span></li>
+        <li class="nav-item"><span class="nav-link disabled" data-step="2">2. Scan</span></li>
+        <li class="nav-item"><span class="nav-link disabled" data-step="3">3. Channels / Renaming</span></li>
+        <li class="nav-item"><span class="nav-link disabled" data-step="4">4. Extract</span></li>
+        <li class="nav-item"><span class="nav-link disabled" data-step="5">5. Orient</span></li>
+        <li class="nav-item"><span class="nav-link disabled" data-step="6">6. Finish</span></li>
+      </ul>
+
+      <section id="step1" class="wizard-panel">
+        <div class="mb-3">
+          <label class="form-label" for="projectName">Project name</label>
+          <input type="text" class="form-control" id="projectName" placeholder="M528" />
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="parentDir">Parent folder</label>
+          <div class="input-group">
+            <input type="text" class="form-control" id="parentDir" readonly />
+            <button type="button" class="btn btn-outline-primary" id="chooseParent">
+              Choose folder
+            </button>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="bundlePath">Project folder</label>
+          <input type="text" class="form-control" id="bundlePath" readonly />
+        </div>
+        <button type="button" class="btn btn-primary" id="step1Next">Next</button>
+      </section>
+
+      <section id="step2" class="wizard-panel d-none">
+        <div class="mb-3">
+          <label class="form-label">CZI source folders</label>
+          <p class="small text-muted mb-2">
+            Add one or more folders containing <code>.czi</code> files. Multiple folders default to
+            renamed contiguous slice IDs on the next step.
+          </p>
+          <ul id="cziSourceDirList" class="list-group mb-2"></ul>
+          <button type="button" class="btn btn-outline-primary btn-sm" id="addCziDir">
+            Add folder
+          </button>
+        </div>
+        <p id="probeStatus" class="small text-muted"></p>
+        <div class="table-responsive">
+          <table class="table table-sm" id="cziFileTable">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Scenes</th>
+                <th>Channels</th>
+                <th>Z planes</th>
+              </tr>
+            </thead>
+            <tbody id="cziFileTableBody"></tbody>
+          </table>
+        </div>
+        <button type="button" class="btn btn-outline-secondary" id="step2Back">Back</button>
+        <button type="button" class="btn btn-primary" id="step2Next" disabled>Next</button>
+      </section>
+
+      <section id="step3" class="wizard-panel d-none">
+        <div class="mb-4 border rounded p-3">
+          <h2 class="h6">Renaming</h2>
+          <p class="small text-muted">
+            Choose whether to keep probed scene names or assign contiguous slice IDs for this project.
+          </p>
+          <div class="mb-3">
+            <div class="form-check form-check-inline">
+              <input
+                class="form-check-input"
+                type="radio"
+                name="sliceNumbering"
+                id="sliceNumberingPreserve"
+                value="preserve"
+              />
+              <label class="form-check-label" for="sliceNumberingPreserve">Keep scene names</label>
+            </div>
+            <div class="form-check form-check-inline">
+              <input
+                class="form-check-input"
+                type="radio"
+                name="sliceNumbering"
+                id="sliceNumberingRename"
+                value="rename"
+              />
+              <label class="form-check-label" for="sliceNumberingRename">Rename on import</label>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm" id="renamingTable">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Source file</th>
+                  <th>Scene</th>
+                  <th>Original ID</th>
+                  <th>Slice ID</th>
+                  <th>Source folder</th>
+                </tr>
+              </thead>
+              <tbody id="renamingTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="mb-4 border rounded p-3">
+          <h2 class="h6">Channels</h2>
+          <p class="text-muted">
+            Assign each channel to a pipeline role. All channels are kept by default; uncheck
+            <em>Keep</em> to skip extraction.
+          </p>
+          <div id="channelGlobalBar" class="row g-2 align-items-end mb-3 border rounded p-3 bg-light">
+          <div class="col-auto">
+            <label class="form-label mb-0" for="globalChannelIndex">Channel index</label>
+            <select class="form-select form-select-sm" id="globalChannelIndex"></select>
+          </div>
+          <div class="col-auto">
+            <label class="form-label mb-0" for="globalChannelRole">Role for this index</label>
+            <select class="form-select form-select-sm" id="globalChannelRole"></select>
+          </div>
+          <div class="col-auto d-none" id="otherNameGlobalWrap">
+            <label class="form-label mb-0" for="otherNameGlobal">Other name</label>
+            <input
+              type="text"
+              class="form-control form-control-sm"
+              id="otherNameGlobal"
+              maxlength="32"
+              placeholder="rabies_red"
+            />
+          </div>
+          <div class="col-auto">
+            <button type="button" class="btn btn-sm btn-outline-primary" id="applyChannelDefaults">
+              Apply to all
+            </button>
+          </div>
+          <div class="col-12">
+            <p id="globalChannelHint" class="small text-muted mb-0"></p>
+          </div>
+        </div>
+          <div class="row g-2 align-items-end mb-3">
+            <div class="col-auto">
+              <label class="form-label mb-0" for="primarySignalRole">Primary signal</label>
+              <select class="form-select form-select-sm" id="primarySignalRole"></select>
+            </div>
+            <div class="col">
+              <p class="small text-muted mb-0">
+                Drives the default max run for detection. Other kept signal channels are still
+                extracted.
+              </p>
+            </div>
+          </div>
+        <p id="step3Validation" class="small text-danger d-none"></p>
+        <div class="table-responsive">
+          <table class="table table-sm czi-channel-table" id="channelTable">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Ch</th>
+                <th>Label</th>
+                <th>Role</th>
+                <th>
+                  Keep
+                  <input
+                    type="checkbox"
+                    class="form-check-input ms-1"
+                    id="keepAllChannels"
+                    title="Toggle all"
+                  />
+                </th>
+              </tr>
+            </thead>
+            <tbody id="channelTableBody"></tbody>
+          </table>
+        </div>
+        </div>
+        <button type="button" class="btn btn-outline-secondary" id="step3Back">Back</button>
+        <button type="button" class="btn btn-primary" id="step3Next">Next</button>
+      </section>
+
+      <section id="step4" class="wizard-panel workspace-block d-none">
+        <p id="extractStatus" class="text-muted">Extracting z-stacks, previews, and max projections…</p>
+        <div class="progress mb-3">
+          <div
+            id="extractProgress"
+            class="progress-bar progress-bar-striped progress-bar-animated"
+            role="progressbar"
+            style="width: 0%"
+            aria-valuenow="0"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          ></div>
+        </div>
+        <p id="extractDetail" class="small text-muted mb-2">
+          Detailed lines also appear in the application log window.
+        </p>
+        <pre id="extractLog" class="wizard-log czi-extract-log small text-muted mb-3"></pre>
+        <div class="mt-3">
+          <button type="button" class="btn btn-outline-danger d-none" id="cancelExtract">
+            Cancel extraction
+          </button>
+        </div>
+      </section>
+
+      <section id="step5" class="wizard-panel d-none">
+        <p class="text-muted">
+          Review low-res previews. Use toolbar buttons to rotate or flip each slice (OpenCV applied on
+          confirm).
+        </p>
+        <div class="mb-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="orientApplyAll">
+            Copy first tile geometry to all
+          </button>
+        </div>
+        <div id="orientGrid" class="czi-orient-grid"></div>
+        <div class="mt-3">
+          <button type="button" class="btn btn-outline-secondary" id="step5Back">Back</button>
+          <button type="button" class="btn btn-primary" id="step5Next">Confirm geometry</button>
+        </div>
+      </section>
+
+      <section id="step6" class="wizard-panel d-none">
+        <p id="finishStatus" class="text-muted"></p>
+        <div class="progress mb-2 d-none" id="finishProgressWrap">
+          <div id="finishProgress" class="progress-bar" style="width: 0%"></div>
+        </div>
+        <a class="btn btn-primary d-none" id="openWorkspace" href="./workspace_menu.html"
+          >Open workspace</a
+        >
+        <a class="btn btn-warning ms-2" href="./menu.html">Hub</a>
+      </section>
+
+      <div class="mt-4">
+        <a
+          class="btn btn-outline-secondary"
+          id="wizardCancel"
+          href="./project_start.html"
+          >Cancel wizard</a
+        >
+      </div>
+    </div>
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"
+      integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p"
+      crossorigin="anonymous"
+    ></script>
+    <script src="../js/run.js" data-entry="czi_wizard.js"></script>
+  </body>
+</html>

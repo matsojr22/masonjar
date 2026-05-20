@@ -2,6 +2,8 @@ var ipc = require("electron").ipcRenderer;
 var workspace = require("./workspace");
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
+var pipelineRun = require("./pipeline_run");
+var pipelineRuns = require("./pipeline_runs");
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
 var run = document.getElementById("run");
@@ -13,12 +15,33 @@ var back = document.getElementById("back");
 
 run.addEventListener("click", function () {
 	if (imdir && imdir.value && annodir && annodir.value) {
+		if (project.isActive()) {
+			var slicesLeaf = pipelineRuns.resolveActiveRunLeafAbs("slices");
+			if (slicesLeaf) {
+				annodir.value = slicesLeaf;
+			}
+		}
+		var session = pipelineRun.prepareAdjustSession();
+		if (project.isActive() && !session.sliceIds.length) {
+			alert(
+				"No matched DAPI/annotation pairs in the project index. Check paths and file names.",
+			);
+			return;
+		}
+
 		run.classList.add("disabled");
 		back.classList.remove("btn-warning");
 		back.classList.add("btn-danger");
 		back.innerHTML = "Cancel";
 		run.innerHTML = "<i class='fas fa-spinner fa-spin'></i>";
-		ipc.send("runAdjust", [imdir.value, annodir.value]);
+		if (session.summary && loadmessage) {
+			loadmessage.innerHTML = session.summary;
+		}
+		ipc.send("runAdjust", [
+			imdir.value,
+			annodir.value,
+			session.sliceListPath || "",
+		]);
 	}
 });
 

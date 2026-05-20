@@ -127,6 +127,19 @@ function resolveCountingFolders(countingRoot) {
 			}
 		}
 	}
+	var fi = null;
+	try {
+		fi = require("./file_index");
+	} catch (err) {
+		fi = null;
+	}
+	if (fi && resolved.predictions) {
+		var scan = fi.resolvePredictionsScan(resolved.predictions, 2);
+		resolved.predictions = scan.resolvedPath;
+		if (scan.warning) {
+			resolved._predictionsScanWarning = scan.warning;
+		}
+	}
 	return resolved;
 }
 

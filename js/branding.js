@@ -25,5 +25,7 @@ module.exports = {
 	LEGACY_ACTIVE_KEY: "belljar.activeProject",
 	WORKSPACE_KEY: "masonjar.workspace",
 	LEGACY_WORKSPACE_KEY: "belljar.workspace",
+	SHOW_LOG_WINDOW_KEY: "masonjar.showLogWindow",
+	LEGACY_SHOW_LOG_WINDOW_KEY: "belljar.showLogWindow",
 	GITHUB_REPO: "matsojr22/masonjar",
 };

@@ -1,0 +1,355 @@
+#!/usr/bin/env node
+"use strict";
+
+/**
+ * Canonical Mason Jar release build (GitHub artifacts).
+ *
+ * Agents and humans MUST use this script for releases — do not run a single
+ * `electron-forge make --arch=arm64` on the host machine and treat that as a
+ * full release.
+ *
+ * Usage:
+ *   node scripts/build-release.js              # all GitHub targets
+ *   node scripts/build-release.js --local    # host OS/arch only (dev smoke)
+ *   node scripts/build-release.js --no-test  # skip yarn test:js / test:smoke
+ *   node scripts/build-release.js --dry-run  # print plan only
+ *   node scripts/build-release.js --linux    # include Linux .deb (needs dpkg/fakeroot)
+ */
+
+const { spawnSync } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+
+const REPO_ROOT = path.join(__dirname, "..");
+const FORGE_MAKE = path.join(
+	REPO_ROOT,
+	"node_modules",
+	"@electron-forge",
+	"cli",
+	"dist",
+	"electron-forge-make.js",
+);
+const OUT_MAKE = path.join(REPO_ROOT, "out", "make");
+
+/** Default GitHub release targets (macOS + Windows). Linux omitted unless --linux. */
+const DEFAULT_RELEASE_TARGETS = [
+	{
+		platform: "darwin",
+		arch: "x64",
+		label: "macOS Intel",
+		githubName: "macOS (Intel)",
+	},
+	{
+		platform: "darwin",
+		arch: "arm64",
+		label: "macOS Apple Silicon",
+		githubName: "macOS (Apple Silicon)",
+	},
+	{
+		platform: "win32",
+		arch: "x64",
+		label: "Windows x64",
+		githubName: "Windows (x64)",
+	},
+];
+
+const LINUX_RELEASE_TARGETS = [
+	{
+		platform: "linux",
+		arch: "x64",
+		label: "Linux x64",
+		githubName: "Linux (x64)",
+	},
+	{
+		platform: "linux",
+		arch: "arm64",
+		label: "Linux arm64",
+		githubName: "Linux (arm64)",
+	},
+];
+
+function releaseTargets(opts) {
+	if (opts.linux) {
+		return DEFAULT_RELEASE_TARGETS.concat(LINUX_RELEASE_TARGETS);
+	}
+	return DEFAULT_RELEASE_TARGETS;
+}
+
+function readVersion() {
+	const pkg = JSON.parse(
+		fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+	);
+	return pkg.version;
+}
+
+function parseArgs(argv) {
+	const opts = {
+		local: false,
+		dryRun: false,
+		noTest: false,
+		linux: false,
+	};
+	for (let i = 2; i < argv.length; i++) {
+		const a = argv[i];
+		if (a === "--local") {
+			opts.local = true;
+		} else if (a === "--dry-run") {
+			opts.dryRun = true;
+		} else if (a === "--no-test") {
+			opts.noTest = true;
+		} else if (a === "--linux") {
+			opts.linux = true;
+		} else if (a === "--help" || a === "-h") {
+			console.log(`Mason Jar release build
+
+  node scripts/build-release.js           macOS (Intel + ARM) + Windows zip
+  node scripts/build-release.js --linux   Also build Linux .deb (needs dpkg/fakeroot)
+  node scripts/build-release.js --local   Current machine only (NOT for GitHub)
+  node scripts/build-release.js --no-test Skip dev tests before packaging
+  node scripts/build-release.js --dry-run Show targets only
+
+Agents: always run the default release build unless the user explicitly asks for a local dev package.
+`);
+			process.exit(0);
+		} else {
+			console.error("Unknown option:", a);
+			process.exit(1);
+		}
+	}
+	return opts;
+}
+
+function hostTarget() {
+	const platform = process.platform;
+	const arch = os.arch() === "x64" ? "x64" : os.arch() === "arm64" ? "arm64" : os.arch();
+	const all = DEFAULT_RELEASE_TARGETS.concat(LINUX_RELEASE_TARGETS);
+	const match = all.find((t) => t.platform === platform && t.arch === arch);
+	if (match) {
+		return [match];
+	}
+	return [
+		{
+			platform,
+			arch,
+			label: platform + " " + arch,
+			githubName: platform + " " + arch,
+		},
+	];
+}
+
+let dryRunMode = false;
+
+function run(cmd, args, label) {
+	console.log("\n>>", label || [cmd, ...args].join(" "));
+	if (dryRunMode) {
+		return { status: 0 };
+	}
+	const r = spawnSync(cmd, args, {
+		cwd: REPO_ROOT,
+		stdio: "inherit",
+		env: process.env,
+	});
+	return r;
+}
+
+function runNodeForge(target) {
+	if (!fs.existsSync(FORGE_MAKE)) {
+		console.error(
+			"Missing Electron Forge. Run: npm install or yarn install in the repo root.",
+		);
+		process.exit(1);
+	}
+	return run(
+		process.execPath,
+		[FORGE_MAKE, "--platform=" + target.platform, "--arch=" + target.arch],
+		"electron-forge make " + target.platform + "/" + target.arch,
+	);
+}
+
+function findArtifacts(version) {
+	const found = [];
+	if (!fs.existsSync(OUT_MAKE)) {
+		return found;
+	}
+	const versionNeedle = "-" + version;
+	function isReleaseArtifact(name) {
+		if (!/\.(dmg|zip|deb|rpm)$/i.test(name)) {
+			return false;
+		}
+		if (!name.toLowerCase().startsWith("masonjar")) {
+			return false;
+		}
+		return name.indexOf(versionNeedle) !== -1 || name.indexOf(version) !== -1;
+	}
+	function walk(dir) {
+		let entries;
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch (_e) {
+			return;
+		}
+		for (const ent of entries) {
+			const full = path.join(dir, ent.name);
+			if (ent.isDirectory()) {
+				walk(full);
+			} else if (ent.isFile() && isReleaseArtifact(ent.name)) {
+				found.push(full);
+			}
+		}
+	}
+	walk(OUT_MAKE);
+	return [...new Set(found)].sort();
+}
+
+function writeManifest(version, targets, artifacts) {
+	const lines = [
+		"# Mason Jar release artifacts",
+		"",
+		"Version: " + version,
+		"Built: " + new Date().toISOString(),
+		"Host: " + os.platform() + " " + os.arch(),
+		"",
+		"## GitHub release checklist",
+		"",
+		"1. Tag: `v" + version + "` (must match package.json).",
+		"2. Upload **every** artifact below to:",
+		"   https://github.com/matsojr22/masonjar/releases/new",
+		"3. Typical Windows users need the **win32 x64 zip**, not a .dmg.",
+		"4. Intel Macs need **darwin x64**; Apple Silicon needs **darwin arm64**.",
+		"",
+		"## Targets built",
+		"",
+	];
+	for (const t of targets) {
+		lines.push("- " + t.label + " (`" + t.platform + "/" + t.arch + "`)");
+	}
+	if (!targets.some((t) => t.platform === "linux")) {
+		lines.push(
+			"",
+			"_Linux builds skipped (default). Use `node scripts/build-release.js --linux` on a machine with `dpkg` and `fakeroot` if needed._",
+		);
+	}
+	lines.push("", "## Files", "");
+	if (artifacts.length === 0) {
+		lines.push("(none found — check out/make/)");
+	} else {
+		for (const a of artifacts) {
+			const rel = path.relative(REPO_ROOT, a);
+			let size = "";
+			try {
+				size = " (" + Math.round(fs.statSync(a).size / 1024 / 1024) + " MB)";
+			} catch (_e) {
+				/* ignore */
+			}
+			lines.push("- `" + rel + "`" + size);
+		}
+	}
+	lines.push("");
+	const outPath = path.join(OUT_MAKE, "RELEASE-" + version + ".md");
+	fs.mkdirSync(OUT_MAKE, { recursive: true });
+	fs.writeFileSync(outPath, lines.join("\n"), "utf8");
+	console.log("\nWrote", path.relative(REPO_ROOT, outPath));
+	return outPath;
+}
+
+function resolveTsc() {
+	const bin = path.join(REPO_ROOT, "node_modules", ".bin", "tsc");
+	if (fs.existsSync(bin)) {
+		return bin;
+	}
+	return path.join(REPO_ROOT, "node_modules", "typescript", "bin", "tsc");
+}
+
+function main() {
+	const opts = parseArgs(process.argv);
+	dryRunMode = opts.dryRun;
+
+	if (!fs.existsSync(path.join(REPO_ROOT, "node_modules"))) {
+		console.error("Run npm install or yarn install before building.");
+		process.exit(1);
+	}
+
+	const version = readVersion();
+	const targets = opts.local ? hostTarget() : releaseTargets(opts);
+
+	console.log("Mason Jar release build v" + version);
+	if (opts.local) {
+		console.warn(
+			"\n*** --local: building for this machine only. NOT sufficient for GitHub release. ***\n",
+		);
+	} else {
+		console.log("\nFull GitHub release targets:");
+		for (const t of targets) {
+			console.log("  -", t.label, "→", t.githubName);
+		}
+	}
+
+	if (opts.dryRun) {
+		console.log("\n(dry-run: no compile, tests, or forge)");
+		process.exit(0);
+	}
+
+	let r = run(process.execPath, [resolveTsc()], "tsc (compile main process)");
+	if (r.status !== 0) {
+		process.exit(r.status || 1);
+	}
+
+	if (!opts.noTest) {
+		r = run(process.execPath, [path.join(REPO_ROOT, "scripts", "test-file-index.js")], "test-file-index.js");
+		if (r.status !== 0) {
+			process.exit(r.status || 1);
+		}
+		r = run(process.execPath, [path.join(REPO_ROOT, "scripts", "test-pipeline-run.js")], "test-pipeline-run.js");
+		if (r.status !== 0) {
+			process.exit(r.status || 1);
+		}
+	}
+
+	const failed = [];
+	for (const target of targets) {
+		r = runNodeForge(target);
+		if (r.status !== 0) {
+			failed.push(target.label);
+			console.error("FAILED:", target.label);
+		}
+	}
+
+	const artifacts = findArtifacts(version);
+	writeManifest(version, targets, artifacts);
+
+	console.log("\n=== Build complete ===\n");
+	if (artifacts.length) {
+		for (const a of artifacts) {
+			console.log(" ", path.relative(REPO_ROOT, a));
+		}
+	}
+
+	if (failed.length) {
+		console.error("\nSome targets failed:", failed.join(", "));
+		console.error("Fix errors and re-run. Do not publish a partial release without noting missing platforms.");
+		process.exit(1);
+	}
+
+	if (!opts.local && artifacts.length < targets.length) {
+		console.warn(
+			"\nWarning: expected artifacts for",
+			targets.length,
+			"targets but found",
+			artifacts.length,
+			"files. Review out/make/ before publishing.",
+		);
+	}
+
+	if (!opts.local) {
+		console.log(
+			"\nNext: create GitHub release tag v" +
+				version +
+				" and upload all artifacts listed in out/make/RELEASE-" +
+				version +
+				".md",
+		);
+	}
+}
+
+main();

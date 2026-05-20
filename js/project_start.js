@@ -44,21 +44,6 @@ function updateTrailForPanel(panel) {
 	navTrail.renderTrail(steps, "navTrail");
 }
 
-function bundleNameFromProjectName(name) {
-	var trimmed = (name || "").trim();
-	if (!trimmed) {
-		return "";
-	}
-	var lower = trimmed.toLowerCase();
-	if (
-		lower.endsWith(branding.BUNDLE_SUFFIX) ||
-		lower.endsWith(branding.LEGACY_BUNDLE_SUFFIX)
-	) {
-		return trimmed;
-	}
-	return trimmed + branding.BUNDLE_SUFFIX;
-}
-
 function handleAction(action, target) {
 	if (action === "show-fresh") {
 		showPanel(freshPanel);
@@ -93,22 +78,22 @@ function handleAction(action, target) {
 			alert("Choose a parent directory.");
 			return;
 		}
-		var bundleFolder = bundleNameFromProjectName(name);
-		var bundleRoot = path.join(parentDir, bundleFolder);
-		if (fs.existsSync(bundleRoot)) {
-			alert("A bundle already exists at:\n" + bundleRoot);
+		var resolved = project.resolveNewBundlePath(parentDir, name);
+		if (fs.existsSync(resolved.bundleRoot)) {
+			alert("A bundle already exists at:\n" + resolved.bundleRoot);
 			return;
 		}
 		if (target) {
 			target.disabled = true;
 		}
 		try {
-			fs.mkdirSync(bundleRoot, { recursive: true });
+			fs.mkdirSync(resolved.bundleRoot, { recursive: true });
 			project.createProject({
-				bundleRoot: bundleRoot,
-				name: name.replace(/\.(masonjar|belljar)$/i, ""),
+				bundleRoot: resolved.bundleRoot,
+				name: resolved.name,
+				projectFilename: resolved.projectFilename,
 			});
-			project.openProject(bundleRoot);
+			project.openProject(resolved.bundleRoot);
 			window.location.href = WORKSPACE_MENU;
 		} catch (err) {
 			alert(String(err.message || err));
