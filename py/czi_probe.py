@@ -9,6 +9,7 @@ from pathlib import Path
 from czi_common import (
     channel_indices_from_czi,
     default_slice_id,
+    dim_size,
     emit_progress,
     emit_result,
     natural_sort_czi_paths,
@@ -29,7 +30,10 @@ def probe_file(path: Path) -> dict:
 
     czi = CziFile(str(path))
     blocks = normalized_dim_blocks(czi)
-    dims = "".join(sorted(blocks[0].keys())) if blocks else ""
+    dim_letters = sorted({str(k).upper() for b in blocks for k in b.keys()})
+    dims = "".join(dim_letters)
+    is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
+    has_m_dim = dim_size(blocks[0], "M") > 1 if blocks else False
     scene_indices = scene_indices_from_czi(czi)
     channel_indices = channel_indices_from_czi(czi)
     z_count = len(z_indices_from_czi(czi))
@@ -61,6 +65,8 @@ def probe_file(path: Path) -> dict:
         "path": str(path),
         "basename": basename,
         "dims": dims,
+        "is_mosaic": is_mosaic,
+        "has_m_dim": has_m_dim,
         "scene_count": len(scene_indices),
         "channel_count": len(channel_indices),
         "z_count": z_count,

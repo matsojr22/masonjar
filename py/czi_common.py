@@ -275,3 +275,106 @@ def z_indices_from_czi(czi) -> list[int]:
     blocks = normalized_dim_blocks(czi)
     z_count = dim_size(blocks[0], "Z")
     return list(range(z_count))
+
+
+def unpack_read_image(result: Any) -> tuple[Any, list[tuple[str, int]]]:
+    """Accept bare ndarray (legacy) or aicspylibczi 3.x (data, dims) tuple."""
+    if isinstance(result, tuple) and len(result) == 2:
+        data, dims = result
+        if isinstance(dims, list):
+            return data, [(str(d[0]), int(d[1])) for d in dims if len(d) >= 2]
+    return result, []
+
+
+def collapse_to_plane_2d(
+    data: Any,
+    dims: list[tuple[str, int]],
+    fixed: set[str] | None = None,
+) -> Any:
+    """Index 0 for kwargs-fixed dimensions; keep Y/X axes."""
+    import numpy as _np
+
+    fixed_upper = {str(d).upper() for d in (fixed or set())}
+    arr = _np.asarray(data)
+    if not dims:
+        return arr
+    letters = [str(d[0]).upper() for d in dims]
+    for axis in range(len(letters) - 1, -1, -1):
+        if axis >= arr.ndim:
+            continue
+        if letters[axis] in fixed_upper:
+            arr = _np.take(arr, 0, axis=axis)
+    return arr
+
+
+def _plane_area(plane: Any) -> int:
+    import numpy as _np
+
+    arr = _np.asarray(plane)
+    while arr.ndim > 2:
+        arr = arr[0]
+    if arr.ndim < 2:
+        return 0
+    return int(arr.shape[0]) * int(arr.shape[1])
+
+
+def select_largest_plane(data: Any) -> tuple[Any, bool]:
+    """When pyramid levels stack on a leading axis, pick the largest Y×X plane."""
+    import numpy as _np
+
+    arr = _np.asarray(data)
+    if arr.ndim == 1 and arr.dtype == object:
+        best = arr[0]
+        best_area = _plane_area(best)
+        picked = False
+        for i in range(1, int(arr.shape[0])):
+            area = _plane_area(arr[i])
+            if area > best_area:
+                best_area = area
+                best = arr[i]
+                picked = True
+        return _np.asarray(best), picked
+
+    selected = False
+    while arr.ndim > 2:
+        best_idx = 0
+        best_area = -1
+        for i in range(int(arr.shape[0])):
+            area = _plane_area(arr[i])
+            if area > best_area:
+                best_area = area
+                best_idx = i
+        if best_area <= 0:
+            arr = arr[0]
+        else:
+            if best_idx != 0 or int(arr.shape[0]) > 1:
+                selected = True
+            arr = arr[best_idx]
+    return arr, selected
+
+
+def read_czi_plane(czi, scene: int, z: int, channel: int) -> Any:
+    """Read one S/Z/C plane at full resolution (pyramid-safe, mosaic-aware)."""
+    import numpy as _np
+
+    is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
+    fixed = {"S", "Z", "C"}
+    if is_mosaic:
+        result = czi.read_mosaic(scale_factor=1.0, S=scene, Z=z, C=channel)
+        data, dims = unpack_read_image(result)
+        if not isinstance(data, _np.ndarray):
+            data = _np.asarray(data)
+        plane = data
+        while plane.ndim > 2:
+            plane = plane[0]
+    else:
+        result = czi.read_image(S=scene, Z=z, C=channel)
+        data, dims = unpack_read_image(result)
+        plane = collapse_to_plane_2d(data, dims, fixed=fixed)
+        plane, picked = select_largest_plane(plane)
+        if picked:
+            h, w = plane.shape[:2]
+            emit_log(f"  selected largest plane ({h}×{w})")
+    if plane.dtype != _np.uint8 and plane.dtype != _np.uint16:
+        plane = plane.astype(_np.uint16)
+    return plane

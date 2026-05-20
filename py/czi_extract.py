@@ -17,6 +17,7 @@ from czi_common import (
     branch_for_role_key,
     dapi_preview_path,
     default_slice_id,
+    dim_size,
     emit_log,
     emit_progress,
     emit_progress_phase,
@@ -28,7 +29,9 @@ from czi_common import (
     natural_sort_filenames,
     natural_sort_key,
     natural_sort_slice_ids,
+    normalized_dim_blocks,
     original_scans_path,
+    read_czi_plane,
     role_key_for_channel,
     signal_preview_path,
     slice_order_ordinal_map,
@@ -71,13 +74,7 @@ def max_project_file(input_path: Path, output_path: Path) -> None:
 
 
 def read_plane(czi, scene: int, z: int, channel: int):
-    img = czi.read_image(S=scene, Z=z, C=channel)
-    arr = np.asarray(img)
-    while arr.ndim > 2:
-        arr = arr[0]
-    if arr.dtype != np.uint8 and arr.dtype != np.uint16:
-        arr = arr.astype(np.uint16)
-    return arr
+    return read_czi_plane(czi, scene, z, channel)
 
 
 def extract_z_stack(
@@ -360,11 +357,22 @@ def main() -> int:
     extracted_by_role_key: dict[str, list[str]] = {}
     czi_cache: dict[str, object] = {}
 
+    mosaic_logged: set[str] = set()
+
     def get_czi(path: Path):
         key = str(path.resolve())
         if key not in czi_cache:
             emit_log(f"  Opening CZI {path.name} (first open for this file)")
-            czi_cache[key] = CziFile(key)
+            czi = CziFile(key)
+            blocks = normalized_dim_blocks(czi)
+            dim_letters = sorted({str(k).upper() for b in blocks for k in b.keys()})
+            dims_str = "".join(dim_letters)
+            is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
+            emit_log(f"  dims={dims_str or '?'}, is_mosaic={is_mosaic}")
+            if is_mosaic and key not in mosaic_logged:
+                emit_log("  mosaic read, scale_factor=1.0")
+                mosaic_logged.add(key)
+            czi_cache[key] = czi
         return czi_cache[key]
 
     for i, item in enumerate(work):

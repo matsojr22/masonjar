@@ -461,6 +461,12 @@ function renderCziFileTable(files) {
 		var f = files[i];
 		var tr = document.createElement("tr");
 		var err = f.error ? ' <span class="text-danger">' + f.error + "</span>" : "";
+		var mosaicLabel = "—";
+		if (f.is_mosaic === true) {
+			mosaicLabel = "Yes";
+		} else if (f.is_mosaic === false) {
+			mosaicLabel = "No";
+		}
 		tr.innerHTML =
 			"<td>" +
 			(f.basename || path.basename(f.path || "")) +
@@ -471,6 +477,8 @@ function renderCziFileTable(files) {
 			(f.channel_count != null ? f.channel_count : "—") +
 			"</td><td>" +
 			(f.z_count != null ? f.z_count : "—") +
+			"</td><td>" +
+			mosaicLabel +
 			"</td>";
 		tbody.appendChild(tr);
 	}

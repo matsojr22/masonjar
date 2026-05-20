@@ -17,6 +17,7 @@ from czi_common import (  # noqa: E402
     branch_for_channel,
     branch_for_role,
     branch_for_role_key,
+    collapse_to_plane_2d,
     default_slice_id,
     load_import_config,
     max_output_run_dir,
@@ -25,9 +26,12 @@ from czi_common import (  # noqa: E402
     natural_sort_slice_ids,
     original_scans_path,
     parse_section_suffix,
+    read_czi_plane,
     role_key_for_channel,
     sanitize_other_name,
+    select_largest_plane,
     suggest_role_from_label,
+    unpack_read_image,
 )
 
 
@@ -110,3 +114,83 @@ def test_natural_sort_key_orders_scene_index() -> None:
     a = natural_sort_key(slice_id="block_s001", basename="a.czi", scene_index=1)
     b = natural_sort_key(slice_id="block_s001", basename="a.czi", scene_index=0)
     assert a > b
+
+
+def test_unpack_read_image_tuple() -> None:
+    import numpy as np
+
+    arr = np.zeros((1, 10, 20), dtype=np.uint16)
+    data, dims = unpack_read_image((arr, [("Z", 1), ("Y", 10), ("X", 20)]))
+    assert data is arr
+    assert dims == [("Z", 1), ("Y", 10), ("X", 20)]
+
+
+def test_unpack_read_image_never_asarray_tuple() -> None:
+    import numpy as np
+
+    arr = np.zeros((10, 20), dtype=np.uint16)
+    result = (arr, [("Y", 10), ("X", 20)])
+    with pytest.raises(ValueError):
+        np.asarray(result)
+    data, dims = unpack_read_image(result)
+    assert data.shape == (10, 20)
+    assert dims == [("Y", 10), ("X", 20)]
+
+
+def test_collapse_to_plane_2d_fixed_dims() -> None:
+    import numpy as np
+
+    arr = np.arange(200, dtype=np.uint16).reshape(1, 10, 20)
+    plane = collapse_to_plane_2d(arr, [("Z", 1), ("Y", 10), ("X", 20)], fixed={"Z", "S", "C"})
+    assert plane.shape == (10, 20)
+
+
+def test_select_largest_plane_pyramid_stack() -> None:
+    import numpy as np
+
+    small = np.zeros((50, 50), dtype=np.uint16)
+    large = np.zeros((100, 100), dtype=np.uint16)
+    stack = np.array([small, large], dtype=object)
+    plane, picked = select_largest_plane(stack)
+    assert plane.shape == (100, 100)
+    assert picked is True
+
+
+def test_read_czi_plane_non_mosaic() -> None:
+    import numpy as np
+
+    class FakeCzi:
+        def is_mosaic(self):
+            return False
+
+        def read_image(self, **kwargs):
+            arr = np.ones((1, 8, 16), dtype=np.uint16)
+            return arr, [("Z", 1), ("Y", 8), ("X", 16)]
+
+    plane = read_czi_plane(FakeCzi(), scene=0, z=0, channel=0)
+    assert plane.shape == (8, 16)
+    assert plane.dtype == np.uint16
+
+
+def test_read_czi_plane_mosaic_uses_read_mosaic() -> None:
+    import numpy as np
+
+    class FakeCzi:
+        def __init__(self):
+            self.calls = []
+
+        def is_mosaic(self):
+            return True
+
+        def read_mosaic(self, **kwargs):
+            self.calls.append(kwargs)
+            arr = np.ones((1, 12, 24), dtype=np.uint8)
+            return arr, [("Y", 12), ("X", 24)]
+
+        def read_image(self, **kwargs):
+            raise AssertionError("read_image should not be called for mosaic files")
+
+    czi = FakeCzi()
+    plane = read_czi_plane(czi, scene=2, z=1, channel=3)
+    assert plane.shape == (12, 24)
+    assert czi.calls == [{"scale_factor": 1.0, "S": 2, "Z": 1, "C": 3}]
