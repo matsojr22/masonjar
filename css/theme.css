@@ -363,3 +363,31 @@ body.menu-page {
 	padding-left: 0.75rem;
 	margin-top: 1rem;
 }
+
+.wizard-import-options {
+	text-align: left;
+	max-width: 42rem;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+.wizard-import-options .form-check-input {
+	margin-top: 0.2em;
+	flex-shrink: 0;
+}
+
+.wizard-log {
+	display: block;
+	text-align: left;
+	max-height: 12rem;
+	overflow-y: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: 0.8rem;
+	margin-bottom: 0;
+	background-color: rgba(255, 255, 255, 0.55);
+	border: 1px solid var(--mj-accent);
+	border-radius: 0.25rem;
+	padding: 0.5rem 0.75rem;
+}

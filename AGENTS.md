@@ -44,8 +44,8 @@ On startup (`app.on("ready")` → `did-finish-load`), the main process uses `res
    - `installVenv`: `python -m pip install --user virtualenv` with `cwd` = extracted `python/` (or `python/bin/` on Unix — see `pythonPath` / `pyCommand` in `src/main.ts`).
    - `createVenv`: `python -m venv` targeting `{homeDir}/benv` (`benv`).
    - `installDeps`: `pip install -r py/requirements.txt` with `cwd` = venv’s `Scripts/` or `bin/`.
-   - Loads `pages/index.html` on success.
-4. **Returning user path** (`setupPython` resolves `false` when `python` and `benv` already exist): **`updatePythonDependencies`** then **`fixMissingDirectories`** (incremental `downloadResources(win, false)` using `manifest.json` version keys vs embedded `currnet_versions`), then loads `pages/index.html`.
+   - Loads `pages/menu.html` on success (start hub).
+4. **Returning user path** (`setupPython` resolves `false` when `python` and `benv` already exist): **`updatePythonDependencies`** then **`fixMissingDirectories`** (incremental `downloadResources(win, false)` using `manifest.json` version keys vs embedded `currnet_versions`), then loads `pages/menu.html`.
 
 **Path constants** (under resolved `homeDir`, typically `~/.masonjar` or legacy `~/.belljar`):
 
@@ -126,9 +126,38 @@ Upstream RSAT’s `py/main.py` imports `train_seg` at load time (PyTorch Lightni
 
 Avoid implementing the same behavior twice in `py/` and `python/src/belljar/` without a deliberate migration plan. The JSON-RPC server (`belljar server`) is a single long-lived stdin/stdout process; Electron today uses **one short-lived `PythonShell` per tool run**.
 
+## Renderer script loading (`js/run.js`)
+
+HTML under `pages/` must **not** load feature modules with `<script src="../js/menu.js">` alone: Node resolves `require("./foo")` relative to **`pages/`**, not `js/`, so imports fail silently and buttons do nothing.
+
+Pattern:
+
+```html
+<script src="../js/run.js" data-entry="menu.js"></script>
+```
+
+[`js/run.js`](js/run.js) derives the app root from `window.location.pathname` and `require(path.join(appRoot, "js", name))`. Load failures call `alert()` with the module name. Hub version: [`js/hub_version.js`](js/hub_version.js) on [`pages/menu.html`](pages/menu.html).
+
+[`js/loading.js`](js/loading.js) must not assume `#guide` exists on [`pages/loading.html`](pages/loading.html) (Guide lives on the hub via [`js/open_guide.js`](js/open_guide.js)).
+
+Global [`css/style.css`](css/style.css) sets `body { text-align: center; }`. Wizard and form panels should use `workspace-block` or `text-start` so radios and labels stay aligned (see [`pages/project_wizard.html`](pages/project_wizard.html) step 3).
+
+## Start hub and project flows
+
+After bootstrap, the main window loads [`pages/menu.html`](pages/menu.html) (not the old index hub). Pipeline tools are gated until a `.masonjar` / `.belljar` bundle or legacy workspace is active ([`js/pipeline_gate.js`](js/pipeline_gate.js), [`pages/workspace_menu.html`](pages/workspace_menu.html)).
+
+- **New project**: [`pages/project_start.html`](pages/project_start.html) → wizard or legacy-only scan.
+- **Import wizard**: [`pages/project_wizard.html`](pages/project_wizard.html) + [`js/project_wizard.js`](js/project_wizard.js). **Build project** runs `runBuildAsync()` with live progress on step 4, `[ProjectWizard]` `console.log` lines, and per-file copy progress via [`js/project.js`](js/project.js) `onProgress` / `copyDirRecursiveAsync`.
+
+## Packaging notes
+
+- [`forge.config.js`](forge.config.js): ignore pattern must be `"^python/"` (not `"python"`) so `node_modules/python-shell` is not stripped from the package.
+- Build: `./node_modules/.bin/tsc` then `./node_modules/.bin/electron-forge make --platform=darwin --arch=x64` (and `win32` for zip). Artifacts under `out/make/`.
+- Smoke: `./node_modules/.bin/electron scripts/smoke-pages.js` loads key pages in one window.
+
 ## Local development
 
-- **Electron app**: install Node/Yarn per `README.md`, then `yarn install` and `yarn start`.
+- **Electron app**: install Node/Yarn per `README.md`, then `yarn install`. Prefer `./node_modules/.bin/electron-forge start` if `yarn start` exits immediately (some environments shim `yarn` without running scripts).
 - **Compile main process TS**: `yarn compile` (runs `tsc`). **Commit updated `main.js` when you change `src/main.ts`**, unless your team standardizes otherwise.
 - **Python package**: from `python/`, install in editable mode (`pip install -e .` / Hatch) and run `belljar --help` or pytest.
 

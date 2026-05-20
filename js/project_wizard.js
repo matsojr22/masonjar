@@ -146,88 +146,201 @@ function updateImportWarning() {
 	}
 }
 
-function logWizard(msg) {
+var MODE_LABELS = { copy: "Copy", symlink: "Symlink", reference: "Reference" };
+
+function yieldToUi() {
+	return new Promise(function (resolve) {
+		requestAnimationFrame(function () {
+			setTimeout(resolve, 0);
+		});
+	});
+}
+
+function verboseLog(msg) {
+	console.log("[ProjectWizard]", msg);
 	var el = qs("wizardLog");
 	if (el) {
 		el.textContent = (el.textContent ? el.textContent + "\n" : "") + msg;
+		el.scrollTop = el.scrollHeight;
 	}
 }
 
-function setProgress(pct, msg) {
+function setActivity(msg, pct) {
 	var bar = qs("wizardProgress");
 	var status = qs("finishStatus");
-	if (bar) {
-		bar.style.width = String(pct) + "%";
-	}
 	if (status && msg) {
 		status.textContent = msg;
 	}
+	if (bar && typeof pct === "number") {
+		bar.style.width = String(pct) + "%";
+		bar.setAttribute("aria-valuenow", String(pct));
+		if (pct >= 100) {
+			bar.classList.remove("progress-bar-striped", "progress-bar-animated");
+		} else {
+			bar.classList.add("progress-bar-striped", "progress-bar-animated");
+		}
+	}
 }
 
-function runBuild() {
+function setBuildNavDisabled(disabled) {
+	var back = qs("step3Back");
+	var build = qs("step3Next");
+	if (back) {
+		back.disabled = disabled;
+	}
+	if (build) {
+		build.disabled = disabled;
+	}
+}
+
+function importProgressPct(roleIndex, roleCount, fileIndex, fileTotal) {
+	var roleSpan = 65 / (roleCount || 1);
+	var roleBase = 10 + roleIndex * roleSpan;
+	if (!fileTotal) {
+		return Math.round(roleBase + roleSpan);
+	}
+	return Math.round(roleBase + (fileIndex / fileTotal) * roleSpan);
+}
+
+async function runBuildAsync() {
+	setBuildNavDisabled(true);
 	setStep(4);
-	setProgress(0, "Creating project bundle…");
-
-	var bundleRoot = wizardState.bundleRoot;
-	var name = (qs("projectName") && qs("projectName").value) || path.basename(bundleRoot);
-	var mode = getImportMode();
-	var referenceOnly = mode === "reference";
-	var roles = Object.assign({}, project.CANONICAL_ROLES);
-
-	if (referenceOnly) {
-		var absRoles = Object.assign({}, project.CANONICAL_ROLES);
-		var roleKeys = Object.keys(wizardState.sources);
-		for (var r = 0; r < roleKeys.length; r++) {
-			var rk = roleKeys[r];
-			if (wizardState.sources[rk]) {
-				absRoles[rk] = wizardState.sources[rk];
-			}
-		}
-		roles = absRoles;
+	var logEl = qs("wizardLog");
+	if (logEl) {
+		logEl.textContent = "";
 	}
-
-	project.createProject({
-		bundleRoot: bundleRoot,
-		name: name,
-		referenceOnly: referenceOnly,
-		roles: roles,
-		sources: Object.assign({}, wizardState.sources),
-	});
-
-	setProgress(10, "Importing sources…");
-	var entries = [];
-	var importRoles = Object.keys(wizardState.sources);
-	var total = importRoles.length || 1;
-
-	if (mode !== "reference") {
-		for (var i = 0; i < importRoles.length; i++) {
-			var role = importRoles[i];
-			var src = wizardState.sources[role];
-			if (!src) {
-				continue;
-			}
-			var pct = 10 + Math.round(((i + 1) / total) * 60);
-			setProgress(pct, "Import " + role + "…");
-			var entry = project.importSourceToRole(src, role, mode, bundleRoot, roles);
-			entries.push(entry);
-			logWizard(role + ": " + (entry.error || "ok"));
-		}
-	}
-
-	project.writeImportLog(bundleRoot, mode, entries);
-	stateSaveRoles(bundleRoot, roles, referenceOnly);
-
-	setProgress(75, "Building manifest…");
-	project.buildManifest(bundleRoot, function (pct, msg) {
-		setProgress(75 + Math.round(pct * 0.2), msg);
-	});
-
-	setProgress(100, "Project ready: " + name);
 	var openMenu = qs("openMenu");
 	if (openMenu) {
-		openMenu.classList.remove("d-none");
+		openMenu.classList.add("d-none");
 	}
-	project.openProject(bundleRoot);
+
+	try {
+		await yieldToUi();
+		setActivity("Creating project bundle…", 0);
+		verboseLog("Starting build…");
+
+		var bundleRoot = wizardState.bundleRoot;
+		var name =
+			(qs("projectName") && qs("projectName").value) ||
+			path.basename(bundleRoot);
+		var mode = getImportMode();
+		var modeLabel = MODE_LABELS[mode] || mode;
+		var referenceOnly = mode === "reference";
+		var roles = Object.assign({}, project.CANONICAL_ROLES);
+
+		if (referenceOnly) {
+			var absRoles = Object.assign({}, project.CANONICAL_ROLES);
+			var roleKeys = Object.keys(wizardState.sources);
+			for (var r = 0; r < roleKeys.length; r++) {
+				var rk = roleKeys[r];
+				if (wizardState.sources[rk]) {
+					absRoles[rk] = wizardState.sources[rk];
+				}
+			}
+			roles = absRoles;
+		}
+
+		verboseLog("Creating bundle at " + bundleRoot);
+		project.createProject({
+			bundleRoot: bundleRoot,
+			name: name,
+			referenceOnly: referenceOnly,
+			roles: roles,
+			sources: Object.assign({}, wizardState.sources),
+		});
+		setActivity("Project bundle created", 10);
+		verboseLog("Wrote " + branding.PROJECT_FILENAME);
+		await yieldToUi();
+
+		var entries = [];
+		var importRoles = Object.keys(wizardState.sources).filter(function (role) {
+			return wizardState.sources[role];
+		});
+		var roleCount = importRoles.length || 1;
+
+		if (mode !== "reference") {
+			verboseLog("Import mode: " + modeLabel);
+			for (var i = 0; i < importRoles.length; i++) {
+				var role = importRoles[i];
+				var src = wizardState.sources[role];
+				var lastFileLog = 0;
+				setActivity(modeLabel + " " + role + "…", importProgressPct(i, roleCount, 0, 0));
+				verboseLog("Import " + role + " from " + src);
+				await yieldToUi();
+
+				var entry = project.importSourceToRole(src, role, mode, bundleRoot, roles, {
+					yieldFn: yieldToUi,
+					yieldEvery: 10,
+					onProgress: function (ev) {
+						var pct = importProgressPct(i, roleCount, ev.index, ev.total);
+						var activity =
+							modeLabel +
+							" " +
+							role +
+							" (" +
+							ev.index +
+							"/" +
+							ev.total +
+							" files)…";
+						setActivity(activity, pct);
+						if (
+							ev.type === "file" &&
+							(ev.index === 1 ||
+								ev.index === ev.total ||
+								ev.index - lastFileLog >= 25)
+						) {
+							lastFileLog = ev.index;
+							verboseLog(role + ": file " + ev.index + "/" + ev.total);
+						}
+					},
+				});
+				if (entry && typeof entry.then === "function") {
+					entry = await entry;
+				}
+				entries.push(entry);
+				var statusLine = role + ": " + (entry.error || "ok");
+				verboseLog(statusLine);
+				setActivity(
+					modeLabel + " " + role + " complete",
+					importProgressPct(i + 1, roleCount, 0, 0),
+				);
+				await yieldToUi();
+			}
+		} else {
+			verboseLog("Reference-only: skipping file import");
+			await yieldToUi();
+		}
+
+		project.writeImportLog(bundleRoot, mode, entries);
+		stateSaveRoles(bundleRoot, roles, referenceOnly);
+		verboseLog("Import log written");
+		await yieldToUi();
+
+		setActivity("Building manifest…", 75);
+		verboseLog("Scanning roles for manifest…");
+		await yieldToUi();
+		await project.buildManifest(bundleRoot, async function (pct, msg) {
+			setActivity(msg, 75 + Math.round(pct * 0.2));
+			verboseLog(msg);
+			await yieldToUi();
+		});
+
+		setActivity("Project ready: " + name, 100);
+		verboseLog("Done — opening project");
+		if (openMenu) {
+			openMenu.classList.remove("d-none");
+		}
+		project.openProject(bundleRoot);
+	} catch (err) {
+		var errMsg = err && (err.message || String(err));
+		setActivity("Build failed: " + errMsg, 0);
+		verboseLog("ERROR: " + errMsg);
+		if (err && err.stack) {
+			verboseLog(err.stack);
+			console.error("[ProjectWizard]", err);
+		}
+		setBuildNavDisabled(false);
+	}
 }
 
 function stateSaveRoles(bundleRoot, roles, referenceOnly) {
@@ -307,7 +420,7 @@ function init() {
 		setStep(2);
 	});
 	qs("step3Next").addEventListener("click", function () {
-		runBuild();
+		runBuildAsync();
 	});
 
 	document.querySelectorAll('input[name="importMode"]').forEach(function (el) {

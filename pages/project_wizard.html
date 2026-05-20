@@ -74,10 +74,11 @@
         </div>
       </section>
 
-      <section id="step3" class="wizard-panel d-none">
+      <section id="step3" class="wizard-panel workspace-block d-none">
         <div class="mb-3">
           <label class="form-label">Import mode</label>
-          <div class="form-check">
+          <div class="wizard-import-options">
+          <div class="form-check d-flex align-items-start gap-2 mb-2">
             <input
               class="form-check-input"
               type="radio"
@@ -90,7 +91,7 @@
               Copy into bundle (recommended, self-contained)
             </label>
           </div>
-          <div class="form-check">
+          <div class="form-check d-flex align-items-start gap-2 mb-2">
             <input
               class="form-check-input"
               type="radio"
@@ -102,7 +103,7 @@
               Symlink (advanced — breaks if sources move or are deleted)
             </label>
           </div>
-          <div class="form-check">
+          <div class="form-check d-flex align-items-start gap-2 mb-2">
             <input
               class="form-check-input"
               type="radio"
@@ -114,6 +115,7 @@
               Reference only — keep absolute paths, no copy (phase 1)
             </label>
           </div>
+          </div>
         </div>
         <p id="importWarning" class="alert alert-warning d-none"></p>
         <div class="mt-3">
@@ -122,17 +124,20 @@
         </div>
       </section>
 
-      <section id="step4" class="wizard-panel d-none">
+      <section id="step4" class="wizard-panel workspace-block d-none">
         <p id="finishStatus" class="text-muted">Working…</p>
         <div class="progress mb-3">
           <div
             id="wizardProgress"
-            class="progress-bar"
+            class="progress-bar progress-bar-striped progress-bar-animated"
             role="progressbar"
             style="width: 0%"
+            aria-valuenow="0"
+            aria-valuemin="0"
+            aria-valuemax="100"
           ></div>
         </div>
-        <p id="wizardLog" class="small text-muted"></p>
+        <pre id="wizardLog" class="wizard-log small text-muted mb-3"></pre>
         <a role="button" class="btn btn-primary d-none" id="openMenu" href="./menu.html"
           >Open menu</a
         >

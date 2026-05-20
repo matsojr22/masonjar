@@ -350,7 +350,36 @@ function getStatusMessage() {
 	return "Project: " + name + " (" + mode + ")";
 }
 
-function copyDirRecursive(src, dest) {
+function countFilesRecursive(src) {
+	var count = 0;
+	var entries;
+	try {
+		entries = fs.readdirSync(src, { withFileTypes: true });
+	} catch (err) {
+		return 0;
+	}
+	for (var i = 0; i < entries.length; i++) {
+		var srcPath = path.join(src, entries[i].name);
+		if (entries[i].isDirectory()) {
+			count += countFilesRecursive(srcPath);
+		} else if (entries[i].isFile()) {
+			count += 1;
+		}
+	}
+	return count;
+}
+
+function copyDirRecursive(src, dest, options) {
+	options = options || {};
+	var onProgress = options.onProgress;
+	var counter = options._counter || { n: 0 };
+	var total = options._total;
+	if (total === undefined && onProgress) {
+		total = countFilesRecursive(src);
+		options._total = total;
+		options._counter = counter;
+	}
+
 	fs.mkdirSync(dest, { recursive: true });
 	var entries = fs.readdirSync(src, { withFileTypes: true });
 	for (var i = 0; i < entries.length; i++) {
@@ -358,14 +387,77 @@ function copyDirRecursive(src, dest) {
 		var srcPath = path.join(src, entry.name);
 		var destPath = path.join(dest, entry.name);
 		if (entry.isDirectory()) {
-			copyDirRecursive(srcPath, destPath);
+			copyDirRecursive(srcPath, destPath, {
+				onProgress: onProgress,
+				_total: total,
+				_counter: counter,
+			});
 		} else {
 			fs.copyFileSync(srcPath, destPath);
+			counter.n += 1;
+			if (onProgress) {
+				onProgress({
+					type: "file",
+					path: srcPath,
+					index: counter.n,
+					total: total || counter.n,
+				});
+			}
 		}
 	}
 }
 
-function importSourceToRole(sourcePath, role, mode, bundleRoot, roles) {
+function copyDirRecursiveAsync(src, dest, options) {
+	options = options || {};
+	var onProgress = options.onProgress;
+	var yieldFn = options.yieldFn;
+	var yieldEvery = options.yieldEvery || 10;
+	var counter = options._counter || { n: 0 };
+	var total = options._total;
+	if (total === undefined && onProgress) {
+		total = countFilesRecursive(src);
+		options._total = total;
+		options._counter = counter;
+	}
+
+	fs.mkdirSync(dest, { recursive: true });
+	var entries = fs.readdirSync(src, { withFileTypes: true });
+	var chain = Promise.resolve();
+	for (var i = 0; i < entries.length; i++) {
+		(function (entry) {
+			var srcPath = path.join(src, entry.name);
+			var destPath = path.join(dest, entry.name);
+			chain = chain.then(function () {
+				if (entry.isDirectory()) {
+					return copyDirRecursiveAsync(srcPath, destPath, {
+						onProgress: onProgress,
+						yieldFn: yieldFn,
+						yieldEvery: yieldEvery,
+						_total: total,
+						_counter: counter,
+					});
+				}
+				fs.copyFileSync(srcPath, destPath);
+				counter.n += 1;
+				if (onProgress) {
+					onProgress({
+						type: "file",
+						path: srcPath,
+						index: counter.n,
+						total: total || counter.n,
+					});
+				}
+				if (yieldFn && counter.n % yieldEvery === 0) {
+					return yieldFn();
+				}
+			});
+		})(entries[i]);
+	}
+	return chain;
+}
+
+function importSourceToRole(sourcePath, role, mode, bundleRoot, roles, options) {
+	options = options || {};
 	bundleRoot = bundleRoot || state.bundleRoot;
 	roles = roles || (state.project && state.project.roles) || CANONICAL_ROLES;
 	var relDest = roles[role] || CANONICAL_ROLES[role];
@@ -408,10 +500,28 @@ function importSourceToRole(sourcePath, role, mode, bundleRoot, roles) {
 			};
 		}
 	} else if (stat.isDirectory()) {
-		copyDirRecursive(sourcePath, dest);
+		if (options.yieldFn) {
+			return copyDirRecursiveAsync(sourcePath, dest, options).then(function () {
+				return {
+					role: role,
+					source: sourcePath,
+					dest: relDest,
+					mode: mode,
+				};
+			});
+		}
+		copyDirRecursive(sourcePath, dest, options);
 	} else {
 		fs.mkdirSync(path.dirname(dest), { recursive: true });
 		fs.copyFileSync(sourcePath, dest);
+		if (options.onProgress) {
+			options.onProgress({
+				type: "file",
+				path: sourcePath,
+				index: 1,
+				total: 1,
+			});
+		}
 	}
 
 	return {
@@ -475,7 +585,7 @@ function resolveRolePathForBundle(bundleRoot, roles, role) {
 	return path.join(bundleRoot, rel);
 }
 
-function buildManifest(bundleRoot, onProgress) {
+async function buildManifest(bundleRoot, onProgress) {
 	bundleRoot = bundleRoot || state.bundleRoot;
 	var roles = (state.project && state.project.roles) || CANONICAL_ROLES;
 	if (bundleRoot && (!state.project || state.bundleRoot !== bundleRoot)) {
@@ -500,7 +610,10 @@ function buildManifest(bundleRoot, onProgress) {
 	for (var r = 0; r < scanRoles.length; r++) {
 		var role = scanRoles[r];
 		if (typeof onProgress === "function") {
-			onProgress(Math.round((r / total) * 100), "Scanning " + role);
+			var progressRet = onProgress(Math.round((r / total) * 100), "Scanning " + role);
+			if (progressRet && typeof progressRet.then === "function") {
+				await progressRet;
+			}
 		}
 		var roleDir = resolveRolePathForBundle(bundleRoot, roles, role);
 		if (!roleDir && state.active) {
@@ -544,7 +657,10 @@ function buildManifest(bundleRoot, onProgress) {
 	);
 
 	if (typeof onProgress === "function") {
-		onProgress(100, "Manifest complete (" + sliceList.length + " slices)");
+		var doneRet = onProgress(100, "Manifest complete (" + sliceList.length + " slices)");
+		if (doneRet && typeof doneRet.then === "function") {
+			await doneRet;
+		}
 	}
 
 	return manifestPath;

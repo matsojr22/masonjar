@@ -11,6 +11,7 @@ const PAGES = [
 	"loading.html",
 	"menu.html",
 	"project_start.html",
+	"project_wizard.html",
 	"workspace_menu.html",
 	"menu_category.html",
 	"credits.html",
