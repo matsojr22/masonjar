@@ -21,6 +21,7 @@ var wizardState = {
 };
 
 var extractRunning = false;
+var probeInFlight = false;
 var extractGotPythonAck = false;
 var extractHeartbeatTimer = null;
 var extractGapWatchdogTimer = null;
@@ -300,6 +301,13 @@ function syncSliceNumberingRadios() {
 	}
 	if (rename) {
 		rename.checked = numbering === cziImport.SLICE_NUMBERING_RENAME;
+	}
+}
+
+function setProbeControlsBusy(busy) {
+	var addBtn = qs("addCziDir");
+	if (addBtn) {
+		addBtn.disabled = !!busy;
 	}
 }
 
@@ -974,45 +982,58 @@ function probeSingleDir(dir, scanIndex) {
 }
 
 async function runProbeAll() {
+	if (probeInFlight) {
+		ipc.send("killCziProbe");
+		await new Promise(function (resolve) {
+			setTimeout(resolve, 150);
+		});
+	}
+	probeInFlight = true;
+	setProbeControlsBusy(true);
 	var dirs = wizardState.cziSourceDirs || [];
 	var status = qs("probeStatus");
 	var nextBtn = qs("step2Next");
 	if (nextBtn) {
 		nextBtn.disabled = true;
 	}
-	if (!dirs.length) {
-		if (status) {
-			status.textContent = "";
+	try {
+		if (!dirs.length) {
+			if (status) {
+				status.textContent = "";
+			}
+			renderCziFileTable([]);
+			return;
 		}
-		renderCziFileTable([]);
-		return;
-	}
-	wizardState.cziImport.source_dirs = dirs.slice();
-	wizardState.cziImport.files = (wizardState.cziImport.files || []).filter(function (f) {
-		return dirs.indexOf(f.source_dir) >= 0;
-	});
-	if (status) {
-		status.textContent = "Probing " + dirs.length + " folder(s)…";
-	}
-	for (var i = 0; i < dirs.length; i++) {
+		wizardState.cziImport.source_dirs = dirs.slice();
+		wizardState.cziImport.files = (wizardState.cziImport.files || []).filter(function (f) {
+			return dirs.indexOf(f.source_dir) >= 0;
+		});
 		if (status) {
-			status.textContent = "Probing folder " + (i + 1) + "/" + dirs.length + ": " + dirs[i];
+			status.textContent = "Probing " + dirs.length + " folder(s)…";
 		}
-		await probeSingleDir(dirs[i], i);
-	}
-	applySliceNumberingDefault();
-	refreshSliceOrder();
-	renderSourceDirList();
-	renderCziFileTable(wizardState.cziImport.files || []);
-	if (status) {
-		status.textContent =
-			(wizardState.cziImport.files || []).length +
-			" file(s) from " +
-			dirs.length +
-			" folder(s) probed.";
-	}
-	if (nextBtn) {
-		nextBtn.disabled = !(wizardState.cziImport.files && wizardState.cziImport.files.length);
+		for (var i = 0; i < dirs.length; i++) {
+			if (status) {
+				status.textContent = "Probing folder " + (i + 1) + "/" + dirs.length + ": " + dirs[i];
+			}
+			await probeSingleDir(dirs[i], i);
+		}
+		applySliceNumberingDefault();
+		refreshSliceOrder();
+		renderSourceDirList();
+		renderCziFileTable(wizardState.cziImport.files || []);
+		if (status) {
+			status.textContent =
+				(wizardState.cziImport.files || []).length +
+				" file(s) from " +
+				dirs.length +
+				" folder(s) probed.";
+		}
+		if (nextBtn) {
+			nextBtn.disabled = !(wizardState.cziImport.files && wizardState.cziImport.files.length);
+		}
+	} finally {
+		probeInFlight = false;
+		setProbeControlsBusy(false);
 	}
 }
 

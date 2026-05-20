@@ -328,7 +328,165 @@ def mosaic_region_for_scene(czi, scene: int) -> tuple[int, int, int, int] | None
     return x, y, w, h
 
 
-def assess_mosaic_import(czi, *, sample_read: bool = True) -> dict[str, Any]:
+def _mosaic_tile_union_coverage(
+    scene_x: int,
+    scene_y: int,
+    scene_w: int,
+    scene_h: int,
+    tiles: Mapping[int, Any] | Mapping[Any, Any],
+) -> tuple[float, float]:
+    """Fraction of scene width/height covered by the union of tile bounding boxes."""
+    if scene_w <= 0 or scene_h <= 0 or not tiles:
+        return 0.0, 0.0
+    min_x: int | None = None
+    min_y: int | None = None
+    max_x = 0
+    max_y = 0
+    for bbox in tiles.values():
+        tx, ty = bbox_origin(bbox)
+        tw, th = bbox_width_height(bbox)
+        if tw <= 0 or th <= 0:
+            continue
+        x1, y1 = tx, ty
+        x2, y2 = tx + tw, ty + th
+        if min_x is None:
+            min_x, min_y, max_x, max_y = x1, y1, x2, y2
+        else:
+            min_x = min(min_x, x1)
+            min_y = min(min_y, y1)
+            max_x = max(max_x, x2)
+            max_y = max(max_y, y2)
+    if min_x is None or min_y is None:
+        return 0.0, 0.0
+    union_w = max(0, max_x - min_x)
+    union_h = max(0, max_y - min_y)
+    scene_x2 = scene_x + scene_w
+    scene_y2 = scene_y + scene_h
+    overlap_w = max(0, min(max_x, scene_x2) - max(min_x, scene_x))
+    overlap_h = max(0, min(max_y, scene_y2) - max(min_y, scene_y))
+    return overlap_w / scene_w, overlap_h / scene_h
+
+
+def assess_mosaic_import_metadata(czi) -> dict[str, Any]:
+    """BBox-only mosaic stitch heuristics (no pixel I/O)."""
+    is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
+    m_tile_count = m_tile_count_from_czi(czi)
+    has_m_dim = m_tile_count > 1
+    warnings: list[str] = []
+    likely_unstitched = False
+    mosaic_stitch_status = "ok"
+
+    if is_mosaic and has_m_dim:
+        warnings.append(
+            f"Mosaic structure with {m_tile_count} tile index(es) on the M axis "
+            "(normal for ZEN-stitched exports)."
+        )
+
+    if not is_mosaic:
+        return {
+            "is_mosaic": is_mosaic,
+            "m_tile_count": m_tile_count,
+            "has_m_dim": has_m_dim,
+            "mosaic_warnings": warnings,
+            "likely_unstitched": likely_unstitched,
+            "mosaic_stitch_status": mosaic_stitch_status,
+        }
+
+    scene_indices = scene_indices_from_czi(czi)
+    channel_indices = channel_indices_from_czi(czi)
+    z_indices = z_indices_from_czi(czi)
+    scene = scene_indices[0] if scene_indices else 0
+    channel = channel_indices[0] if channel_indices else 0
+    z = z_indices[0] if z_indices else 0
+
+    get_scene_bbox = getattr(czi, "get_mosaic_scene_bounding_box", None)
+    get_tiles = getattr(czi, "get_all_mosaic_tile_bounding_boxes", None)
+    if not callable(get_scene_bbox) or not callable(get_tiles):
+        return {
+            "is_mosaic": is_mosaic,
+            "m_tile_count": m_tile_count,
+            "has_m_dim": has_m_dim,
+            "mosaic_warnings": warnings,
+            "likely_unstitched": likely_unstitched,
+            "mosaic_stitch_status": "unknown",
+        }
+
+    try:
+        scene_bbox = get_scene_bbox(scene)
+        tiles = get_tiles(S=scene, Z=z, C=channel) or {}
+    except Exception:
+        return {
+            "is_mosaic": is_mosaic,
+            "m_tile_count": m_tile_count,
+            "has_m_dim": has_m_dim,
+            "mosaic_warnings": warnings,
+            "likely_unstitched": likely_unstitched,
+            "mosaic_stitch_status": "unknown",
+        }
+
+    scene_x, scene_y = bbox_origin(scene_bbox)
+    scene_w, scene_h = bbox_width_height(scene_bbox)
+    if scene_w <= 0 or scene_h <= 0:
+        return {
+            "is_mosaic": is_mosaic,
+            "m_tile_count": m_tile_count,
+            "has_m_dim": has_m_dim,
+            "mosaic_warnings": warnings,
+            "likely_unstitched": likely_unstitched,
+            "mosaic_stitch_status": "unknown",
+        }
+
+    cover_w, cover_h = _mosaic_tile_union_coverage(scene_x, scene_y, scene_w, scene_h, tiles)
+    if cover_w < 0.85 or cover_h < 0.85:
+        likely_unstitched = True
+        warnings.append(
+            f"Mosaic tile bounding boxes cover {int(cover_w * 100)}%×{int(cover_h * 100)}% "
+            f"of the scene extent ({scene_w}×{scene_h} px) — tiles may not be stitched. "
+            "Stitch in ZEN before import."
+        )
+
+    if len(tiles) > 1:
+        max_tile_w = 0
+        max_tile_h = 0
+        for bbox in tiles.values():
+            tw, th = bbox_width_height(bbox)
+            max_tile_w = max(max_tile_w, tw)
+            max_tile_h = max(max_tile_h, th)
+        if (
+            max_tile_w > 0
+            and max_tile_h > 0
+            and cover_w < 0.9
+            and cover_h < 0.9
+            and max_tile_w < int(scene_w * 0.9)
+            and max_tile_h < int(scene_h * 0.9)
+        ):
+            likely_unstitched = True
+            warnings.append(
+                f"Largest tile is {max_tile_w}×{max_tile_h} px but "
+                f"{len(tiles)} tiles span {scene_w}×{scene_h} px — stitch the mosaic in ZEN first."
+            )
+
+    if likely_unstitched:
+        mosaic_stitch_status = "suspect"
+    else:
+        mosaic_stitch_status = "ok"
+
+    return {
+        "is_mosaic": is_mosaic,
+        "m_tile_count": m_tile_count,
+        "has_m_dim": has_m_dim,
+        "mosaic_warnings": warnings,
+        "likely_unstitched": likely_unstitched,
+        "mosaic_stitch_status": mosaic_stitch_status,
+    }
+
+
+def assess_mosaic_import(
+    czi,
+    *,
+    sample_read: bool = True,
+    sample_scale: float = 1.0,
+) -> dict[str, Any]:
     """Heuristics for unstitched mosaic tiles (warn only; import is not blocked)."""
     is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
     m_tile_count = m_tile_count_from_czi(czi)
@@ -354,15 +512,7 @@ def assess_mosaic_import(czi, *, sample_read: bool = True) -> dict[str, Any]:
         }
 
     if not sample_read:
-        mosaic_stitch_status = "unknown"
-        return {
-            "is_mosaic": is_mosaic,
-            "m_tile_count": m_tile_count,
-            "has_m_dim": has_m_dim,
-            "mosaic_warnings": warnings,
-            "likely_unstitched": likely_unstitched,
-            "mosaic_stitch_status": mosaic_stitch_status,
-        }
+        return assess_mosaic_import_metadata(czi)
 
     scene_indices = scene_indices_from_czi(czi)
     channel_indices = channel_indices_from_czi(czi)
@@ -372,7 +522,7 @@ def assess_mosaic_import(czi, *, sample_read: bool = True) -> dict[str, Any]:
     z = z_indices[0] if z_indices else 0
 
     try:
-        plane = read_czi_plane(czi, scene, z, channel)
+        plane = read_czi_plane(czi, scene, z, channel, sample_scale=sample_scale)
     except Exception as exc:
         mosaic_stitch_status = "unknown"
         warnings.append(f"Could not read a sample mosaic plane: {exc}")
@@ -540,14 +690,25 @@ def select_largest_plane(data: Any) -> tuple[Any, bool]:
     return arr, selected
 
 
-def read_czi_plane(czi, scene: int, z: int, channel: int) -> Any:
-    """Read one S/Z/C plane at full resolution (pyramid-safe, mosaic-aware)."""
+def read_czi_plane(
+    czi,
+    scene: int,
+    z: int,
+    channel: int,
+    *,
+    sample_scale: float = 1.0,
+) -> Any:
+    """Read one S/Z/C plane (pyramid-safe, mosaic-aware). sample_scale applies to mosaic reads."""
     import numpy as _np
 
     is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
     fixed = {"S", "Z", "C"}
     if is_mosaic:
-        kwargs: dict[str, Any] = {"scale_factor": 1.0, "Z": z, "C": channel}
+        kwargs: dict[str, Any] = {
+            "scale_factor": float(sample_scale),
+            "Z": z,
+            "C": channel,
+        }
         scene_indices = scene_indices_from_czi(czi)
         if len(scene_indices) > 1:
             region = mosaic_region_for_scene(czi, scene)

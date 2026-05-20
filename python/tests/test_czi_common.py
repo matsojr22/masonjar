@@ -15,6 +15,7 @@ from czi_common import (  # noqa: E402
     ROLE_OTHER,
     ROLE_SIGNAL_SOMATA,
     assess_mosaic_import,
+    assess_mosaic_import_metadata,
     bbox_width_height,
     branch_for_channel,
     branch_for_role,
@@ -206,6 +207,15 @@ def test_collapse_z_stack_to_2d_single_plane() -> None:
 
 
 def test_assess_mosaic_import_m_tiles_informational_only() -> None:
+    class SceneBBox:
+        x = 0
+        y = 0
+        w = 2000
+        h = 1500
+
+    class TileBBox:
+        pass
+
     class FakeCzi:
         def is_mosaic(self):
             return True
@@ -213,12 +223,144 @@ def test_assess_mosaic_import_m_tiles_informational_only() -> None:
         def get_dims_shape(self):
             return [{"M": (0, 3), "Z": (0, 1), "C": (0, 1), "S": (0, 1)}]
 
+        def get_mosaic_scene_bounding_box(self, index=0):
+            return SceneBBox()
+
+        def get_all_mosaic_tile_bounding_boxes(self, **kwargs):
+            tiles = {}
+            for i in range(3):
+                t = TileBBox()
+                t.x = (i % 2) * 1000
+                t.y = 0
+                t.w = 1000
+                t.h = 1500
+                tiles[i] = t
+            return tiles
+
+        def read_mosaic(self, **kwargs):
+            raise AssertionError("probe path must not read_mosaic")
+
     info = assess_mosaic_import(FakeCzi(), sample_read=False)
     assert info["likely_unstitched"] is False
     assert info["m_tile_count"] == 3
-    assert info["mosaic_stitch_status"] == "unknown"
+    assert info["mosaic_stitch_status"] == "ok"
     assert any("tile index" in w.lower() for w in info["mosaic_warnings"])
     assert not any("stitch in ZEN" in w for w in info["mosaic_warnings"])
+
+
+def test_assess_mosaic_import_metadata_full_coverage() -> None:
+    class SceneBBox:
+        x = 0
+        y = 0
+        w = 1000
+        h = 800
+
+    class TileBBox:
+        pass
+
+    class FakeCzi:
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"M": (0, 2), "Z": (0, 1), "C": (0, 1), "S": (0, 1)}]
+
+        def get_mosaic_scene_bounding_box(self, index=0):
+            return SceneBBox()
+
+        def get_all_mosaic_tile_bounding_boxes(self, **kwargs):
+            t0, t1 = TileBBox(), TileBBox()
+            t0.x, t0.y, t0.w, t0.h = 0, 0, 500, 800
+            t1.x, t1.y, t1.w, t1.h = 500, 0, 500, 800
+            return {0: t0, 1: t1}
+
+        def read_mosaic(self, **kwargs):
+            raise AssertionError("metadata assess must not read_mosaic")
+
+    info = assess_mosaic_import_metadata(FakeCzi())
+    assert info["mosaic_stitch_status"] == "ok"
+    assert info["likely_unstitched"] is False
+
+
+def test_assess_mosaic_import_metadata_single_tile_suspect() -> None:
+    class SceneBBox:
+        x = 0
+        y = 0
+        w = 4000
+        h = 3000
+
+    class TileBBox:
+        x = 0
+        y = 0
+        w = 600
+        h = 500
+
+    class FakeCzi:
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"M": (0, 2), "Z": (0, 1), "C": (0, 1), "S": (0, 1)}]
+
+        def get_mosaic_scene_bounding_box(self, index=0):
+            return SceneBBox()
+
+        def get_all_mosaic_tile_bounding_boxes(self, **kwargs):
+            return {0: TileBBox()}
+
+        def read_mosaic(self, **kwargs):
+            raise AssertionError("metadata assess must not read_mosaic")
+
+    info = assess_mosaic_import_metadata(FakeCzi())
+    assert info["mosaic_stitch_status"] == "suspect"
+    assert info["likely_unstitched"] is True
+    assert any("stitch" in w.lower() for w in info["mosaic_warnings"])
+
+
+def test_probe_file_uses_metadata_only_assess(monkeypatch) -> None:
+    import types
+
+    import czi_probe
+
+    read_calls: list[dict] = []
+
+    class FakeCzi:
+        def get_dims_shape(self):
+            return [{"Z": (0, 1), "C": (0, 1), "S": (0, 1)}]
+
+        def is_mosaic(self):
+            return True
+
+        def read_mosaic(self, **kwargs):
+            read_calls.append(kwargs)
+            raise AssertionError("probe_file must not call read_mosaic")
+
+    def fake_assess(czi, **kwargs):
+        assert kwargs.get("sample_read") is False
+        return {
+            "is_mosaic": True,
+            "has_m_dim": False,
+            "m_tile_count": 1,
+            "likely_unstitched": False,
+            "mosaic_stitch_status": "ok",
+            "mosaic_warnings": [],
+        }
+
+    class FakeCziFile:
+        def __init__(self, path):
+            self._czi = FakeCzi()
+
+        def __getattr__(self, name):
+            return getattr(self._czi, name)
+
+    fake_mod = types.ModuleType("aicspylibczi")
+    fake_mod.CziFile = FakeCziFile
+    monkeypatch.setattr(czi_probe, "assess_mosaic_import", fake_assess)
+    monkeypatch.setitem(sys.modules, "aicspylibczi", fake_mod)
+    result = czi_probe.probe_file(Path("sample.czi"))
+    assert result["is_mosaic"] is True
+    assert result["mosaic_stitch_status"] == "ok"
+    assert read_calls == []
 
 
 def test_assess_mosaic_import_bbox_mismatch() -> None:
@@ -345,6 +487,30 @@ def test_read_czi_plane_mosaic_uses_read_mosaic() -> None:
             "region": (100, 200, 800, 600),
         }
     ]
+
+
+def test_read_czi_plane_mosaic_sample_scale() -> None:
+    import numpy as np
+
+    class FakeCzi:
+        def __init__(self):
+            self.calls = []
+
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"M": (0, 1), "Z": (0, 1), "C": (0, 1), "S": (0, 1)}]
+
+        def read_mosaic(self, **kwargs):
+            self.calls.append(kwargs)
+            arr = np.ones((6, 8), dtype=np.uint8)
+            return arr, [("Y", 6), ("X", 8)]
+
+    czi = FakeCzi()
+    plane = read_czi_plane(czi, scene=0, z=0, channel=0, sample_scale=0.05)
+    assert plane.shape == (6, 8)
+    assert czi.calls == [{"scale_factor": 0.05, "Z": 0, "C": 0}]
 
 
 def test_read_czi_plane_mosaic_single_scene_no_region() -> None:

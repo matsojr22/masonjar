@@ -385,7 +385,7 @@ def main() -> int:
             blocks = normalized_dim_blocks(czi)
             dim_letters = sorted({str(k).upper() for b in blocks for k in b.keys()})
             dims_str = "".join(dim_letters)
-            mosaic_info = assess_mosaic_import(czi, sample_read=True)
+            mosaic_info = assess_mosaic_import(czi, sample_read=True, sample_scale=0.05)
             is_mosaic = bool(mosaic_info.get("is_mosaic"))
             emit_log(f"  dims={dims_str or '?'}, is_mosaic={is_mosaic}")
             if is_mosaic and key not in mosaic_logged:

@@ -1644,6 +1644,10 @@ function mapExtractItemProgressPct(itemPct: number): number {
   return 22 + Math.round(Math.min(100, Math.max(0, itemPct)) * 0.70);
 }
 
+function mapProbeProgressPct(itemPct: number): number {
+  return 5 + Math.round(Math.min(100, Math.max(0, itemPct)) * 0.90);
+}
+
 function runCziPythonScript(
   event: any,
   scriptName: string,
@@ -1651,6 +1655,7 @@ function runCziPythonScript(
   killChannel: string,
   resultChannel: string,
 ) {
+  const isProbe = scriptName === "czi_probe.py";
   const pythonExe = path.join(envPythonPath, pyCommand);
   queueLogLineForUi(`Launching Python: ${scriptName} (${pythonExe})`);
   event.sender.send("cziJobLog", `Launching Python: ${scriptName}`);
@@ -1720,9 +1725,12 @@ function runCziPythonScript(
       const n = Number(message);
       if (!Number.isNaN(n) && n > 0) {
         total = n;
-        const readyMsg = `Ready — ${n} extraction items`;
+        const readyMsg = isProbe
+          ? `Ready — ${n} CZI file(s) to probe`
+          : `Ready — ${n} extraction items`;
+        const readyPct = isProbe ? 5 : 20;
         queueLogLineForUi(readyMsg);
-        event.sender.send("updateLoad", [20, readyMsg]);
+        event.sender.send("updateLoad", [readyPct, readyMsg]);
         event.sender.send("cziJobLog", readyMsg);
         return;
       }
@@ -1737,6 +1745,24 @@ function runCziPythonScript(
         event.sender.send(resultChannel, pyFail ? { ok: false, error: pyFail } : resultPayload);
         cleanupPythonKillListener(killChannel);
       });
+    } else if (isProbe) {
+      const pctMatch = message.match(/^(\d+)%\s/);
+      if (pctMatch) {
+        current++;
+        const itemPct = Number(pctMatch[1]);
+        if (!Number.isNaN(itemPct)) {
+          event.sender.send("updateLoad", [mapProbeProgressPct(itemPct), message]);
+          return;
+        }
+      }
+      if (message.startsWith("Probing ")) {
+        const itemPct = total > 0 ? Math.round((current / total) * 100) : 0;
+        event.sender.send("updateLoad", [mapProbeProgressPct(itemPct), message]);
+        return;
+      }
+      current++;
+      const itemPct = total > 0 ? Math.round((current / total) * 100) : 0;
+      event.sender.send("updateLoad", [mapProbeProgressPct(itemPct), message]);
     } else {
       current++;
       const itemPct = total > 0 ? Math.round((current / total) * 100) : 0;

@@ -33,7 +33,7 @@ def probe_file(path: Path) -> dict:
     blocks = normalized_dim_blocks(czi)
     dim_letters = sorted({str(k).upper() for b in blocks for k in b.keys()})
     dims = "".join(dim_letters)
-    mosaic_info = assess_mosaic_import(czi, sample_read=True)
+    mosaic_info = assess_mosaic_import(czi, sample_read=False)
     is_mosaic = bool(mosaic_info.get("is_mosaic"))
     has_m_dim = bool(mosaic_info.get("has_m_dim"))
     scene_indices = scene_indices_from_czi(czi)
