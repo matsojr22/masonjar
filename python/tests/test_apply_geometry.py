@@ -21,10 +21,14 @@ def test_compose_rotate_flip() -> None:
     assert ("flip_x", True) in ops
 
 
-def test_apply_ops_rot90() -> None:
-    arr = np.arange(12, dtype=np.uint8).reshape(3, 4)
+def test_apply_ops_rot90_clockwise_non_square() -> None:
+    """rotate=90 must match CSS clockwise 90° (np.rot90 k=-1), not counter-clockwise k=1."""
+    arr = np.arange(24, dtype=np.uint8).reshape(4, 6)
     out = apply_ops_to_array(arr, compose_ops(90, False, False))
-    assert out.shape == (4, 3)
+    assert out.shape == (6, 4)
+    expected = np.rot90(arr, k=-1)
+    assert np.array_equal(out, expected)
+    assert out[0, 0] == 18
 
 
 def test_paths_for_slice_includes_dapi_png_not_tif(tmp_path: Path) -> None:
@@ -83,7 +87,7 @@ def test_transform_zstack_rot90_per_plane(tmp_path: Path) -> None:
     loaded = tiff.imread(path)
     assert loaded.shape == (z, w, h)
     for zi in range(z):
-        expected = np.rot90(stack[zi], k=1)
+        expected = np.rot90(stack[zi], k=-1)
         assert np.array_equal(loaded[zi], expected)
 
 
@@ -116,5 +120,5 @@ def test_double_apply_rot90_changes_pixels_twice(tmp_path: Path) -> None:
     transform_file(path, compose_ops(90, False, False))
     after_twice = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     assert not np.array_equal(after_twice, after_once)
-    expected_twice = np.rot90(np.rot90(once, k=1), k=1)
+    expected_twice = np.rot90(np.rot90(once, k=-1), k=-1)
     assert np.array_equal(after_twice, expected_twice)

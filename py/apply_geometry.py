@@ -38,15 +38,16 @@ def compose_ops(rotate: int, flip_x: bool, flip_y: bool):
 
 
 def apply_ops_to_array(arr: np.ndarray, ops: list) -> np.ndarray:
+    # Rotation k matches CSS clockwise in js/orient_geometry.js geometryCssTransform.
     out = arr
     for op, val in ops:
         if op == "rotate":
             if val == 90:
-                out = np.rot90(out, k=1)
+                out = np.rot90(out, k=-1)
             elif val == 180:
                 out = np.rot90(out, k=2)
             elif val == 270:
-                out = np.rot90(out, k=3)
+                out = np.rot90(out, k=1)
         elif op == "flip_x":
             out = np.fliplr(out)
         elif op == "flip_y":

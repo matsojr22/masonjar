@@ -942,14 +942,49 @@ function ensureGeometryMap() {
 	);
 }
 
-function fileUrlForPath(filePath) {
+function previewUrlCacheBuster() {
+	var appliedAt =
+		wizardState.cziImport && wizardState.cziImport.geometry_applied_at;
+	if (appliedAt) {
+		return encodeURIComponent(String(appliedAt));
+	}
+	return "";
+}
+
+function fileUrlForPath(filePath, cacheBuster) {
 	if (!filePath) {
 		return "";
 	}
+	var href;
 	try {
-		return url.pathToFileURL(path.resolve(filePath)).href;
+		href = url.pathToFileURL(path.resolve(filePath)).href;
 	} catch (e) {
-		return url.pathToFileURL(filePath).href;
+		href = url.pathToFileURL(filePath).href;
+	}
+	var bust = cacheBuster != null ? cacheBuster : previewUrlCacheBuster();
+	if (bust) {
+		href += (href.indexOf("?") >= 0 ? "&" : "?") + "v=" + bust;
+	}
+	return href;
+}
+
+function updateOrientApplySummary() {
+	var el = qs("orientApplySummary");
+	if (!el) {
+		return;
+	}
+	var appliedAt =
+		wizardState.cziImport && wizardState.cziImport.geometry_applied_at;
+	var text = orientGeometry.orientPostApplySummaryText(
+		appliedAt,
+		wizardState.cziImport && wizardState.cziImport.geometry_applied_files_total,
+	);
+	if (text) {
+		el.textContent = text;
+		el.classList.remove("d-none");
+	} else {
+		el.textContent = "";
+		el.classList.add("d-none");
 	}
 }
 
@@ -1026,6 +1061,7 @@ function updateOrientPreviewBanner() {
 				"CSS preview — not yet written to files. Confirm geometry writes transforms to disk.";
 		}
 	}
+	updateOrientApplySummary();
 	return health;
 }
 
@@ -1159,6 +1195,8 @@ function finalizeGeometryAfterApply(payload) {
 	}
 	writeImportConfig();
 	persistCziSettings();
+	updateOrientApplySummary();
+	renderOrientationGrid();
 }
 
 function writeImportConfig() {

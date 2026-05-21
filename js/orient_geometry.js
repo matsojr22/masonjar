@@ -4,6 +4,7 @@ function defaultGeometry() {
 	return { rotate: 0, flipX: false, flipY: false };
 }
 
+/** CSS rotate(+Ndeg) is clockwise; py/apply_geometry.py uses matching np.rot90 k. */
 function geometryCssTransform(geom) {
 	var rot = Number(geom && geom.rotate) || 0;
 	var sx = geom && geom.flipX ? -1 : 1;
@@ -68,6 +69,27 @@ function orientPreviewHintText(geometryAppliedAt, pendingCount) {
 	return "Showing on-disk previews.";
 }
 
+function orientPostApplySummaryText(geometryAppliedAt, filesTotal) {
+	if (!geometryAppliedAt) {
+		return "";
+	}
+	var when = geometryAppliedAt;
+	try {
+		when = new Date(geometryAppliedAt).toLocaleString();
+	} catch (e) {
+		/* keep ISO string */
+	}
+	var files =
+		filesTotal != null && filesTotal !== "" ? String(filesTotal) : "?";
+	return (
+		"Last applied: " +
+		when +
+		" — " +
+		files +
+		" file(s). Tiles show saved orientation (rot 0° = no pending edits)."
+	);
+}
+
 module.exports = {
 	defaultGeometry: defaultGeometry,
 	geometryCssTransform: geometryCssTransform,
@@ -77,4 +99,5 @@ module.exports = {
 	ensureGeometryMap: ensureGeometryMap,
 	resetGeometryMap: resetGeometryMap,
 	orientPreviewHintText: orientPreviewHintText,
+	orientPostApplySummaryText: orientPostApplySummaryText,
 };

@@ -53,6 +53,25 @@ function testIsIdentityGeometry() {
 	);
 }
 
+function testRot90ClickContract() {
+	var geom = orientGeometry.defaultGeometry();
+	geom = orientGeometry.applyGeometryAction(geom, "rot90");
+	assert.strictEqual(geom.rotate, 90);
+	assert.strictEqual(geom.flipX, false);
+	assert.strictEqual(geom.flipY, false);
+	assert.strictEqual(
+		orientGeometry.geometryCssTransform(geom),
+		"rotate(90deg) scaleX(1) scaleY(1)",
+	);
+}
+
+function testOrientPostApplySummaryText() {
+	var text = orientGeometry.orientPostApplySummaryText("2026-05-21T12:00:00.000Z", 42);
+	assert.match(text, /Last applied:/);
+	assert.match(text, /42 file/);
+	assert.match(text, /rot 0/);
+}
+
 function testFindGeometryKeysWithoutPreviewFiles() {
 	var tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mj-orient-"));
 	var bundle = path.join(tmp, "M528_masonjar");
@@ -75,6 +94,8 @@ function run() {
 	testCountNonIdentityAfterReset();
 	testOrientPreviewHintText();
 	testIsIdentityGeometry();
+	testRot90ClickContract();
+	testOrientPostApplySummaryText();
 	testFindGeometryKeysWithoutPreviewFiles();
 	console.log("test-orient-geometry.js: all passed");
 }
