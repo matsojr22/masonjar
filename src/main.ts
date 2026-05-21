@@ -1442,6 +1442,11 @@ ipcMain.on("runIntensity", function (event: any, data: any[]) {
     appendFlagPathArg(args, "-d", dapiDir);
   }
   appendSliceListArg(args, data, 5);
+  const configPath =
+    data.length > 6 && data[6] != null ? String(data[6]).trim() : "";
+  if (configPath.length > 0) {
+    appendFlagPathArg(args, "--config", configPath);
+  }
 
   let options = {
     mode: "text",
@@ -1471,7 +1476,7 @@ ipcMain.on("runIntensity", function (event: any, data: any[]) {
         const errMsg =
           pyFail ||
           (noPkls
-            ? "Isolate Regions wrote no PKL files. Check alignment, VIS/RSP regions, and whole vs hemisphere mode in the Application log."
+            ? "Isolate Regions wrote no PKL files. Check alignment, selected regions, layer mode, and whole vs hemisphere in the Application log."
             : null);
         if (errMsg) {
           reportPythonFailure(errMsg);

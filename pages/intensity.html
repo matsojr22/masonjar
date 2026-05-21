@@ -40,7 +40,7 @@
             (<code>.png</code>, <code>.tif</code>/<code>.tiff</code>, <code>.jpg</code>, or <code>&lt;stem&gt;_dapi.png</code> / <code>_dapi.tif</code>).
             DAPI is resized to the intensity grid and stored as <code>dapi_roi</code> in each PKL for dual-channel export.
             If the DAPI folder is selected but no matching file exists for a slice, that slice's PKLs will omit <code>dapi_roi</code> (check the Log for warnings).
-            Do not forget to select whole or hemisphere only, for whole brains only the left hemisphere will be processed.
+            Select whole or hemisphere only (whole-brain mode keeps the left half of each slice). Use <strong>Configure outputs</strong> to pick CCF regions in the wizard.
             <br />
           </p>
         </div>
@@ -185,9 +185,12 @@
           >
         </div>
         <div class="col d-grid">
-          <button type="button" class="btn btn-primary" id="run">Run</button>
+          <button type="button" class="btn btn-primary" id="run">Configure outputs</button>
         </div>
       </div>
+      <p class="small text-muted mt-2">
+        Region selection and extraction run in the wizard after you configure paths and options here.
+      </p>
     </div>
 
     <!-- Error Modal -->
@@ -222,8 +225,6 @@
         </div>
       </div>
     </div>
-    <div class="loadmessage text-left" id="loadmessage"></div>
-    <div class="loading" id="loadbar"></div>
     <script
       src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"
       integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p"

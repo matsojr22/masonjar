@@ -7,6 +7,7 @@ from skimage.measure import label, regionprops
 from skimage.filters import threshold_otsu
 import numpy as np
 import argparse
+import inspect
 from pathlib import Path
 from skimage.exposure import equalize_adapthist
 from sahi import AutoDetectionModel
@@ -81,24 +82,30 @@ def make_tile_progress_printer(label):
     return progress_callback
 
 
+def _call_get_sliced_prediction(image, detection_model, tile_size, label):
+    """Call SAHI sliced prediction; only pass kwargs supported by installed sahi."""
+    kwargs = {
+        "slice_height": tile_size,
+        "slice_width": tile_size,
+        "overlap_height_ratio": 0.1,
+        "overlap_width_ratio": 0.1,
+        "verbose": 1,
+    }
+    params = inspect.signature(get_sliced_prediction).parameters
+    if "progress_bar" in params:
+        kwargs["progress_bar"] = False
+    if "progress_callback" in params:
+        kwargs["progress_callback"] = make_tile_progress_printer(label)
+    return get_sliced_prediction(image, detection_model, **kwargs)
+
+
 def run_sliced_detection(image, detection_model, tile_size, label):
     print(
         f"{label}: starting tiled detection ({image.shape[1]}×{image.shape[0]} px, "
         f"tile {tile_size})…",
         flush=True,
     )
-    result = get_sliced_prediction(
-        image,
-        detection_model,
-        slice_height=tile_size,
-        slice_width=tile_size,
-        overlap_height_ratio=0.1,
-        overlap_width_ratio=0.1,
-        verbose=1,
-        progress_bar=False,
-        progress_callback=make_tile_progress_printer(label),
-    )
-    return result
+    return _call_get_sliced_prediction(image, detection_model, tile_size, label)
 
 
 def screen_predictions(prediction_objects, area_threshold, eccentricity_threshold=None, image=None, sam_model_path=None):

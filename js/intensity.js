@@ -1,3 +1,5 @@
+"use strict";
+
 var fs = require("fs");
 var path = require("path");
 var ipc = require("electron").ipcRenderer;
@@ -7,25 +9,30 @@ var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
 var branding = require("./branding");
+
+var SETUP_KEY = "masonjar.intensity.setup";
+
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
-var run = document.getElementById("run");
+
+var configureBtn = document.getElementById("run");
+var back = document.getElementById("back");
 var indir = document.getElementById("indir");
 var annodir = document.getElementById("annodir");
 var outdir = document.getElementById("outdir");
 var dapidir = document.getElementById("dapidir");
 var usedapi = document.getElementById("usedapi");
-var loadbar = document.getElementById("loadbar");
-var loadmessage = document.getElementById("loadmessage");
-var back = document.getElementById("back");
 var whole = document.getElementById("whole");
 var half = document.getElementById("half");
 var flatOutput = document.getElementById("flatOutput");
 var alignmentMethod = "True";
 var methods = document.querySelector("#methods");
-var lastRunRel = "";
 
 pipelineRun.ensureRunModeUi("runModePanel", "intensity");
+
+if (configureBtn) {
+	configureBtn.textContent = "Configure outputs";
+}
 
 if (usedapi && dapidir) {
 	usedapi.addEventListener("change", function () {
@@ -69,7 +76,7 @@ try {
 	// ignore
 }
 
-run.addEventListener("click", function () {
+configureBtn.addEventListener("click", function () {
 	if (indir && outdir && indir.value && outdir.value && annodir && annodir.value) {
 		if (usedapi && usedapi.checked) {
 			if (!dapidir || !dapidir.value) {
@@ -100,95 +107,35 @@ run.addEventListener("click", function () {
 			return;
 		}
 		var sortedStems = pipelineRuns.listImageSliceStems(indir.value);
-		var slug = pipelineRuns.buildRunSlug("intensity", {
-			sortedStems: sortedStems,
-			whole: alignmentMethod,
-			useDapi: usedapi && usedapi.checked,
-			subsetCount: plan.toProcess.length,
-		});
-		var useFlat = flatOutput && flatOutput.checked;
 		var outBase =
 			project.isActive() && pipelineRuns.resolveRoleBaseAbs("pkls")
 				? pipelineRuns.resolveRoleBaseAbs("pkls")
 				: outdir.value;
-		var finalOut = pipelineRuns.resolveRunLeaf(
-			outBase,
-			"intensity",
-			slug,
-			useFlat,
-		);
-		try {
-			fs.mkdirSync(finalOut, { recursive: true });
-		} catch (mkdirErr) {
-			alert("Could not create output directory: " + (mkdirErr.message || mkdirErr));
-			return;
-		}
-		lastRunRel = useFlat ? "" : pipelineRuns.relFromRoleBase("intensity", finalOut);
-
-		run.classList.add("disabled");
-		back.classList.remove("btn-warning");
-		back.classList.add("btn-danger");
-		back.innerHTML = "Cancel";
-		run.innerHTML = "<i class='fas fa-spinner fa-spin'></i>";
-		if (plan.summary && loadmessage) {
-			loadmessage.textContent = plan.summary;
-		}
 		var dapiPath =
 			usedapi && usedapi.checked && dapidir && dapidir.value ? dapidir.value : "";
-		ipc.send("runIntensity", [
-			indir.value,
-			finalOut,
-			annodir.value,
-			alignmentMethod,
-			dapiPath,
-			plan.sliceListPath || "",
-		]);
+		var payload = {
+			indir: indir.value,
+			annodir: annodir.value,
+			outdir: outdir.value,
+			outBase: outBase,
+			dapiPath: dapiPath,
+			whole: alignmentMethod,
+			useDapi: usedapi && usedapi.checked,
+			flatOutput: flatOutput && flatOutput.checked,
+			sliceListPath: plan.sliceListPath || "",
+			subsetCount: plan.toProcess.length,
+			sortedStems: sortedStems,
+			planSummary: plan.summary || "",
+			bundleRoot: project.isActive() ? project.getBundleRoot() : "",
+		};
+		try {
+			sessionStorage.setItem(SETUP_KEY, JSON.stringify(payload));
+		} catch (err) {
+			alert("Could not save setup: " + (err.message || err));
+			return;
+		}
+		window.location.href = "./intensity_wizard.html";
 	}
-});
-
-back.addEventListener("click", function (event) {
-	if (back.classList.contains("btn-danger")) {
-		event.preventDefault();
-		ipc.send("killIntensity", []);
-		back.classList.add("btn-warning");
-		back.classList.remove("btn-danger");
-		back.innerHTML = "Back";
-		run.innerHTML = "Run";
-		run.classList.remove("disabled");
-		loadmessage.innerHTML = "";
-		loadbar.style.width = "0";
-	}
-});
-
-ipc.on("intensityResult", function (event, response) {
-	run.innerHTML = "Run";
-	run.classList.remove("disabled");
-	back.classList.add("btn-warning");
-	back.classList.remove("btn-danger");
-	back.innerHTML = "Back";
-	loadmessage.innerHTML = "";
-	loadbar.style.width = "0";
-	if (project.isActive() && lastRunRel) {
-		pipelineRuns.setActiveRunRel("intensity", lastRunRel);
-		project.refreshProjectIndex().catch(function () {});
-	}
-});
-
-ipc.on("intensityError", function (event, response) {
-	run.innerHTML = "Run";
-	run.classList.remove("disabled");
-	back.classList.add("btn-warning");
-	back.classList.remove("btn-danger");
-	back.innerHTML = "Back";
-	loadbar.style.width = "0";
-	if (response && response[0]) {
-		loadmessage.textContent = String(response[0]);
-	}
-});
-
-ipc.on("updateLoad", function (event, response) {
-	loadbar.style.width = String(response[0]) + "%";
-	loadmessage.innerHTML = response[1];
 });
 
 workspace.applyPreset("intensity");

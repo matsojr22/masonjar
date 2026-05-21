@@ -243,7 +243,12 @@ function buildRunSlug(stepId, context) {
 	if (stepId === "intensity") {
 		var mode = context.whole === false || context.whole === "False" ? "_hemi" : "_whole";
 		var dapi = context.useDapi ? "_dapi" : "";
-		return sanitizeSlugPart(span + mode + dapi + subset);
+		var rc =
+			context.regionCount && context.regionCount > 0
+				? "_r" + String(context.regionCount)
+				: "";
+		var layers = context.includeLayers ? "_layers" : "";
+		return sanitizeSlugPart(span + mode + dapi + rc + layers + subset);
 	}
 	if (stepId === "count") {
 		var predRef = shortRefToken(context.predictionRunRel);

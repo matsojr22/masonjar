@@ -8,6 +8,27 @@ from pathlib import Path
 
 from slice_index import load_slice_list, slice_id_allowed
 from intensity_flags import parse_whole_flag
+from region_config import (
+    build_output_targets,
+    children_for_target,
+    load_intensity_config,
+)
+
+LEGACY_VIS_RSP_ACRONYMS = [
+    "VISa",
+    "VISal",
+    "VISam",
+    "VISp",
+    "VISl",
+    "VISli",
+    "VISpl",
+    "VISpm",
+    "VISpor",
+    "VISrl",
+    "RSPagl",
+    "RSPd",
+    "RSPv",
+]
 import tifffile
 import numpy as np
 from demons import resize_image_nearest_neighbor
@@ -200,20 +221,51 @@ if __name__ == "__main__":
         help="JSON file with slice ids to process (array or {slice_ids: []})",
         default="",
     )
+    parser.add_argument(
+        "--config",
+        help="JSON run config from Isolate Regions wizard (selected_region_ids, paths, flags)",
+        default="",
+    )
     args = parser.parse_args()
 
+    intensity_config = None
+    config_path = args.config.strip()
+    if config_path:
+        intensity_config = load_intensity_config(config_path)
+        intensityPath = intensity_config.input_dir or args.images.strip()
+        output_dir_str = intensity_config.output_dir or args.output.strip()
+        annotationPath = intensity_config.annotation_dir or args.annotations.strip()
+        is_whole = intensity_config.whole
+        dapi_dir_raw = (
+            intensity_config.dapi_dir if intensity_config.use_dapi else ""
+        )
+        slice_list_path = (
+            intensity_config.slice_list or args.slice_list.strip() or ""
+        )
+        selected_region_ids = intensity_config.selected_region_ids
+        include_layers = intensity_config.include_layers
+    else:
+        intensityPath = args.images.strip()
+        output_dir_str = args.output.strip()
+        annotationPath = args.annotations.strip()
+        is_whole = parse_whole_flag(args.whole)
+        dapi_dir_raw = args.dapi_dir.strip()
+        slice_list_path = args.slice_list.strip() or ""
+        include_layers = False
+        selected_region_ids = []
+
     # Intensity files: only image-like names so sort order is not thrown off by .DS_Store, etc.
-    intensityPath = args.images.strip()
     intensityFiles = sorted(
         f for f in os.listdir(intensityPath) if _is_candidate_intensity_filename(f)
     )
-    is_whole = parse_whole_flag(args.whole)
     mode_label = "whole" if is_whole else "hemisphere"
     print(f"LOG: intensity_mode={mode_label}", flush=True)
-    dapi_dir_raw = args.dapi_dir.strip()
+    if include_layers:
+        print("LOG: intensity_layers=on", flush=True)
+    else:
+        print("LOG: intensity_layers=off", flush=True)
     dapi_dir_path = Path(dapi_dir_raw) if dapi_dir_raw else None
 
-    annotationPath = args.annotations.strip()
     annotation_dir = Path(annotationPath)
     print(f"LOG: intensity_dir={intensityPath}", flush=True)
     print(f"LOG: annotation_dir={annotationPath}", flush=True)
@@ -222,7 +274,26 @@ if __name__ == "__main__":
     print("Setting up...", flush=True)
 
     structure_map = pickle.load(open(args.map.strip(), "rb"))
-    allowed_slices = load_slice_list(args.slice_list.strip() or None)
+    if not selected_region_ids:
+        selected_region_ids = [
+            int(atlas_id)
+            for atlas_id, data in structure_map.items()
+            if data["acronym"] in LEGACY_VIS_RSP_ACRONYMS
+        ]
+    output_targets = build_output_targets(
+        structure_map, selected_region_ids, include_layers
+    )
+    if not output_targets:
+        print(
+            "NO_PKLS_WRITTEN: No valid output regions for selected_region_ids.",
+            flush=True,
+        )
+        sys.exit(1)
+    print(
+        f"LOG: intensity_regions={len(output_targets)} selected_ids={len(selected_region_ids)}",
+        flush=True,
+    )
+    allowed_slices = load_slice_list(slice_list_path or None)
     slices_processed = 0
     total_pkls_written = 0
 
@@ -289,44 +360,13 @@ if __name__ == "__main__":
             annotation_recaled = resize_image_nearest_neighbor(
                 annotation, (width, height)
             )
-            required_regions = [
-                "VISa",
-                "VISal",
-                "VISam",
-                "VISp",
-                "VISl",
-                "VISli",
-                "VISpl",
-                "VISpm",
-                "VISpor",
-                "VISrl",
-                "RSPagl",
-                "RSPd",
-                "RSPv",
-            ]
+            intensities = {tid: {} for tid in output_targets}
+            dapi_intensities = {tid: {} for tid in output_targets}
+            children_ids = {
+                tid: children_for_target(structure_map, tid, include_layers)
+                for tid in output_targets
+            }
 
-            required_ids = [
-                atlas_id
-                for atlas_id, data in structure_map.items()
-                if data["acronym"] in required_regions
-            ]
-
-            intensities = {required_id: {} for required_id in required_ids}
-            dapi_intensities = {required_id: {} for required_id in required_ids}
-
-            # Get all children of the required regions in a dict
-            # Dict helps us check which parent a child belongs to
-            # Child == Parent in ID_PATH
-            children_ids = {required_id: [] for required_id in required_ids}
-            for required_id in required_ids:
-                for atlas_id, data in structure_map.items():
-                    if required_id in [
-                        int(sub_id) for sub_id in data["id_path"].split("/")
-                    ]:
-                        children_ids[required_id].append(atlas_id)
-
-            # Scan resized annotation for any child ids
-            # If found, add its vertex and intensity to the parent
             for parent_id, children in children_ids.items():
                 for child_id in children:
                     # Get the vertex of the child
@@ -355,16 +395,15 @@ if __name__ == "__main__":
             slice_pkls_written = 0
             # Save the intensity values and the verticies as ROI package pkls
             for region in intensities.keys():
-                # reconstruct the region
-                if intensities[region] == {}:  # skip empty regions
+                if intensities[region] == {}:
                     continue
 
                 name = stem
-                region_name = structure_map[region]["acronym"]
+                region_name = output_targets[region]
 
                 # split file name
-                outputPath = Path(
-                    args.output.strip() + "/" + f"{name}_{region_name}" + ".pkl"
+                pkl_out = Path(
+                    output_dir_str + "/" + f"{name}_{region_name}" + ".pkl"
                 )
 
                 pkg = {
@@ -378,7 +417,7 @@ if __name__ == "__main__":
                     if dapi_source_path_str:
                         pkg["dapi_source_path"] = dapi_source_path_str
 
-                with open(outputPath, "wb") as f:
+                with open(pkl_out, "wb") as f:
                     pickle.dump(pkg, f)
                 slice_pkls_written += 1
                 total_pkls_written += 1
@@ -388,7 +427,7 @@ if __name__ == "__main__":
                 flush=True,
             )
 
-    output_dir = Path(args.output.strip())
+    output_dir = Path(output_dir_str)
     pkl_count = len(
         [
             p
@@ -400,7 +439,7 @@ if __name__ == "__main__":
         summary = (
             "NO_PKLS_WRITTEN: Isolate Regions finished with zero PKL files. "
             f"Processed {slices_processed} slice(s) in {mode_label} mode. "
-            "Output is limited to VIS/RSP atlas regions. "
+            "No pixels matched the selected atlas regions. "
             "If you used Whole Slice mode, only the left half of each slice is kept; "
             "try Hemisphere Only or verify alignment annotations."
         )
@@ -414,13 +453,15 @@ if __name__ == "__main__":
         "step": "intensity",
         "input_dir": args.images.strip(),
         "annotation_dir": args.annotations.strip(),
-        "output_dir": args.output.strip(),
+        "output_dir": output_dir_str,
         "whole": is_whole,
         "pkls_written": total_pkls_written,
-        "dapi_dir": args.dapi_dir.strip(),
-        "slice_list": args.slice_list.strip() or None,
+        "dapi_dir": dapi_dir_raw,
+        "slice_list": slice_list_path or None,
+        "selected_region_ids": selected_region_ids,
+        "include_layers": include_layers,
     }
-    write_run_manifest(args.output.strip(), manifest_extra)
+    write_run_manifest(output_dir_str, manifest_extra)
 
     if slices_processed > 0 and total_pkls_written == 0:
         sys.exit(1)

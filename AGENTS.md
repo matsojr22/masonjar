@@ -75,7 +75,7 @@ Renderer scripts use `require("electron").ipcRenderer`. Main handlers are `ipcMa
 | `killAdjust` | once `killAdjust` | — | |
 | `runAlign` | `runAlign` | `map.py` | `alignResult`, `updateLoad` |
 | `killAlign` | once `killAlign` | — | |
-| `runIntensity` | `runIntensity` | `region.py` | `intensityResult`, `updateLoad`. Optional 5th arg: DAPI directory → `-d` (same stem as intensity files; see `region.py` for supported extensions) |
+| `runIntensity` | `runIntensity` | `region.py` | `intensityResult`, `updateLoad`. Args: `[indir, outdir, annodir, whole, dapiDir, sliceList, configPath]`. Index 4 = DAPI dir (`-d`); index 6 = run config JSON (`--config`, separate argv tokens for Windows paths). |
 | `killIntensity` | once `killIntensity` | — | |
 | `runExportDualTif` | `runExportDualTif` | `export_roi_dual_tif.py` | `exportDualTifResult`, `updateLoad` |
 | `killExportDualTif` | once `killExportDualTif` | — | |
@@ -113,11 +113,21 @@ Renderer scripts use `require("electron").ipcRenderer`. Main handlers are `ipcMa
 
 Some renderer files register `*Error` listeners (e.g. `alignError`, `detectError`). The main process logs Python non-zero exits to the Log (forcing the log window visible) and avoids throwing; **Isolate Regions** also emits `intensityError` with a short message after `intensityResult` when Python fails or writes zero PKLs.
 
+## Isolate Regions wizard and config
+
+**Flow**: [`pages/intensity.html`](pages/intensity.html) (setup: paths, whole/hemisphere, DAPI, run mode) → **Configure outputs** → [`pages/intensity_wizard.html`](pages/intensity_wizard.html) + [`js/intensity_wizard.js`](js/intensity_wizard.js) (steps 2–4: CCF region picker, progress, summary). Setup is stashed in `sessionStorage` (`masonjar.intensity.setup`). **Process** writes run config and calls `runIntensity` with config path at IPC index 6.
+
+**Run config** (project: `.masonjar/intensity_run_config.json`; legacy: temp file): `selected_region_ids`, `include_layers`, `whole`, `use_dapi`, paths, `slice_list`. Python: [`py/region_config.py`](py/region_config.py), [`py/region.py`](py/region.py) `--config`. Without `--config`, legacy batch/CLI still uses the built-in VIS/RSP acronym set.
+
+**Region picker**: [`js/structure_catalog.js`](js/structure_catalog.js) flattens [`csv/structure_graph.json`](csv/structure_graph.json). Depth dropdown filters available list by `st_level`; selected list persists across depth changes. **Include cortical layers** (`include_layers`): off = one PKL per selected parent aggregating descendants (default); on = separate PKLs for layer structures under selected parents ([`py/count.py`](py/count.py)-style `"layer"` in structure name). **Visual cortex preset** restores the legacy VIS+RSP ID set. Parent-area row colors: [`js/atlas_region_style.js`](js/atlas_region_style.js), [`docs/isolate_regions_style.md`](docs/isolate_regions_style.md) (`GROUP_STYLE_LEVEL=6`, Allen `color_hex_triplet`).
+
+**Slug** ([`js/pipeline_runs.js`](js/pipeline_runs.js)): span + `_whole`/`_hemi` + optional `_dapi` + `_r{N}` (selection count) + optional `_layers` + subset token.
+
 ## Isolate Regions PKL schema (with DAPI)
 
-**Whole vs hemisphere** ([py/region.py](py/region.py), [pages/intensity.html](pages/intensity.html)): IPC sends `-w` + `True`/`False` strings. Processing uses `parse_whole_flag()` (never `bool("False")` or `eval`). **Whole Slice** (`True`): only pixels with `x < width/2` (left half). **Hemisphere Only** (`False`): all pixels in matched VIS/RSP regions. UI choice persists in `masonjar.intensity.whole`. Run slug `_whole` / `_hemi` follows the same flag. Logs include `LOG: intensity_mode=whole|hemisphere` and per-slice `LOG: … wrote N PKLs`.
+**Whole vs hemisphere** ([py/region.py](py/region.py), setup page): IPC/config `whole` as `True`/`False` strings. Processing uses `parse_whole_flag()` (never `bool("False")` or `eval`). **Whole Slice** (`True`): only pixels with `x < width/2` (left half). **Hemisphere Only** (`False`): all pixels in matched selected regions. UI choice persists in `masonjar.intensity.whole`. Logs include `LOG: intensity_mode=whole|hemisphere`, `LOG: intensity_layers=on|off`, and per-slice `LOG: … wrote N PKLs`.
 
-**Zero PKL output is a failed run**: only VIS/RSP acronyms are exported. If at least one slice was processed but no `{sliceId}_{region}.pkl` files were written, Python prints `NO_PKLS_WRITTEN`, writes `run_manifest.json` with `pkls_written: 0`, and exits **1**; main sends `intensityError` and forces the log open.
+**Zero PKL output is a failed run**: if at least one slice was processed but no `{sliceId}_{region}.pkl` files were written for the configured regions, Python prints `NO_PKLS_WRITTEN`, writes `run_manifest.json` with `pkls_written: 0`, and exits **1**; main sends `intensityError` and forces the log open.
 
 **Pairing** ([py/region.py](py/region.py)): each intensity image is matched to an Align annotation PKL by slice id (case-insensitive), not by sorted list index. Accepts **`Annotation_{id}.pkl`** (as written by [py/map.py](py/map.py)), plain **`{id}.pkl`**, and the map.py stripped basename (e.g. `M528_s061.ome.tiff` → `Annotation_M528_s061.pkl` or `Annotation_M528_s061.ome.pkl`). Slice id is the part before the first dot (`M528_s061`).
 
