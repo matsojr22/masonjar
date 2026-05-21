@@ -161,7 +161,7 @@ Input-only roles (`dapi`, `original_scans`) stay flat at the role root; `active_
 
 [`py/adjust.py`](py/adjust.py) pairs DAPI images to annotation PKLs by **slice stem** (via [`py/slice_index.py`](py/slice_index.py)), not sorted folder order. In project mode, [`js/adjust.js`](js/adjust.js) passes a **`--slice-list`** from matched DAPI + **active slices** leaf pairs through IPC.
 
-The PyQt viewer shows a **Background channel** bar: **DAPI** from `00_dapi` (**PNG** preferred; legacy `.tif` fallback with log) plus optional low-res previews from `data/counting/_previews/{sliceId}_{branch}.png` (legacy `.tif` still accepted; see [`py/adjust_channels.py`](py/adjust_channels.py); optional `--previews-dir`). Switching channels reloads only the background image; annotation pairing stays keyed by slice id. **Refresh drawings** rebuilds the overlay from `current_label` without changing region IDs; **Convert Layers to Parents** still runs atlas layer→parent ID conversion.
+The PyQt viewer shows a **Background channel** bar listing only **`data/counting/_previews/{sliceId}_*.png`** (see [`py/adjust_channels.py`](py/adjust_channels.py); optional `--previews-dir`) — no duplicate entry from `00_dapi`. Switching channels reloads only the background image; annotation pairing stays keyed by slice id. **Refresh drawings** rebuilds the overlay from `current_label` without changing region IDs; **Convert Layers to Parents** still runs atlas layer→parent ID conversion.
 
 ### Legacy workspace scan ([`js/workspace.js`](js/workspace.js))
 

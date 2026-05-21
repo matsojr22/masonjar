@@ -352,6 +352,10 @@ if __name__ == "__main__":
                 else:
                     region_name = regions[region_id]["name"]
                 region_area = region_areas[file].get(region, 0)
+                if region in running_areas:
+                    running_areas[region] += region_area
+                else:
+                    running_areas[region] = region_area
                 lines.append(
                     [
                         region,
@@ -363,7 +367,7 @@ if __name__ == "__main__":
             lines.append([])
 
         lines.append(["Totals"])
-        lines.append(["Region Acronym", "Region Name", "Count"])
+        lines.append(["Region Acronym", "Region Name", "Count", "Area (px)"])
         for region in sorted(running_counts.keys()):
             count = running_counts.get(region, 0)
             region_id = acronym_to_region.get(region)
@@ -371,7 +375,7 @@ if __name__ == "__main__":
                 region_name = "Unknown"
             else:
                 region_name = regions[region_id]["name"]
-            lines.append([region, region_name, count])
+            lines.append([region, region_name, count, running_areas.get(region, 0)])
 
         lines.append([])
         # Colocalization

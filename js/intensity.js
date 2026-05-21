@@ -77,8 +77,12 @@ run.addEventListener("click", function () {
 			subsetCount: plan.toProcess.length,
 		});
 		var useFlat = flatOutput && flatOutput.checked;
+		var outBase =
+			project.isActive() && pipelineRuns.resolveRoleBaseAbs("pkls")
+				? pipelineRuns.resolveRoleBaseAbs("pkls")
+				: outdir.value;
 		var finalOut = pipelineRuns.resolveRunLeaf(
-			outdir.value,
+			outBase,
 			"intensity",
 			slug,
 			useFlat,
