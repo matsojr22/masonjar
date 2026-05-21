@@ -48,6 +48,8 @@ const LOG_UI_MAX_QUEUE = 4000;
 const LOG_UI_CHUNK_LINES = 350;
 let logUiQueue = [];
 let logUiFlushTimer = null;
+/** New id each app launch — log window clears when this differs from stored session. */
+const appLogSessionId = `mj-${process.pid}-${Date.now()}`;
 function flushLogUiQueue() {
     logUiFlushTimer = null;
     if (!logWin || !logWin.webContents || logUiQueue.length === 0) {
@@ -678,6 +680,14 @@ function createLogWindow() {
         closeable: true,
     });
     win.loadFile("pages/log.html");
+    win.webContents.once("did-finish-load", () => {
+        try {
+            win.webContents.send("resetLogSession", appLogSessionId);
+        }
+        catch (_error) {
+            // window closed during load
+        }
+    });
     win.on("closed", () => {
         logWin = null;
     });
@@ -695,6 +705,11 @@ function ensureLogWindowVisible() {
     return true;
 }
 app.on("ready", () => {
+    logUiQueue = [];
+    if (logUiFlushTimer) {
+        clearTimeout(logUiFlushTimer);
+        logUiFlushTimer = null;
+    }
     win = createWindow();
     logWin = createLogWindow();
     // Uncomment if you want tools on launch

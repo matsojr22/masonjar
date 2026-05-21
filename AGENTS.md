@@ -53,7 +53,7 @@ On startup (`app.on("ready")` → `did-finish-load`), the main process uses `res
 - `envPath` → `{homeDir}/benv` (virtualenv).
 - `envPythonPath` → `benv/Scripts` (Windows) or `benv/bin` (Unix) — used for **`pip install`** and as **`pythonPath` passed to `PythonShell`** (script runner uses `pyCommand`: `python.exe` or `./python3`).
 
-**Logs**: `console.log` is wrapped and **batched** to the log window (bounded queue + flush interval); `before-quit` drains the queue. The log page caps DOM lines and localStorage size ([js/log.js](js/log.js)). `createLogFile` appends to `{homeDir}/masonjar.log` on some failure paths. The log window is **closeable**; when closed, `logWin` is nulled and recreated on demand. Hub **Application log** ([`pages/menu.html`](pages/menu.html), [`pages/workspace_menu.html`](pages/workspace_menu.html)) sends `toggleLogWindow` / `showLogWindow` (preference `masonjar.showLogWindow`).
+**Logs**: `console.log` is wrapped and **batched** to the log window (bounded queue + flush interval); `before-quit` drains the queue. The log UI is **ephemeral per app launch** ([js/log.js](js/log.js)): main sends `resetLogSession` with a new session id on each process start; the log window does **not** restore or persist HTML to `localStorage` (legacy `log` / `logTime` keys are cleared). DOM is capped at 8000 lines. `createLogFile` appends to `{homeDir}/masonjar.log` on some failure paths. The log window is **closeable**; when closed, `logWin` is nulled and recreated on demand (same session, empty DOM). Hub **Application log** ([`pages/menu.html`](pages/menu.html), [`pages/workspace_menu.html`](pages/workspace_menu.html)) sends `toggleLogWindow` / `showLogWindow` (preference `masonjar.showLogWindow`).
 
 ## IPC: renderer → main → Python
 

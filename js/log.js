@@ -1,12 +1,13 @@
 var ipc = require("electron").ipcRenderer;
+var branding = require("./branding");
 
 var log = document.getElementById("log");
 
 /** Max (br+span) pairs kept in the log DOM to bound renderer memory. */
 var MAX_LOG_LINES = 8000;
 
-/** Do not persist more than this many characters to localStorage. */
-var MAX_LOG_STORAGE_CHARS = 400000;
+/** Current app-instance session id (set by main on log window load). */
+var activeLogSession = "";
 
 function appendLogChunk(text) {
   var lines = text.split("\n");
@@ -29,60 +30,70 @@ function trimLogDom() {
   }
 }
 
-function cacheLog() {
-  var el = document.getElementById("log");
-  var logText = el.innerHTML;
-  if (logText.length > MAX_LOG_STORAGE_CHARS) {
-    logText = logText.slice(logText.length - MAX_LOG_STORAGE_CHARS);
+function clearLogStorage() {
+  try {
+    localStorage.removeItem(branding.LOG_SESSION_KEY);
+    localStorage.removeItem(branding.LEGACY_LOG_UI_KEY);
+    localStorage.removeItem(branding.LEGACY_LOG_TIME_KEY);
+  } catch (e) {
+    // ignore quota / private mode
   }
-  localStorage.setItem("log", logText);
 }
 
-function loadLog() {
-  var el = document.getElementById("log");
-  var logText = localStorage.getItem("log");
-  el.innerHTML = logText || "";
-  trimLogDom();
+/** Empty the log view and drop any persisted UI log from prior app instances. */
+function resetLogView(sessionId) {
+  activeLogSession = sessionId || "";
+  if (log) {
+    log.innerHTML = "";
+  }
+  clearLogStorage();
+  if (activeLogSession) {
+    try {
+      localStorage.setItem(branding.LOG_SESSION_KEY, activeLogSession);
+    } catch (e) {
+      // ignore
+    }
+  }
 }
 
-function clearCache() {
-  localStorage.removeItem("log");
-}
-
-function checkLogExpiry() {
-  var expiry = new Date();
-  expiry.setDate(expiry.getDate() - 1);
-  var expiryTime = expiry.getTime();
-  var logTimeRaw = localStorage.getItem("logTime");
-  if (logTimeRaw == null) {
-    cacheLogTime();
-    clearCache();
-    loadLog();
+function beginLogSession(sessionId) {
+  if (!sessionId) {
     return;
   }
-  var logTime = Number(logTimeRaw);
-  if (logTime < expiryTime) {
-    clearCache();
-  } else {
-    loadLog();
+  var stored = "";
+  try {
+    stored = localStorage.getItem(branding.LOG_SESSION_KEY) || "";
+  } catch (e) {
+    stored = "";
   }
-}
-
-function cacheLogTime() {
-  var logTime = new Date().getTime();
-  localStorage.setItem("logTime", String(logTime));
+  if (stored !== sessionId) {
+    resetLogView(sessionId);
+    return;
+  }
+  activeLogSession = sessionId;
+  if (log && log.childNodes.length) {
+    return;
+  }
+  if (log) {
+    log.innerHTML = "";
+  }
 }
 
 window.onload = function () {
-  checkLogExpiry();
+  if (log) {
+    log.innerHTML = "";
+  }
+  clearLogStorage();
 };
 
-ipc.on("savelogs", function (event, response) {
-  cacheLog();
-  cacheLogTime();
+ipc.on("resetLogSession", function (event, sessionId) {
+  beginLogSession(String(sessionId || ""));
+});
+
+ipc.on("savelogs", function () {
+  // Log UI is ephemeral per app instance; do not persist to localStorage on quit.
 });
 
 ipc.on("log", function (event, response) {
-  console.log(response);
-  appendLogChunk(response);
+  appendLogChunk(String(response || ""));
 });

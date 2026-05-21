@@ -27,5 +27,9 @@ module.exports = {
 	LEGACY_WORKSPACE_KEY: "belljar.workspace",
 	SHOW_LOG_WINDOW_KEY: "masonjar.showLogWindow",
 	LEGACY_SHOW_LOG_WINDOW_KEY: "belljar.showLogWindow",
+	/** Per-process log UI session; new id each app launch. */
+	LOG_SESSION_KEY: "masonjar.logSession",
+	LEGACY_LOG_UI_KEY: "log",
+	LEGACY_LOG_TIME_KEY: "logTime",
 	GITHUB_REPO: "matsojr22/masonjar",
 };
