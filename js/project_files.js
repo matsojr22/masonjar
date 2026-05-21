@@ -206,38 +206,53 @@ function bindProjectFileControls(options) {
 
 	if (addFilesBtn) {
 		addFilesBtn.addEventListener("click", function () {
-			var role = window.prompt(
-				"Role to add files to (dapi, max, slices, predictions, …):",
-				"dapi",
-			);
-			if (!role) {
-				return;
-			}
-			role = role.trim();
-			if (!project.CANONICAL_ROLES[role]) {
-				alert("Unknown role: " + role);
-				return;
-			}
-			dialogs.pickDirectory({ tag: "addFiles_" + role }).then(function (selected) {
-				if (!selected) {
-					return;
-				}
-				var bundleRoot = project.getBundleRoot();
-				var roles = proj.roles || project.CANONICAL_ROLES;
-				var destDir = project.resolveRolePath(role);
-				if (!destDir) {
-					alert("Could not resolve role path.");
-					return;
-				}
-				project.importSourceToRoleWithLayout(selected, role, "copy", bundleRoot, roles);
-				project.refreshProjectIndex().then(function () {
+			var chosenRole = "";
+			dialogs
+				.pickProjectRole(project.CANONICAL_ROLES, "dapi")
+				.then(function (role) {
+					if (!role) {
+						return null;
+					}
+					if (!project.CANONICAL_ROLES[role]) {
+						alert("Unknown role: " + role);
+						return null;
+					}
+					chosenRole = role;
+					return dialogs.pickDirectory({ tag: "addFiles_" + role });
+				})
+				.then(function (selected) {
+					if (!selected || !chosenRole) {
+						return;
+					}
+					var bundleRoot = project.getBundleRoot();
+					var roles = proj.roles || project.CANONICAL_ROLES;
+					var destDir = project.resolveRolePath(chosenRole);
+					if (!destDir) {
+						alert("Could not resolve role path.");
+						return;
+					}
+					project.importSourceToRoleWithLayout(
+						selected,
+						chosenRole,
+						"copy",
+						bundleRoot,
+						roles,
+					);
+					return project.refreshProjectIndex();
+				})
+				.then(function (refreshed) {
+					if (!refreshed) {
+						return;
+					}
 					populateSubsetList(
 						subsetList,
 						(proj.processing && proj.processing.slice_ids) || [],
 					);
-					alert("Files imported into " + role + "; index refreshed.");
+					alert("Files imported into " + chosenRole + "; index refreshed.");
+				})
+				.catch(function (err) {
+					alert(String(err.message || err));
 				});
-			});
 		});
 	}
 }
