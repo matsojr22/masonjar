@@ -240,6 +240,8 @@ Slice IDs default to `{czi_stem}_s{scene:03d}` when multi-scene; **rename on imp
 
 **Geometry apply targets** (same rotation/flip per slice): `00_dapi/*.png`, `_previews/{sliceId}_*.png`, `original_scans/**/{sliceId}.tif`, `03_max/**/{sliceId}.tif`. Preflight `LOG:` lists each file (PNG vs TIFF, size, shape); progress is **file-based** (`files_total`, per-file read/write timing in finish payload).
 
+**Geometry state after apply:** `settings.czi_import.geometry` is **pending-only** — after a successful apply ([`js/orient.js`](js/orient.js), [`js/czi_wizard.js`](js/czi_wizard.js) call [`resetGeometryMap`](js/orient_geometry.js)), every slice resets to identity and `geometry_applied_at` is set. The Orient grid then shows **on-disk `_previews` pixels without CSS transform**. Re-applying with non-identity geometry **stacks** transforms on current files (guarded by confirm when `geometry_applied_at` is set). Apply is disabled when all geometry is identity. Wizard step 6 offers **Review orientation** (or click step 5 pill) to revisit baked previews.
+
 **Repair / migration:** [`migrate_low_res_tiffs`](py/czi_extract.py) converts `00_dapi/*.tif` → pipeline + orient PNG (then **deletes** TIFF), `_previews/*.tif` → `.png`, and syncs missing `_previews/*_dapi.png` from `00_dapi` PNG. Repair mode always migrates first; empty `repair_targets` = migrate-only. `00_dapi` must contain **zero** `.tif`/`.tiff` after migrate.
 
 **DAPI cleanup** ([`py/dapi_cleanup.py`](py/dapi_cleanup.py)): reads PNG or legacy TIFF; **writes PNG** to `00_dapi` / `00_dapi_clean` (Align expects PNG).

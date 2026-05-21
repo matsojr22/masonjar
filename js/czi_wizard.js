@@ -82,11 +82,14 @@ function setStep(step) {
 	var pills = document.querySelectorAll("#wizardSteps .nav-link");
 	for (var p = 0; p < pills.length; p++) {
 		var pillStep = Number(pills[p].getAttribute("data-step"));
-		pills[p].classList.remove("active", "disabled", "wizard-step-done");
+		pills[p].classList.remove("active", "disabled", "wizard-step-done", "wizard-step-revisit");
 		if (pillStep === step) {
 			pills[p].classList.add("active");
 		} else if (pillStep < step) {
 			pills[p].classList.add("wizard-step-done");
+			if (pillStep === 5 && step === 6 && !geometryRunning) {
+				pills[p].classList.add("wizard-step-revisit");
+			}
 		} else {
 			pills[p].classList.add("disabled");
 		}
@@ -118,11 +121,15 @@ function updateWizardCancelVisibility() {
 function setFinishNavDisabled(disabled) {
 	var hub = qs("finishHub");
 	var openBtn = qs("openWorkspace");
+	var reviewBtn = qs("reviewOrientation");
 	if (hub) {
 		hub.classList.toggle("d-none", disabled);
 	}
 	if (openBtn) {
 		openBtn.classList.toggle("d-none", disabled);
+	}
+	if (reviewBtn) {
+		reviewBtn.classList.toggle("d-none", disabled);
 	}
 }
 
@@ -989,6 +996,7 @@ function updateOrientPreviewBanner() {
 	var banner = qs("orientPreviewBanner");
 	var repairBtn = qs("orientRepairPreviews");
 	var step5Next = qs("step5Next");
+	var pending = countNonIdentityGeometry();
 	var msg = cziImport.orientPreviewBannerText(health);
 	if (banner) {
 		if (msg) {
@@ -1003,7 +1011,20 @@ function updateOrientPreviewBanner() {
 		repairBtn.classList.toggle("d-none", !health.needsRepair);
 	}
 	if (step5Next && !geometryRunning) {
-		step5Next.disabled = !health.canApply;
+		step5Next.disabled = !health.canApply || pending === 0;
+	}
+	var step5Hint = qs("step5ApplyHint");
+	if (step5Hint && !geometryRunning) {
+		if (!health.canApply) {
+			step5Hint.textContent = "";
+		} else if (pending === 0) {
+			step5Hint.textContent = wizardState.cziImport.geometry_applied_at
+				? "No pending changes. Review on-disk previews or adjust a slice before confirming again."
+				: "No pending geometry changes.";
+		} else {
+			step5Hint.textContent =
+				"CSS preview — not yet written to files. Confirm geometry writes transforms to disk.";
+		}
 	}
 	return health;
 }
@@ -1049,8 +1070,10 @@ function renderOrientationGrid() {
 			img.src = imgSrc;
 			img.alt = sliceId;
 			img.title = imgPath;
-			img.style.transform = geometryCssTransform(geom);
-			img.style.transformOrigin = "center center";
+			if (!orientGeometry.isIdentityGeometry(geom)) {
+				img.style.transform = geometryCssTransform(geom);
+				img.style.transformOrigin = "center center";
+			}
 			img.onerror = function () {
 				var msg = document.createElement("p");
 				msg.className = "small text-muted";
@@ -1063,7 +1086,10 @@ function renderOrientationGrid() {
 			tile.appendChild(img);
 			var hint = document.createElement("p");
 			hint.className = "czi-orient-preview-hint";
-			hint.textContent = "Live preview — saved on Confirm geometry";
+			hint.textContent = orientGeometry.orientPreviewHintText(
+				wizardState.cziImport.geometry_applied_at,
+				countNonIdentityGeometry(),
+			);
 			tile.appendChild(hint);
 		} else {
 			var noPrev = document.createElement("p");
@@ -1109,8 +1135,30 @@ function renderOrientationGrid() {
 			}
 			wizardState.cziImport.geometry[sid] = orientGeometry.applyGeometryAction(g, action);
 			renderOrientationGrid();
+			updateOrientPreviewBanner();
 		});
 	});
+}
+
+function finalizeGeometryAfterApply(payload) {
+	var ids = cziImport.collectSliceIds(wizardState.cziImport);
+	var orphans = cziImport.findGeometryKeysWithoutPreviewFiles(
+		wizardState.bundleRoot,
+		wizardState.cziImport.geometry,
+		ids,
+	);
+	if (orphans.length) {
+		verboseFinishLog(
+			"WARNING: geometry for slice(s) without DAPI/_previews files: " + orphans.join(", "),
+		);
+	}
+	orientGeometry.resetGeometryMap(wizardState.cziImport.geometry, ids);
+	wizardState.cziImport.geometry_applied_at = new Date().toISOString();
+	if (payload && payload.files_total != null) {
+		wizardState.cziImport.geometry_applied_files_total = payload.files_total;
+	}
+	writeImportConfig();
+	persistCziSettings();
 }
 
 function writeImportConfig() {
@@ -1500,6 +1548,19 @@ async function runExtract(options) {
 }
 
 async function runApplyGeometry() {
+	var pending = countNonIdentityGeometry();
+	if (pending === 0) {
+		throw new Error("No pending geometry changes to apply.");
+	}
+	if (pending > 0 && wizardState.cziImport.geometry_applied_at) {
+		if (
+			!confirm(
+				"Geometry was already applied to files. Apply again will rotate/flip current on-disk images. Continue?",
+			)
+		) {
+			throw new Error("Apply cancelled.");
+		}
+	}
 	setStep(6);
 	geometryRunning = true;
 	updateWizardCancelVisibility();
@@ -1574,6 +1635,7 @@ async function runApplyGeometry() {
 				reject(new Error(errMsg));
 				return;
 			}
+			finalizeGeometryAfterApply(payload);
 			finishWizard(payload)
 				.then(function () {
 					resolve(payload);
@@ -1620,6 +1682,7 @@ async function finishWizard(geometryPayload) {
 			? geometryPayload.bytes_total
 			: null;
 	var geomSlices = countNonIdentityGeometry();
+	var appliedAt = wizardState.cziImport.geometry_applied_at;
 	var importResult = wizardState.importResult || {};
 	var maxRuns = importResult.max_runs || {};
 	var summary =
@@ -1628,8 +1691,8 @@ async function finishWizard(geometryPayload) {
 		"/" +
 		filesTotal +
 		" file(s) transformed; " +
-		geomSlices +
-		" slice(s) with non-default geometry; " +
+		(appliedAt ? "geometry applied" : geomSlices + " slice(s) with pending geometry") +
+		"; " +
 		matched +
 		" DAPI/max slice(s) matched.";
 	if (elapsedSec != null) {
@@ -1869,6 +1932,30 @@ function bindStep5() {
 	});
 }
 
+function bindWizardStepPills() {
+	var pills = document.querySelectorAll("#wizardSteps .nav-link");
+	for (var i = 0; i < pills.length; i++) {
+		pills[i].addEventListener("click", function (ev) {
+			var pillStep = Number(ev.currentTarget.getAttribute("data-step"));
+			if (pillStep === 5 && wizardState.step === 6 && !geometryRunning) {
+				ev.preventDefault();
+				setStep(5);
+			}
+		});
+	}
+}
+
+function bindStep6() {
+	var reviewBtn = qs("reviewOrientation");
+	if (reviewBtn) {
+		reviewBtn.addEventListener("click", function () {
+			if (!geometryRunning) {
+				setStep(5);
+			}
+		});
+	}
+}
+
 function bindWizardNavigationGuards() {
 	var cancel = qs("wizardCancel");
 	if (cancel) {
@@ -1901,7 +1988,9 @@ pageInit.onReady(function () {
 	bindStep3();
 	bindStep4();
 	bindStep5();
+	bindStep6();
 	bindAxonBitDepth();
+	bindWizardStepPills();
 	bindWizardNavigationGuards();
 	setStep(1);
 });

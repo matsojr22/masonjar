@@ -1275,6 +1275,39 @@ function assessOrientPreviewHealth(bundleRoot, cziImport) {
 	};
 }
 
+function findGeometryKeysWithoutPreviewFiles(bundleRoot, geometryMap, sliceIds) {
+	var fs = require("fs");
+	var orphans = [];
+	var keys = {};
+	for (var i = 0; i < (sliceIds || []).length; i++) {
+		keys[sliceIds[i]] = true;
+	}
+	for (var key in geometryMap || {}) {
+		if (Object.prototype.hasOwnProperty.call(geometryMap, key)) {
+			keys[key] = true;
+		}
+	}
+	for (var sliceId in keys) {
+		if (!Object.prototype.hasOwnProperty.call(keys, sliceId)) {
+			continue;
+		}
+		var geom = geometryMap && geometryMap[sliceId];
+		if (!geom) {
+			continue;
+		}
+		var rot = Number(geom.rotate) || 0;
+		if (rot % 360 === 0 && !geom.flipX && !geom.flipY) {
+			continue;
+		}
+		var dapiPng = dapiPreviewPath(bundleRoot, sliceId);
+		var orientPng = orientDapiPreviewPath(bundleRoot, sliceId);
+		if (!fs.existsSync(dapiPng) && !fs.existsSync(orientPng)) {
+			orphans.push(sliceId);
+		}
+	}
+	return orphans;
+}
+
 function orientPreviewBannerText(health) {
 	if (!health || !health.needsRepair) {
 		return "";
@@ -1434,6 +1467,7 @@ module.exports = {
 	findMissingOrientDapiPreviews: findMissingOrientDapiPreviews,
 	ensureOrientDapiPreviewsFromPipeline: ensureOrientDapiPreviewsFromPipeline,
 	assessOrientPreviewHealth: assessOrientPreviewHealth,
+	findGeometryKeysWithoutPreviewFiles: findGeometryKeysWithoutPreviewFiles,
 	orientPreviewBannerText: orientPreviewBannerText,
 	auditCziImportCompletion: auditCziImportCompletion,
 	buildRepairTargetsFromAudit: buildRepairTargetsFromAudit,

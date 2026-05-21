@@ -98,3 +98,23 @@ def test_transform_zstack_flip_x(tmp_path: Path) -> None:
     assert loaded.shape == stack.shape
     for zi in range(2):
         assert np.array_equal(loaded[zi], np.fliplr(stack[zi]))
+
+
+def test_double_apply_rot90_changes_pixels_twice(tmp_path: Path) -> None:
+    """Applying the same rotation twice stacks transforms — geometry must reset after apply."""
+    import cv2
+
+    from apply_geometry import transform_file
+
+    arr = np.arange(12, dtype=np.uint8).reshape(3, 4)
+    path = tmp_path / "slice.png"
+    cv2.imwrite(str(path), arr)
+    once = arr.copy()
+    transform_file(path, compose_ops(90, False, False))
+    after_once = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    assert not np.array_equal(after_once, once)
+    transform_file(path, compose_ops(90, False, False))
+    after_twice = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    assert not np.array_equal(after_twice, after_once)
+    expected_twice = np.rot90(np.rot90(once, k=1), k=1)
+    assert np.array_equal(after_twice, expected_twice)

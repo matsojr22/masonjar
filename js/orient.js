@@ -101,9 +101,30 @@ function collectSliceIdsFromIndex() {
 
 function ensureSlicePlan() {
 	var cfg = orientState.cziImport;
-	var ids = cziImport.collectSliceIds(cfg);
-	if (!ids.length) {
-		ids = collectSliceIdsFromIndex();
+	var orderIds = cziImport.collectSliceIds(cfg);
+	var indexIds = collectSliceIdsFromIndex();
+	var ids = orderIds.length ? orderIds : indexIds;
+	if (orderIds.length && indexIds.length) {
+		var previewIds = ids.filter(function (sid) {
+			return !!previewPathForSlice(sid);
+		});
+		if (previewIds.length) {
+			ids = previewIds;
+		} else {
+			ids = orderIds.filter(function (sid) {
+				return indexIds.indexOf(sid) >= 0;
+			});
+			if (!ids.length) {
+				ids = orderIds;
+			}
+		}
+	} else if (ids.length) {
+		var withPreviews = ids.filter(function (sid) {
+			return !!previewPathForSlice(sid);
+		});
+		if (withPreviews.length) {
+			ids = withPreviews;
+		}
 	}
 	if (!ids.length) {
 		return [];
@@ -180,6 +201,7 @@ function updateOrientPreviewBanner() {
 	var banner = qs("orientPreviewBanner");
 	var repairBtn = qs("orientRepairPreviews");
 	var applyBtn = qs("orientApply");
+	var status = qs("orientStatus");
 	var msg = cziImport.orientPreviewBannerText(health);
 	if (banner) {
 		if (msg) {
@@ -194,8 +216,21 @@ function updateOrientPreviewBanner() {
 		repairBtn.classList.toggle("d-none", !health.needsRepair);
 		repairBtn.disabled = previewRepairRunning;
 	}
+	var ids = ensureSlicePlan();
+	var pending = orientGeometry.countNonIdentityGeometry(orientState.cziImport.geometry, ids);
 	if (applyBtn && !geometryRunning) {
-		applyBtn.disabled = !health.canApply;
+		applyBtn.disabled = !health.canApply || pending === 0;
+	}
+	if (status && !geometryRunning) {
+		if (!health.canApply) {
+			/* repair banner carries the message */
+		} else if (pending === 0) {
+			status.textContent = orientState.cziImport.geometry_applied_at
+				? "No pending changes. Tiles show on-disk orientation; adjust a slice and Apply again for further changes."
+				: "No pending geometry changes.";
+		} else {
+			status.textContent = "CSS preview — adjust slices, then Apply geometry to write files.";
+		}
 	}
 	return health;
 }
@@ -289,8 +324,10 @@ function renderOrientationGrid() {
 			var img = document.createElement("img");
 			img.src = imgSrc;
 			img.alt = sliceId;
-			img.style.transform = orientGeometry.geometryCssTransform(geom);
-			img.style.transformOrigin = "center center";
+			if (!orientGeometry.isIdentityGeometry(geom)) {
+				img.style.transform = orientGeometry.geometryCssTransform(geom);
+				img.style.transformOrigin = "center center";
+			}
 			img.onerror = function () {
 				var msg = document.createElement("p");
 				msg.className = "small text-muted";
@@ -342,13 +379,51 @@ function renderOrientationGrid() {
 				action,
 			);
 			renderOrientationGrid();
+			updateOrientPreviewBanner();
 		});
 	});
+}
+
+function finalizeGeometryAfterApply(payload) {
+	var ids = ensureSlicePlan();
+	var orphans = cziImport.findGeometryKeysWithoutPreviewFiles(
+		orientState.bundleRoot,
+		orientState.cziImport.geometry,
+		ids,
+	);
+	if (orphans.length) {
+		verboseLog(
+			"WARNING: geometry for slice(s) without DAPI/_previews files: " + orphans.join(", "),
+		);
+	}
+	orientGeometry.resetGeometryMap(orientState.cziImport.geometry, ids);
+	orientState.cziImport.geometry_applied_at = new Date().toISOString();
+	if (payload && payload.files_total != null) {
+		orientState.cziImport.geometry_applied_files_total = payload.files_total;
+	}
+	writeImportConfig();
+	persistGeometryToProject();
+	updateOrientPreviewBanner();
+	renderOrientationGrid();
 }
 
 function runApplyGeometry() {
 	if (geometryRunning) {
 		return Promise.reject(new Error("Geometry apply already running"));
+	}
+	var ids = ensureSlicePlan();
+	var geomCount = orientGeometry.countNonIdentityGeometry(orientState.cziImport.geometry, ids);
+	if (geomCount === 0) {
+		return Promise.reject(new Error("No pending geometry changes to apply."));
+	}
+	if (geomCount > 0 && orientState.cziImport.geometry_applied_at) {
+		if (
+			!confirm(
+				"Geometry was already applied to files. Apply again will rotate/flip current on-disk images. Continue?",
+			)
+		) {
+			return Promise.reject(new Error("Apply cancelled."));
+		}
 	}
 	geometryRunning = true;
 	var applyBtn = qs("orientApply");
@@ -359,8 +434,6 @@ function runApplyGeometry() {
 	if (logEl) {
 		logEl.textContent = "";
 	}
-	var ids = ensureSlicePlan();
-	var geomCount = orientGeometry.countNonIdentityGeometry(orientState.cziImport.geometry, ids);
 	verboseLog("Bundle: " + orientState.bundleRoot);
 	verboseLog("Slices with rotation/flip: " + geomCount + " of " + ids.length);
 	writeImportConfig();
@@ -441,6 +514,11 @@ function runApplyGeometry() {
 			}
 			setActivity(summary, 100);
 			verboseLog(summary);
+			finalizeGeometryAfterApply(payload);
+			setActivity(
+				"Geometry saved to files. Tiles show on-disk orientation; adjust and Apply again for further changes.",
+				100,
+			);
 			resolve(payload);
 		}
 		ipc.on("updateLoad", onProgress);

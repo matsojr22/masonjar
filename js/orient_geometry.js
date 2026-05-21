@@ -50,6 +50,24 @@ function ensureGeometryMap(geometryMap, sliceIds) {
 	return out;
 }
 
+function resetGeometryMap(geometryMap, sliceIds) {
+	var out = geometryMap || {};
+	for (var i = 0; i < sliceIds.length; i++) {
+		out[sliceIds[i]] = defaultGeometry();
+	}
+	return out;
+}
+
+function orientPreviewHintText(geometryAppliedAt, pendingCount) {
+	if (pendingCount > 0) {
+		return "CSS preview — not yet written to files.";
+	}
+	if (geometryAppliedAt) {
+		return "Showing on-disk previews (geometry already applied).";
+	}
+	return "Showing on-disk previews.";
+}
+
 module.exports = {
 	defaultGeometry: defaultGeometry,
 	geometryCssTransform: geometryCssTransform,
@@ -57,4 +75,6 @@ module.exports = {
 	countNonIdentityGeometry: countNonIdentityGeometry,
 	applyGeometryAction: applyGeometryAction,
 	ensureGeometryMap: ensureGeometryMap,
+	resetGeometryMap: resetGeometryMap,
+	orientPreviewHintText: orientPreviewHintText,
 };
