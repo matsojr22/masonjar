@@ -328,6 +328,20 @@ function testResolveOrientPreviewPath() {
 	};
 	assert.strictEqual(
 		cziImport.resolveOrientPreviewPath(bundle, cziCfg, null, sliceId),
+		dapiPath,
+	);
+	assert.strictEqual(
+		cziImport.resolveOrientPreviewPath(bundle, cziCfg, null, sliceId, "somata"),
+		somataPrev,
+	);
+	assert.strictEqual(
+		cziImport.resolveOrientPreviewPath(
+			bundle,
+			cziCfg,
+			null,
+			sliceId,
+			cziImport.ROLE_SIGNAL_SOMATA,
+		),
 		somataPrev,
 	);
 	fs.unlinkSync(somataPrev);
@@ -335,6 +349,30 @@ function testResolveOrientPreviewPath() {
 		cziImport.resolveOrientPreviewPath(bundle, cziCfg, null, sliceId),
 		dapiPath,
 	);
+}
+
+function testListOrientDisplayChannels() {
+	var bundle = fs.mkdtempSync(path.join(os.tmpdir(), "czi-orient-ch-"));
+	var sliceId = "M528_s001";
+	var dapiPath = cziImport.dapiPreviewPath(bundle, sliceId);
+	var prevDir = path.join(bundle, cziImport.PREVIEWS_REL);
+	fs.mkdirSync(path.dirname(dapiPath), { recursive: true });
+	fs.mkdirSync(prevDir, { recursive: true });
+	fs.writeFileSync(dapiPath, "dapi");
+	fs.writeFileSync(path.join(prevDir, sliceId + "_somata.png"), "somata");
+	var cziCfg = {
+		slice_order: [{ ordinal: 1, sliceId: sliceId, path: "/scan/M528.czi", scene_index: 0 }],
+		channels: [
+			{ file: "M528.czi", index: 0, role: cziImport.ROLE_DAPI, keep: true },
+			{ file: "M528.czi", index: 1, role: cziImport.ROLE_SIGNAL_SOMATA, keep: true },
+		],
+	};
+	var channels = cziImport.listOrientDisplayChannels(bundle, cziCfg);
+	assert.strictEqual(channels.length, 2);
+	assert.strictEqual(channels[0].key, cziImport.ORIENT_DISPLAY_DAPI);
+	assert.strictEqual(channels[0].label, "DAPI (00_dapi)");
+	assert.strictEqual(channels[1].key, "somata");
+	assert.strictEqual(channels[1].label, "Somata");
 }
 
 function testCziImportFingerprintStable() {
@@ -431,6 +469,7 @@ function testPathToFileURLSpaces() {
 
 testLowResTiffAudit();
 testResolveOrientPreviewPath();
+testListOrientDisplayChannels();
 testCziImportFingerprintStable();
 testAuditCziImportCompletion();
 testPathToFileURLSpaces();

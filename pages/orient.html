@@ -33,7 +33,14 @@
         Open a project with DAPI previews before orienting slices.
       </div>
       <div id="orientPanel" class="d-none">
-        <div class="mb-2">
+        <div class="alert alert-info small py-2 mb-3">
+          Orientation is set <strong>once per slice</strong> and applied to every file for that
+          section (DAPI, all signal channels, z-stacks, and max projections). You do not need to
+          orient separately for each channel.
+        </div>
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+          <label class="small mb-0" for="orientDisplayChannel">Display channel</label>
+          <select id="orientDisplayChannel" class="form-select form-select-sm" style="width: auto"></select>
           <button type="button" class="btn btn-sm btn-outline-secondary" id="orientApplyAll">
             Copy first tile geometry to all
           </button>

@@ -22,6 +22,7 @@ var wizardState = {
 	importResult: null,
 	repairMode: false,
 	repairTargets: [],
+	orientDisplayChannel: cziImport.ORIENT_DISPLAY_DAPI,
 };
 
 var extractRunning = false;
@@ -96,6 +97,10 @@ function setStep(step) {
 	}
 	window.scrollTo(0, 0);
 	updateWizardCancelVisibility();
+	if (step === 5) {
+		populateOrientDisplayChannelSelect();
+		renderOrientationGrid();
+	}
 }
 
 function updateWizardCancelVisibility() {
@@ -946,7 +951,33 @@ function previewPathForSlice(sliceId) {
 		wizardState.cziImport,
 		wizardState.importResult,
 		sliceId,
+		wizardState.orientDisplayChannel,
 	);
+}
+
+function populateOrientDisplayChannelSelect() {
+	var select = qs("orientDisplayChannel");
+	if (!select) {
+		return;
+	}
+	var channels = cziImport.listOrientDisplayChannels(
+		wizardState.bundleRoot,
+		wizardState.cziImport,
+	);
+	select.innerHTML = "";
+	for (var i = 0; i < channels.length; i++) {
+		var opt = document.createElement("option");
+		opt.value = channels[i].key;
+		opt.textContent = channels[i].label;
+		select.appendChild(opt);
+	}
+	var hasCurrent = channels.some(function (ch) {
+		return ch.key === wizardState.orientDisplayChannel;
+	});
+	if (!hasCurrent) {
+		wizardState.orientDisplayChannel = cziImport.ORIENT_DISPLAY_DAPI;
+	}
+	select.value = wizardState.orientDisplayChannel;
 }
 
 function renderOrientationGrid() {
@@ -1249,7 +1280,6 @@ async function tryResumeCziImportAfterStep1() {
 	if (audit.canSkipToOrient) {
 		verboseExtractLog("Resuming — extract already complete.");
 		await syncProjectIndexAfterExtract();
-		renderOrientationGrid();
 		setStep(5);
 		return true;
 	}
@@ -1262,7 +1292,6 @@ async function tryResumeCziImportAfterStep1() {
 		try {
 			await runExtract({ repairOnly: true });
 			await syncProjectIndexAfterExtract();
-			renderOrientationGrid();
 			setStep(5);
 			return true;
 		} catch (err) {
@@ -1730,7 +1759,6 @@ function bindStep3() {
 		}
 		runExtract()
 			.then(function () {
-				renderOrientationGrid();
 				setStep(5);
 			})
 			.catch(function (err) {
@@ -1758,6 +1786,13 @@ function bindStep5() {
 	qs("step5Back").addEventListener("click", function () {
 		setStep(4);
 	});
+	var displaySelect = qs("orientDisplayChannel");
+	if (displaySelect) {
+		displaySelect.addEventListener("change", function (ev) {
+			wizardState.orientDisplayChannel = ev.target.value;
+			renderOrientationGrid();
+		});
+	}
 	qs("orientApplyAll").addEventListener("click", function () {
 		var ids = cziImport.collectSliceIds(wizardState.cziImport);
 		if (!ids.length) {

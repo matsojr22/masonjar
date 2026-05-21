@@ -20,6 +20,7 @@ var geometryRunning = false;
 var orientState = {
 	bundleRoot: "",
 	cziImport: null,
+	displayChannel: cziImport.ORIENT_DISPLAY_DAPI,
 };
 
 function qs(id) {
@@ -141,7 +142,33 @@ function previewPathForSlice(sliceId) {
 		orientState.cziImport,
 		null,
 		sliceId,
+		orientState.displayChannel,
 	);
+}
+
+function populateOrientDisplayChannelSelect() {
+	var select = qs("orientDisplayChannel");
+	if (!select) {
+		return;
+	}
+	var channels = cziImport.listOrientDisplayChannels(
+		orientState.bundleRoot,
+		orientState.cziImport,
+	);
+	select.innerHTML = "";
+	for (var i = 0; i < channels.length; i++) {
+		var opt = document.createElement("option");
+		opt.value = channels[i].key;
+		opt.textContent = channels[i].label;
+		select.appendChild(opt);
+	}
+	var hasCurrent = channels.some(function (ch) {
+		return ch.key === orientState.displayChannel;
+	});
+	if (!hasCurrent) {
+		orientState.displayChannel = cziImport.ORIENT_DISPLAY_DAPI;
+	}
+	select.value = orientState.displayChannel;
 }
 
 function renderOrientationGrid() {
@@ -357,7 +384,16 @@ function init() {
 		return;
 	}
 	qs("orientPanel").classList.remove("d-none");
+	populateOrientDisplayChannelSelect();
 	renderOrientationGrid();
+
+	var displaySelect = qs("orientDisplayChannel");
+	if (displaySelect) {
+		displaySelect.addEventListener("change", function (ev) {
+			orientState.displayChannel = ev.target.value;
+			renderOrientationGrid();
+		});
+	}
 
 	qs("orientApplyAll").addEventListener("click", function () {
 		var sliceIds = ensureSlicePlan();

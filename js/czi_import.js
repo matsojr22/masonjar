@@ -29,6 +29,7 @@ var CHANNEL_ROLE_OPTIONS = [
 var DEFAULT_PREVIEW_SCALE = 0.05;
 var PREVIEWS_REL = "data/counting/_previews";
 var PREVIEW_FORMAT_VERSION = 4;
+var ORIENT_DISPLAY_DAPI = "dapi";
 
 function branchForRole(role) {
 	return ROLE_TO_BRANCH[role] || "";
@@ -662,6 +663,149 @@ function findKeptChannelForRoleKey(cziImport, roleKey) {
 	return null;
 }
 
+function displayChannelKeyForChannel(ch) {
+	if (!ch || ch.role === ROLE_DAPI) {
+		return ORIENT_DISPLAY_DAPI;
+	}
+	var branch = branchForChannel(ch);
+	if (branch) {
+		return branch;
+	}
+	return roleKeyForChannel(ch);
+}
+
+function displayChannelLabelForChannel(ch) {
+	if (!ch) {
+		return "";
+	}
+	if (ch.role === ROLE_SIGNAL_SOMATA) {
+		return "Somata";
+	}
+	if (ch.role === ROLE_SIGNAL_NUCLEI) {
+		return "Nuclei";
+	}
+	if (ch.role === ROLE_SIGNAL_AXONS) {
+		return "Axons";
+	}
+	if (ch.role === ROLE_OTHER) {
+		var name = sanitizeOtherName(ch.other_name);
+		if (name) {
+			return name.charAt(0).toUpperCase() + name.slice(1).replace(/_/g, " ");
+		}
+		return "Other signal";
+	}
+	return branchForChannel(ch) || roleKeyForChannel(ch);
+}
+
+function findKeptChannelForDisplayKey(cziImport, displayKey) {
+	if (!displayKey || displayKey === ORIENT_DISPLAY_DAPI) {
+		return null;
+	}
+	var channels = cziImport.channels || [];
+	for (var i = 0; i < channels.length; i++) {
+		var ch = channels[i];
+		if (!ch.keep || ch.role === ROLE_UNUSED || ch.role === ROLE_DAPI) {
+			continue;
+		}
+		if (displayChannelKeyForChannel(ch) === displayKey) {
+			return ch;
+		}
+		if (roleKeyForChannel(ch) === displayKey) {
+			return ch;
+		}
+		if (branchForChannel(ch) === displayKey) {
+			return ch;
+		}
+	}
+	return null;
+}
+
+function dapiPngExistsInBundle(bundleRoot) {
+	if (!bundleRoot) {
+		return false;
+	}
+	var dapiDir = path.join(bundleRoot, "data/counting/00_dapi");
+	if (!fs.existsSync(dapiDir)) {
+		return false;
+	}
+	var entries = fs.readdirSync(dapiDir);
+	for (var i = 0; i < entries.length; i++) {
+		if (entries[i].toLowerCase().endsWith(".png")) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function listOrientDisplayChannels(bundleRoot, cziImport) {
+	cziImport = cziImport || {};
+	var out = [];
+	var seenKeys = {};
+
+	function addEntry(key, label) {
+		if (!key || seenKeys[key]) {
+			return;
+		}
+		seenKeys[key] = true;
+		out.push({ key: key, label: label });
+	}
+
+	var hasDapiRole = false;
+	var channels = cziImport.channels || [];
+	for (var i = 0; i < channels.length; i++) {
+		if (channels[i].keep && channels[i].role === ROLE_DAPI) {
+			hasDapiRole = true;
+			break;
+		}
+	}
+	if (dapiPngExistsInBundle(bundleRoot) || hasDapiRole) {
+		addEntry(ORIENT_DISPLAY_DAPI, "DAPI (00_dapi)");
+	}
+
+	for (var c = 0; c < channels.length; c++) {
+		var ch = channels[c];
+		if (!isSignalChannel(ch)) {
+			continue;
+		}
+		addEntry(displayChannelKeyForChannel(ch), displayChannelLabelForChannel(ch));
+	}
+
+	if (out.length <= 1 && bundleRoot) {
+		var sliceIds = collectSliceIds(cziImport);
+		var firstSlice = sliceIds[0];
+		if (firstSlice) {
+			var prevDir = path.join(bundleRoot, PREVIEWS_REL);
+			if (fs.existsSync(prevDir)) {
+				var prevEntries = fs.readdirSync(prevDir);
+				var prefix = firstSlice + "_";
+				var suffixes = {};
+				for (var p = 0; p < prevEntries.length; p++) {
+					var name = prevEntries[p];
+					if (name.indexOf(prefix) !== 0 || !name.toLowerCase().endsWith(".png")) {
+						continue;
+					}
+					var suffix = name.slice(prefix.length, -4);
+					if (suffix === "dapi" && (dapiPngExistsInBundle(bundleRoot) || hasDapiRole)) {
+						continue;
+					}
+					suffixes[suffix] = true;
+				}
+				var suffixKeys = Object.keys(suffixes).sort();
+				for (var s = 0; s < suffixKeys.length; s++) {
+					var sk = suffixKeys[s];
+					var skLabel = sk.charAt(0).toUpperCase() + sk.slice(1).replace(/_/g, " ");
+					addEntry(sk, skLabel);
+				}
+			}
+		}
+	}
+
+	if (!out.length) {
+		addEntry(ORIENT_DISPLAY_DAPI, "DAPI (00_dapi)");
+	}
+	return out;
+}
+
 function orientPreviewPathForChannel(bundleRoot, sliceId, channel) {
 	if (!channel || !channel.keep || channel.role === ROLE_UNUSED) {
 		return "";
@@ -675,51 +819,64 @@ function orientPreviewPathForChannel(bundleRoot, sliceId, channel) {
 	return "";
 }
 
-function resolveOrientPreviewPath(bundleRoot, cziImport, importResult, sliceId) {
+function resolveOrientPreviewPath(
+	bundleRoot,
+	cziImport,
+	importResult,
+	sliceId,
+	displayChannelKey,
+) {
 	if (!bundleRoot || !sliceId) {
 		return "";
 	}
-	var primaryRole =
-		(importResult && importResult.primary_signal_role) ||
-		cziImport.primary_signal_role ||
-		ROLE_SIGNAL_SOMATA;
-	var primaryCh = findKeptChannelForRoleKey(cziImport, primaryRole);
-	if (primaryCh) {
-		var primaryPrev = signalPreviewPath(bundleRoot, sliceId, primaryCh);
-		if (fs.existsSync(primaryPrev)) {
-			return primaryPrev;
+	if (displayChannelKey == null || displayChannelKey === "") {
+		displayChannelKey = ORIENT_DISPLAY_DAPI;
+	}
+
+	if (displayChannelKey === ORIENT_DISPLAY_DAPI) {
+		var dapi = dapiPreviewPath(bundleRoot, sliceId);
+		if (fs.existsSync(dapi)) {
+			return dapi;
 		}
-		var legacyPrimaryPrev = path.join(
+		var legacyDapiTif = path.join(bundleRoot, "data/counting/00_dapi", sliceId + ".tif");
+		if (fs.existsSync(legacyDapiTif)) {
+			return legacyDapiTif;
+		}
+		return "";
+	}
+
+	var ch = findKeptChannelForDisplayKey(cziImport || {}, displayChannelKey);
+	if (ch) {
+		var signalPrev = signalPreviewPath(bundleRoot, sliceId, ch);
+		if (fs.existsSync(signalPrev)) {
+			return signalPrev;
+		}
+		var legacySuffix = branchForChannel(ch) || roleKeyForChannel(ch);
+		var legacySignalPrev = path.join(
 			bundleRoot,
 			PREVIEWS_REL,
-			sliceId + "_" + (branchForChannel(primaryCh) || roleKeyForChannel(primaryCh)) + ".tif",
+			sliceId + "_" + legacySuffix + ".tif",
 		);
-		if (fs.existsSync(legacyPrimaryPrev)) {
-			return legacyPrimaryPrev;
+		if (fs.existsSync(legacySignalPrev)) {
+			return legacySignalPrev;
 		}
 	}
-	var dapi = dapiPreviewPath(bundleRoot, sliceId);
-	if (fs.existsSync(dapi)) {
-		return dapi;
+
+	var directPng = path.join(
+		bundleRoot,
+		PREVIEWS_REL,
+		sliceId + "_" + displayChannelKey + ".png",
+	);
+	if (fs.existsSync(directPng)) {
+		return directPng;
 	}
-	var legacyDapiTif = path.join(bundleRoot, "data/counting/00_dapi", sliceId + ".tif");
-	if (fs.existsSync(legacyDapiTif)) {
-		return legacyDapiTif;
-	}
-	var prevDir = path.join(bundleRoot, PREVIEWS_REL);
-	if (fs.existsSync(prevDir)) {
-		var prefix = sliceId + "_";
-		var entries = fs.readdirSync(prevDir);
-		for (var i = 0; i < entries.length; i++) {
-			if (entries[i].indexOf(prefix) === 0 && entries[i].toLowerCase().endsWith(".png")) {
-				return path.join(prevDir, entries[i]);
-			}
-		}
-		for (var j = 0; j < entries.length; j++) {
-			if (entries[j].indexOf(prefix) === 0 && entries[j].toLowerCase().endsWith(".tif")) {
-				return path.join(prevDir, entries[j]);
-			}
-		}
+	var directTif = path.join(
+		bundleRoot,
+		PREVIEWS_REL,
+		sliceId + "_" + displayChannelKey + ".tif",
+	);
+	if (fs.existsSync(directTif)) {
+		return directTif;
 	}
 	return "";
 }
@@ -1102,6 +1259,10 @@ module.exports = {
 	hasLikelyUnstitchedMosaic: hasLikelyUnstitchedMosaic,
 	PREVIEWS_REL: PREVIEWS_REL,
 	PREVIEW_FORMAT_VERSION: PREVIEW_FORMAT_VERSION,
+	ORIENT_DISPLAY_DAPI: ORIENT_DISPLAY_DAPI,
+	displayChannelKeyForChannel: displayChannelKeyForChannel,
+	displayChannelLabelForChannel: displayChannelLabelForChannel,
+	listOrientDisplayChannels: listOrientDisplayChannels,
 	originalScansPath: originalScansPath,
 	dapiPreviewPath: dapiPreviewPath,
 	orientDapiPreviewPath: orientDapiPreviewPath,
