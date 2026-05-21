@@ -281,6 +281,31 @@ function normalizeRelPath(rel) {
 		.join("/");
 }
 
+function branchForOutputRole(role) {
+	var stepId = STEP_BY_OUTPUT_ROLE[role];
+	if (!stepId) {
+		return "";
+	}
+	var cfg = RUN_STEP_CONFIG[stepId];
+	return cfg && cfg.branch ? cfg.branch : "";
+}
+
+/** Collapse ``branch/slug/branch/slug/...`` (repeat while duplicated prefix). */
+function dedupeBranchRunRel(rel, branch) {
+	rel = normalizeRelPath(rel);
+	if (!rel || !branch) {
+		return rel;
+	}
+	var escaped = branch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	var re = new RegExp("^(" + escaped + "\\/[^/]+)\\/\\1");
+	var next = rel;
+	do {
+		rel = next;
+		next = rel.replace(re, "$1");
+	} while (next !== rel);
+	return rel;
+}
+
 function getActiveRunsMap() {
 	if (!projectModule().isActive()) {
 		return {};
@@ -308,6 +333,13 @@ function migrateActiveRuns(processing) {
 	if (!runs.predictions && processing.active_prediction_run) {
 		runs.predictions = normalizeRelPath(processing.active_prediction_run);
 	}
+	for (var i = 0; i < OUTPUT_ROLES.length; i++) {
+		var role = OUTPUT_ROLES[i];
+		var branch = branchForOutputRole(role);
+		if (branch && runs[role]) {
+			runs[role] = dedupeBranchRunRel(runs[role], branch);
+		}
+	}
 	return runs;
 }
 
@@ -316,7 +348,12 @@ function getActiveRunRelForRole(role) {
 		return "";
 	}
 	var runs = getActiveRunsMap();
-	return normalizeRelPath(runs[role] || "");
+	var rel = normalizeRelPath(runs[role] || "");
+	var branch = branchForOutputRole(role);
+	if (branch) {
+		rel = dedupeBranchRunRel(rel, branch);
+	}
+	return rel;
 }
 
 function getActiveRunRel(stepId) {
@@ -349,7 +386,12 @@ function setActiveRunRelForRole(role, rel) {
 	if (!proj.processing.active_runs) {
 		proj.processing.active_runs = migrateActiveRuns(proj.processing);
 	}
-	proj.processing.active_runs[role] = normalizeRelPath(rel);
+	rel = normalizeRelPath(rel);
+	var branch = branchForOutputRole(role);
+	if (branch) {
+		rel = dedupeBranchRunRel(rel, branch);
+	}
+	proj.processing.active_runs[role] = rel;
 	if (role === "predictions") {
 		proj.processing.active_prediction_run = proj.processing.active_runs[role];
 	}
@@ -583,6 +625,215 @@ function writeRunsCatalog(bundleRoot, metaDirPath, roles) {
 	return outPath;
 }
 
+function resolveRoleBaseAbsForBundle(bundleRoot, roles, role) {
+	if (!bundleRoot || !role) {
+		return "";
+	}
+	var rel = (roles && roles[role]) || projectModule().CANONICAL_ROLES[role];
+	if (!rel) {
+		return "";
+	}
+	return path.isAbsolute(rel) ? rel : path.join(bundleRoot, rel);
+}
+
+function runRelVariants(role, rel) {
+	rel = normalizeRelPath(rel);
+	if (!rel) {
+		return [];
+	}
+	var branch = branchForOutputRole(role);
+	var variants = [rel];
+	if (branch) {
+		var collapsed = dedupeBranchRunRel(rel, branch);
+		if (collapsed && variants.indexOf(collapsed) < 0) {
+			variants.push(collapsed);
+		}
+		if (collapsed && collapsed.indexOf(branch + "/") === 0) {
+			var inner = collapsed.slice(branch.length + 1);
+			var doubled = branch + "/" + inner + "/" + branch + "/" + inner;
+			if (variants.indexOf(doubled) < 0) {
+				variants.push(doubled);
+			}
+		}
+	}
+	return variants;
+}
+
+function isPathUnderRoot(rootAbs, targetAbs) {
+	var root = path.resolve(rootAbs);
+	var target = path.resolve(targetAbs);
+	if (target === root) {
+		return true;
+	}
+	var prefix = root + path.sep;
+	return target.length > prefix.length && target.slice(0, prefix.length) === prefix;
+}
+
+function isSafeRunDeleteTarget(bundleRoot, roleBaseAbs, targetAbs) {
+	if (!bundleRoot || !roleBaseAbs || !targetAbs) {
+		return false;
+	}
+	var roleBase = path.resolve(roleBaseAbs);
+	var target = path.resolve(targetAbs);
+	if (target === roleBase) {
+		return false;
+	}
+	if (!isPathUnderRoot(roleBase, target)) {
+		return false;
+	}
+	return isPathUnderRoot(bundleRoot, target);
+}
+
+function collectRunDeleteTargets(bundleRoot, roles, role, rel) {
+	rel = normalizeRelPath(rel);
+	if (!rel || !bundleRoot || !isOutputRole(role)) {
+		return [];
+	}
+	var roleBaseAbs = resolveRoleBaseAbsForBundle(bundleRoot, roles, role);
+	if (!roleBaseAbs || !fs.existsSync(roleBaseAbs)) {
+		return [];
+	}
+	var variants = runRelVariants(role, rel);
+	var seen = {};
+	var targets = [];
+	for (var v = 0; v < variants.length; v++) {
+		var variant = variants[v];
+		var abs = path.join(roleBaseAbs, variant.split("/").join(path.sep));
+		if (seen[abs] || !fs.existsSync(abs)) {
+			continue;
+		}
+		try {
+			if (!fs.statSync(abs).isDirectory()) {
+				continue;
+			}
+		} catch (err) {
+			continue;
+		}
+		if (!isSafeRunDeleteTarget(bundleRoot, roleBaseAbs, abs)) {
+			continue;
+		}
+		seen[abs] = true;
+		targets.push({
+			abs: abs,
+			rel: variant,
+			relToBundle: path.relative(bundleRoot, abs).split(path.sep).join("/"),
+		});
+	}
+	return targets;
+}
+
+function buildRunDeleteConfirmMessage(role, rel, targets) {
+	if (!targets.length) {
+		return "";
+	}
+	var lines = [
+		"Delete this pipeline run folder from the project bundle?",
+		"",
+		"Role: " + role,
+		"Run: " + rel,
+		"",
+		"Folder(s) to remove:",
+	];
+	for (var i = 0; i < targets.length; i++) {
+		lines.push("  • " + targets[i].relToBundle);
+		lines.push("    " + targets[i].abs);
+	}
+	lines.push("");
+	lines.push("This cannot be undone. Files on disk will be deleted.");
+	return lines.join("\n");
+}
+
+function activeRunMatchesDeleted(activeRel, deletedRels) {
+	activeRel = normalizeRelPath(activeRel);
+	if (!activeRel) {
+		return false;
+	}
+	for (var i = 0; i < deletedRels.length; i++) {
+		if (normalizeRelPath(deletedRels[i]) === activeRel) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function pruneEmptyRunParents(roleBaseAbs, deletedAbs, branch) {
+	var current = path.resolve(deletedAbs);
+	var stopAt = path.resolve(roleBaseAbs);
+	if (branch) {
+		var branchDir = path.join(stopAt, branch);
+		if (fs.existsSync(branchDir)) {
+			stopAt = path.resolve(branchDir);
+		}
+	}
+	while (current !== stopAt && isPathUnderRoot(stopAt, current)) {
+		var parent = path.dirname(current);
+		if (parent === current) {
+			break;
+		}
+		try {
+			var entries = fs.readdirSync(parent);
+			if (entries.length > 0) {
+				break;
+			}
+			fs.rmdirSync(parent);
+		} catch (err) {
+			break;
+		}
+		current = parent;
+	}
+}
+
+function removeRunForRole(role, rel, options) {
+	options = options || {};
+	if (!projectModule().isActive() || !isOutputRole(role)) {
+		return { ok: false, error: "no active project" };
+	}
+	rel = normalizeRelPath(rel);
+	if (!rel) {
+		return { ok: false, error: "cannot delete flat role root" };
+	}
+	var bundleRoot = options.bundleRoot || projectModule().getBundleRoot();
+	var proj = projectModule().getProject();
+	var roles = (proj && proj.roles) || projectModule().CANONICAL_ROLES;
+	var targets = collectRunDeleteTargets(bundleRoot, roles, role, rel);
+	if (!targets.length) {
+		return { ok: false, error: "no deletable run folder found for " + rel };
+	}
+	var roleBaseAbs = resolveRoleBaseAbsForBundle(bundleRoot, roles, role);
+	var stepId = STEP_BY_OUTPUT_ROLE[role];
+	var cfg = stepId ? RUN_STEP_CONFIG[stepId] : null;
+	var branch = cfg && cfg.branch;
+	var deletedRels = [];
+	for (var t = 0; t < targets.length; t++) {
+		try {
+			fs.rmSync(targets[t].abs, { recursive: true, force: true });
+			deletedRels.push(targets[t].rel);
+			pruneEmptyRunParents(roleBaseAbs, targets[t].abs, branch);
+		} catch (err) {
+			return {
+				ok: false,
+				error: String(err.message || err),
+				deleted: deletedRels,
+			};
+		}
+	}
+	var activeRel = getActiveRunRelForRole(role);
+	var variantRels = runRelVariants(role, rel);
+	if (activeRunMatchesDeleted(activeRel, variantRels)) {
+		var remaining = listRunChoicesForRole(role);
+		var nextRel = remaining.length ? remaining[0].rel : "";
+		setActiveRunRelForRole(role, nextRel);
+	}
+	var metaPath = options.metaDirPath;
+	if (!metaPath && projectModule().metaDirPath) {
+		metaPath = projectModule().metaDirPath(bundleRoot);
+	}
+	if (metaPath) {
+		writeRunsCatalog(bundleRoot, metaPath, roles);
+	}
+	return { ok: true, deleted: deletedRels, targets: targets };
+}
+
 function computeFinalOutputPath(stepId, context) {
 	context = context || {};
 	var cfg = RUN_STEP_CONFIG[stepId];
@@ -618,6 +869,7 @@ module.exports = {
 	buildDetectRunSlug: buildDetectRunSlug,
 	buildRunSlug: buildRunSlug,
 	resolveRunLeaf: resolveRunLeaf,
+	dedupeBranchRunRel: dedupeBranchRunRel,
 	discoverOutputRuns: discoverOutputRuns,
 	defaultActiveRuns: defaultActiveRuns,
 	migrateActiveRuns: migrateActiveRuns,
@@ -639,4 +891,8 @@ module.exports = {
 	computeFinalOutputPath: computeFinalOutputPath,
 	relFromRoleBase: relFromRoleBase,
 	hasRunMarkers: hasRunMarkers,
+	collectRunDeleteTargets: collectRunDeleteTargets,
+	buildRunDeleteConfirmMessage: buildRunDeleteConfirmMessage,
+	removeRunForRole: removeRunForRole,
+	isSafeRunDeleteTarget: isSafeRunDeleteTarget,
 };

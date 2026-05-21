@@ -381,11 +381,14 @@ function openProject(bundleRoot) {
 	if (!data.layout) {
 		data.layout = branding.LAYOUT_ID;
 	}
+	var activeRunsMigrated = false;
 	if (!data.processing) {
 		data.processing = defaultProcessing();
 	} else {
 		data.processing = Object.assign(defaultProcessing(), data.processing);
+		var activeRunsBefore = JSON.stringify(data.processing.active_runs || {});
 		data.processing.active_runs = pipelineRuns.migrateActiveRuns(data.processing);
+		activeRunsMigrated = activeRunsBefore !== JSON.stringify(data.processing.active_runs);
 		if (data.processing.active_prediction_run && !data.processing.active_runs.predictions) {
 			data.processing.active_runs.predictions = String(
 				data.processing.active_prediction_run,
@@ -405,6 +408,9 @@ function openProject(bundleRoot) {
 		}
 	}
 	setActiveProject(bundleRoot, data);
+	if (activeRunsMigrated) {
+		saveProjectJson();
+	}
 	refreshProjectIndex(bundleRoot).catch(function (err) {
 		console.warn("[project] refreshProjectIndex on open:", err);
 	});
@@ -1337,6 +1343,7 @@ module.exports = {
 	setActiveRunForStep: setActiveRunForStep,
 	listRunChoicesForRole: listRunChoicesForRole,
 	ensureDefaultActiveRunForRole: ensureDefaultActiveRunForRole,
+	removeRunForRole: pipelineRuns.removeRunForRole,
 	resolveRoleLeafAbsForBundle: resolveRoleLeafAbsForBundle,
 	loadProjectJson: loadProjectJson,
 	readProjectJson: readProjectJson,

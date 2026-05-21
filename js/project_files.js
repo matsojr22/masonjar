@@ -3,6 +3,7 @@
 var project = require("./project");
 var fileIndex = require("./file_index");
 var pipelineRuns = require("./pipeline_runs");
+var activeRunControls = require("./active_run_controls");
 var dialogs = require("./dialogs");
 
 function sectionNumberFromSliceId(sliceId) {
@@ -77,9 +78,9 @@ function bindActiveRunControls(containerId) {
 			labelCol.className = "col-4 col-sm-3 text-start small";
 			labelCol.textContent = role;
 			var selectCol = document.createElement("div");
-			selectCol.className = "col";
+			selectCol.className = "col d-flex align-items-center";
 			var select = document.createElement("select");
-			select.className = "form-select form-select-sm active-run-select";
+			select.className = "form-select form-select-sm active-run-select flex-grow-1";
 			select.dataset.role = role;
 			var active = pipelineRuns.getActiveRunRelForRole(role);
 			for (var c = 0; c < choices.length; c++) {
@@ -96,6 +97,13 @@ function bindActiveRunControls(containerId) {
 				project.refreshProjectIndex().catch(function () {});
 			});
 			selectCol.appendChild(select);
+			selectCol.appendChild(
+				activeRunControls.attachRunDeleteButton(select, role, {
+					onDeleted: function () {
+						bindActiveRunControls(containerId);
+					},
+				}),
+			);
 			row.appendChild(labelCol);
 			row.appendChild(selectCol);
 			container.appendChild(row);

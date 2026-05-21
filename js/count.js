@@ -8,6 +8,7 @@ var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
+var activeRunControls = require("./active_run_controls");
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
 var run = document.getElementById("run");
@@ -46,6 +47,18 @@ function populateRunSelect(selectEl, role, onChange) {
 			opt.selected = true;
 		}
 		selectEl.appendChild(opt);
+	}
+	var row = selectEl.parentElement;
+	if (row && !row.querySelector(".active-run-delete-btn")) {
+		row.classList.add("d-flex", "align-items-center");
+		selectEl.classList.add("flex-grow-1");
+		var delBtn = activeRunControls.attachRunDeleteButton(selectEl, role, {
+			onDeleted: function () {
+				refreshPredictionRunUi();
+			},
+		});
+		delBtn.classList.add("active-run-delete-btn");
+		row.appendChild(delBtn);
 	}
 	if (typeof onChange === "function") {
 		onChange(active);

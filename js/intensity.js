@@ -162,6 +162,12 @@ ipc.on("updateLoad", function (event, response) {
 });
 
 workspace.applyPreset("intensity");
+if (project.isActive() && outdir) {
+	var pklsBase = pipelineRuns.resolveRoleBaseAbs("pkls");
+	if (pklsBase) {
+		outdir.value = pklsBase;
+	}
+}
 workspace.bindPathPicker(indir, "indir", "max");
 workspace.bindPathPicker(outdir, "outdir", "pkls");
 workspace.bindPathPicker(annodir, "annodir", "slices");

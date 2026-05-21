@@ -93,12 +93,98 @@ function testMigrateActivePredictionRun() {
 	assert.strictEqual(runs.predictions, "somata/foo_bar");
 }
 
+function testDedupeBranchRunRel() {
+	assert.strictEqual(
+		pipelineRuns.dedupeBranchRunRel(
+			"intensity/foo/intensity/foo",
+			"intensity",
+		),
+		"intensity/foo",
+	);
+	assert.strictEqual(
+		pipelineRuns.dedupeBranchRunRel(
+			"intensity/a/intensity/a/intensity/a",
+			"intensity",
+		),
+		"intensity/a",
+	);
+	assert.strictEqual(
+		pipelineRuns.dedupeBranchRunRel("align/run_a", "align"),
+		"align/run_a",
+	);
+	var runs = pipelineRuns.migrateActiveRuns({
+		active_runs: { pkls: "intensity/M465_run/intensity/M465_run" },
+	});
+	assert.strictEqual(runs.pkls, "intensity/M465_run");
+}
+
+function testCollectRunDeleteTargetsDoubled() {
+	var bundle = helpers.tmpDir("mj-del-");
+	var roles = { pkls: "data/counting/07_pkls" };
+	var roleBase = path.join(bundle, roles.pkls);
+	var doubled = path.join(roleBase, "intensity", "foo", "intensity", "foo");
+	fs.mkdirSync(doubled, { recursive: true });
+	fs.writeFileSync(path.join(doubled, "run_manifest.json"), "{}");
+	var targets = pipelineRuns.collectRunDeleteTargets(
+		bundle,
+		roles,
+		"pkls",
+		"intensity/foo/intensity/foo",
+	);
+	assert.ok(targets.length >= 1);
+	assert.ok(
+		targets.some(function (t) {
+			return t.abs === doubled;
+		}),
+	);
+	assert.ok(
+		pipelineRuns.isSafeRunDeleteTarget(bundle, roleBase, doubled),
+		"doubled leaf is safe",
+	);
+	assert.ok(
+		!pipelineRuns.isSafeRunDeleteTarget(bundle, roleBase, roleBase),
+		"role base is not deletable",
+	);
+	helpers.rmDir(bundle);
+}
+
+function testRemoveRunForRoleClearsActive() {
+	var bundle = helpers.tmpDir("mj-rm-");
+	var roles = {
+		dapi: project.CANONICAL_ROLES.dapi,
+		slices: project.CANONICAL_ROLES.slices,
+	};
+	var slicesDir = path.join(bundle, roles.slices);
+	var runDir = path.join(slicesDir, "align", "stuck_run");
+	fs.mkdirSync(runDir, { recursive: true });
+	fs.writeFileSync(path.join(runDir, "run_manifest.json"), '{"status":"pending"}');
+	fs.mkdirSync(path.join(bundle, ".masonjar"), { recursive: true });
+	project.setActiveProject(bundle, {
+		name: "test",
+		roles: roles,
+		processing: {
+			active_runs: Object.assign(pipelineRuns.defaultActiveRuns(), {
+				slices: "align/stuck_run",
+			}),
+		},
+	});
+	var result = pipelineRuns.removeRunForRole("slices", "align/stuck_run");
+	assert.strictEqual(result.ok, true);
+	assert.ok(!fs.existsSync(runDir));
+	assert.strictEqual(pipelineRuns.getActiveRunRelForRole("slices"), "");
+	project.clearActiveProject();
+	helpers.rmDir(bundle);
+}
+
 var tests = [
 	testBuildRunSlugStability,
 	testResolveRunLeaf,
 	testDiscoverOutputRuns,
 	testMigrateActivePredictionRun,
+	testDedupeBranchRunRel,
 	testActiveRunScoping,
+	testCollectRunDeleteTargetsDoubled,
+	testRemoveRunForRoleClearsActive,
 ];
 
 function runAll() {
