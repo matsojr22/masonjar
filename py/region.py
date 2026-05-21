@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from slice_index import load_slice_list, slice_id_allowed
+from intensity_flags import parse_whole_flag
 import tifffile
 import numpy as np
 from demons import resize_image_nearest_neighbor
@@ -206,7 +207,9 @@ if __name__ == "__main__":
     intensityFiles = sorted(
         f for f in os.listdir(intensityPath) if _is_candidate_intensity_filename(f)
     )
-    is_whole = eval(args.whole.strip())
+    is_whole = parse_whole_flag(args.whole)
+    mode_label = "whole" if is_whole else "hemisphere"
+    print(f"LOG: intensity_mode={mode_label}", flush=True)
     dapi_dir_raw = args.dapi_dir.strip()
     dapi_dir_path = Path(dapi_dir_raw) if dapi_dir_raw else None
 
@@ -220,6 +223,8 @@ if __name__ == "__main__":
 
     structure_map = pickle.load(open(args.map.strip(), "rb"))
     allowed_slices = load_slice_list(args.slice_list.strip() or None)
+    slices_processed = 0
+    total_pkls_written = 0
 
     for iName in intensityFiles:
         stem = _intensity_slice_stem(iName)
@@ -278,6 +283,7 @@ if __name__ == "__main__":
         # load the annotation (matched by stem, not by sorted index)
         with open(anno_pkl, "rb") as f:
             print("Processing " + iName, flush=True)
+            slices_processed += 1
             annotation = pickle.load(f)
 
             annotation_recaled = resize_image_nearest_neighbor(
@@ -346,6 +352,7 @@ if __name__ == "__main__":
                                         dapi_resized[point]
                                     )
 
+            slice_pkls_written = 0
             # Save the intensity values and the verticies as ROI package pkls
             for region in intensities.keys():
                 # reconstruct the region
@@ -373,19 +380,47 @@ if __name__ == "__main__":
 
                 with open(outputPath, "wb") as f:
                     pickle.dump(pkg, f)
+                slice_pkls_written += 1
+                total_pkls_written += 1
+
+            print(
+                f"LOG: {stem}: wrote {slice_pkls_written} PKLs ({mode_label} mode)",
+                flush=True,
+            )
+
+    output_dir = Path(args.output.strip())
+    pkl_count = len(
+        [
+            p
+            for p in output_dir.glob("*.pkl")
+            if p.name != "run_manifest.json"
+        ]
+    )
+    if slices_processed > 0 and (total_pkls_written == 0 or pkl_count == 0):
+        summary = (
+            "NO_PKLS_WRITTEN: Isolate Regions finished with zero PKL files. "
+            f"Processed {slices_processed} slice(s) in {mode_label} mode. "
+            "Output is limited to VIS/RSP atlas regions. "
+            "If you used Whole Slice mode, only the left half of each slice is kept; "
+            "try Hemisphere Only or verify alignment annotations."
+        )
+        print(summary, flush=True)
+        print(summary, file=sys.stderr, flush=True)
 
     print("Done!", flush=True)
     from run_manifest import write_run_manifest
 
-    write_run_manifest(
-        args.output.strip(),
-        {
-            "step": "intensity",
-            "input_dir": args.images.strip(),
-            "annotation_dir": args.annotations.strip(),
-            "output_dir": args.output.strip(),
-            "whole": bool(args.whole),
-            "dapi_dir": args.dapi_dir.strip(),
-            "slice_list": args.slice_list.strip() or None,
-        },
-    )
+    manifest_extra = {
+        "step": "intensity",
+        "input_dir": args.images.strip(),
+        "annotation_dir": args.annotations.strip(),
+        "output_dir": args.output.strip(),
+        "whole": is_whole,
+        "pkls_written": total_pkls_written,
+        "dapi_dir": args.dapi_dir.strip(),
+        "slice_list": args.slice_list.strip() or None,
+    }
+    write_run_manifest(args.output.strip(), manifest_extra)
+
+    if slices_processed > 0 and total_pkls_written == 0:
+        sys.exit(1)

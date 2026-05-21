@@ -37,7 +37,7 @@ function showPanel(panel) {
 function updateTrailForPanel(panel) {
 	var steps = [{ label: "Start", href: "./menu.html" }, { label: "New project" }];
 	if (panel === freshPanel) {
-		steps.push({ label: "Start fresh" });
+		steps.push({ label: "Create blank project (no initial import)" });
 	} else if (panel === importPanel) {
 		steps.push({ label: "Import existing" });
 	}

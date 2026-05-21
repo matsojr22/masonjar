@@ -34,6 +34,8 @@ var appDir = app.getAppPath();
 
 var win: typeof BrowserWindow = null;
 var logWin: typeof BrowserWindow = null;
+/** When true, log lines queue but the window stays hidden until user opens it or an error forces show. */
+var logDismissedByUser = true;
 var isQuitting = false;
 
 /** Batch console mirroring to the log window to avoid IPC/DOM floods. */
@@ -889,6 +891,7 @@ function createLogWindow() {
     height: 250,
     resizable: true,
     autoHideMenuBar: true,
+    show: false,
     webPreferences: { nodeIntegration: true, contextIsolation: false },
     closeable: true,
   });
@@ -903,21 +906,56 @@ function createLogWindow() {
   });
   win.on("closed", () => {
     logWin = null;
+    logDismissedByUser = true;
   });
 
   return win;
 }
 
-function ensureLogWindowVisible(): boolean {
+function getLogWindowState(): { visible: boolean; dismissed: boolean } {
+  const exists = logWin != null && !logWin.isDestroyed();
+  return {
+    visible: exists && logWin.isVisible(),
+    dismissed: logDismissedByUser,
+  };
+}
+
+function replyLogWindowState(event: { sender: { send: (channel: string, payload: unknown) => void } }) {
+  event.sender.send("logWindowState", getLogWindowState());
+}
+
+function ensureLogWindowVisible(opts?: { force?: boolean }): boolean {
+  const force = !!(opts && opts.force);
   if (!logWin || logWin.isDestroyed()) {
     logWin = createLogWindow();
-    return true;
+  }
+  if (force) {
+    logDismissedByUser = false;
+  }
+  if (!force && logDismissedByUser) {
+    return false;
   }
   if (!logWin.isVisible()) {
     logWin.show();
   }
   logWin.focus();
   return true;
+}
+
+function hideLogWindowByUser() {
+  logDismissedByUser = true;
+  if (logWin && !logWin.isDestroyed()) {
+    logWin.hide();
+  }
+}
+
+function reportPythonFailure(pyFail: string | null) {
+  if (!pyFail) {
+    return;
+  }
+  ensureLogWindowVisible({ force: true });
+  queueLogLineForUi(pyFail);
+  console.error(pyFail);
 }
 
 app.on("ready", () => {
@@ -927,7 +965,6 @@ app.on("ready", () => {
     logUiFlushTimer = null;
   }
   win = createWindow();
-  logWin = createLogWindow();
   // Uncomment if you want tools on launch
   // win.webContents.toggleDevTools()
   win.on("close", function (e: any) {
@@ -1257,8 +1294,7 @@ ipcMain.on("runMax", function (event: any, data: any[]) {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
-          queueLogLineForUi(pyFail);
-          console.error(pyFail, err);
+          reportPythonFailure(pyFail);
         } else {
           console.log("The exit code was: " + code);
           console.log("The exit signal was: " + signal);
@@ -1305,8 +1341,7 @@ ipcMain.on("runAdjust", function (event: any, data: any[]) {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
-          queueLogLineForUi(pyFail);
-          console.error(pyFail, err);
+          reportPythonFailure(pyFail);
         } else {
           console.log("The exit code was: " + code);
           console.log("The exit signal was: " + signal);
@@ -1365,8 +1400,7 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
-          queueLogLineForUi(pyFail);
-          console.error(pyFail, err);
+          reportPythonFailure(pyFail);
         } else {
           console.log("The exit code was: " + code);
           console.log("The exit signal was: " + signal);
@@ -1420,7 +1454,9 @@ ipcMain.on("runIntensity", function (event: any, data: any[]) {
   attachPythonShellKillCleanup(pyshell, "killIntensity");
   var total: number = 0;
   var current: number = 0;
+  let intensityStderr = "";
   pyshell.on("stderr", function (stderr: string) {
+    intensityStderr += stderr;
     queueLogLineForUi(stderr);
   });
   pyshell.on("message", (message: string) => {
@@ -1429,16 +1465,23 @@ ipcMain.on("runIntensity", function (event: any, data: any[]) {
     } else if (message == "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
         const pyFail = describePythonShellFailure(err, code, signal);
-        if (pyFail) {
-          queueLogLineForUi(pyFail);
-          console.error(pyFail, err);
+        const noPkls =
+          intensityStderr.indexOf("NO_PKLS_WRITTEN") >= 0 ||
+          intensityStderr.indexOf("wrote 0 PKL") >= 0;
+        const errMsg =
+          pyFail ||
+          (noPkls
+            ? "Isolate Regions wrote no PKL files. Check alignment, VIS/RSP regions, and whole vs hemisphere mode in the Application log."
+            : null);
+        if (errMsg) {
+          reportPythonFailure(errMsg);
         } else {
           console.log("The exit code was: " + code);
           console.log("The exit signal was: " + signal);
         }
         event.sender.send("intensityResult");
-        if (pyFail) {
-          event.sender.send("intensityError", [pyFail]);
+        if (errMsg) {
+          event.sender.send("intensityError", [errMsg]);
         }
         ipcMain.removeAllListeners("killIntensity");
       });
@@ -1478,8 +1521,7 @@ ipcMain.on("runExportDualTif", function (event: any, data: any[]) {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
-          queueLogLineForUi(pyFail);
-          console.error(pyFail, err);
+          reportPythonFailure(pyFail);
         } else {
           console.log("The exit code was: " + code);
           console.log("The exit signal was: " + signal);
@@ -1538,8 +1580,7 @@ ipcMain.on("runCount", function (event: any, data: any[]) {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
-          queueLogLineForUi(pyFail);
-          console.error(pyFail, err);
+          reportPythonFailure(pyFail);
         } else {
           console.log("The exit code was: " + code);
           console.log("The exit signal was: " + signal);
@@ -1582,8 +1623,7 @@ ipcMain.on("runCollate", function (event: any, data: any[]) {
     cleanupPythonKillListener("killCollate");
     const pyFail = describePythonShellFailure(err, code, signal);
     if (pyFail) {
-      queueLogLineForUi(pyFail);
-      console.error(pyFail, err);
+      reportPythonFailure(pyFail);
     } else {
       console.log("The exit code was: " + code);
       console.log("The exit signal was: " + signal);
@@ -1624,8 +1664,7 @@ ipcMain.on("runSharpen", function (event: any, data: any[]) {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
-          queueLogLineForUi(pyFail);
-          console.error(pyFail, err);
+          reportPythonFailure(pyFail);
         } else {
           console.log("The exit code was: " + code);
           console.log("The exit signal was: " + signal);
@@ -1689,8 +1728,7 @@ ipcMain.on("runDapiCleanup", function (event: any, data: any[]) {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
-          queueLogLineForUi(pyFail);
-          console.error(pyFail, err);
+          reportPythonFailure(pyFail);
         } else {
           console.log("The exit code was: " + code);
           console.log("The exit signal was: " + signal);
@@ -1770,8 +1808,7 @@ ipcMain.on("runDetection", function (event: any, data: any[]) {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
-          queueLogLineForUi(pyFail);
-          console.error(pyFail, err);
+          reportPythonFailure(pyFail);
         } else {
           console.log("The exit code was: " + code);
           console.log("The exit signal was: " + signal);
@@ -1896,8 +1933,7 @@ function runCziPythonScript(
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
-          queueLogLineForUi(pyFail);
-          console.error(pyFail, err);
+          reportPythonFailure(pyFail);
         }
         event.sender.send(resultChannel, pyFail ? { ok: false, error: pyFail } : resultPayload);
         cleanupPythonKillListener(killChannel);
@@ -1960,21 +1996,37 @@ ipcMain.on("runCziImport", function (event: any, data: any[]) {
   );
 });
 
-ipcMain.on("showLogWindow", function () {
-  ensureLogWindowVisible();
+ipcMain.on("showLogWindow", function (event: { sender: { send: (channel: string, payload: unknown) => void } }) {
+  logDismissedByUser = false;
+  ensureLogWindowVisible({ force: true });
+  replyLogWindowState(event);
 });
 
-ipcMain.on("toggleLogWindow", function () {
+ipcMain.on("getLogWindowState", function (event: { sender: { send: (channel: string, payload: unknown) => void } }) {
+  replyLogWindowState(event);
+});
+
+ipcMain.on("toggleLogWindow", function (event: { sender: { send: (channel: string, payload: unknown) => void } }) {
   if (!logWin || logWin.isDestroyed()) {
-    ensureLogWindowVisible();
+    logDismissedByUser = false;
+    ensureLogWindowVisible({ force: true });
+    replyLogWindowState(event);
     return;
   }
   if (logWin.isVisible()) {
-    logWin.hide();
+    hideLogWindowByUser();
   } else {
+    logDismissedByUser = false;
     logWin.show();
     logWin.focus();
   }
+  replyLogWindowState(event);
+});
+
+ipcMain.on("reportRendererError", function (_event: unknown, data: unknown[]) {
+  const msg = String(data && data[0] != null ? data[0] : "Renderer error");
+  ensureLogWindowVisible({ force: true });
+  queueLogLineForUi(`Renderer: ${msg}`);
 });
 
 ipcMain.on("runApplyGeometry", function (event: any, data: any[]) {

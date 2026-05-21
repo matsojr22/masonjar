@@ -1,5 +1,18 @@
 "use strict";
 
+var ipc = null;
+try {
+	ipc = require("electron").ipcRenderer;
+} catch (_err) {
+	ipc = null;
+}
+
+function reportRendererError(msg) {
+	if (ipc) {
+		ipc.send("reportRendererError", [String(msg || "Unknown error")]);
+	}
+}
+
 function onReady(fn) {
 	if (typeof fn !== "function") {
 		return;
@@ -18,7 +31,7 @@ function installGlobalErrorHandler() {
 	window.__masonjarErrorHandlerInstalled = true;
 	window.onerror = function (_message, _source, _lineno, _colno, err) {
 		var msg = err && err.message ? err.message : String(_message || "Unknown error");
-		alert("Mason Jar: " + msg);
+		reportRendererError(msg);
 	};
 	window.addEventListener("unhandledrejection", function (event) {
 		var reason = event.reason;
@@ -26,7 +39,7 @@ function installGlobalErrorHandler() {
 			reason && reason.message
 				? reason.message
 				: String(reason || "Unhandled promise rejection");
-		alert("Mason Jar: " + msg);
+		reportRendererError(msg);
 	});
 }
 

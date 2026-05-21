@@ -28,14 +28,9 @@
       <section id="chooserPanel" class="workspace-block project-start-step active">
         <p class="text-muted">How would you like to start?</p>
         <div class="d-grid gap-2">
-          <button
-            type="button"
-            class="btn btn-primary"
-            id="btnFresh"
-            data-mj-action="show-fresh"
+          <a class="btn btn-primary" href="./czi_wizard.html"
+            >Import from Zeiss CZI (.czi)</a
           >
-            Start fresh
-          </button>
           <button
             type="button"
             class="btn btn-outline-primary"
@@ -44,14 +39,19 @@
           >
             Import existing
           </button>
-          <a class="btn btn-outline-primary" href="./czi_wizard.html"
-            >Import from Zeiss CZI (.czi)</a
+          <button
+            type="button"
+            class="btn btn-outline-secondary"
+            id="btnFresh"
+            data-mj-action="show-fresh"
           >
+            Create blank project (no initial import)
+          </button>
         </div>
       </section>
 
       <section id="freshPanel" class="workspace-block project-start-step d-none">
-        <h2 class="h5">Start fresh</h2>
+        <h2 class="h5">Create blank project (no initial import)</h2>
         <p class="small text-muted">
           Creates <code>Name_masonjar/</code> in the parent folder you choose, with
           <code>Name.masonjar</code> and <code>data/</code> inside (e.g.

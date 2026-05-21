@@ -55,7 +55,7 @@ On startup (`app.on("ready")` → `did-finish-load`), the main process **always*
 - `envPath` → `{homeDir}/benv` (virtualenv).
 - `envPythonPath` → `benv/Scripts` (Windows) or `benv/bin` (Unix) — used for **`pip install`** and as **`pythonPath` passed to `PythonShell`** (script runner uses `pyCommand`: `python.exe` or `./python3`).
 
-**Logs**: `console.log` is wrapped and **batched** to the log window (bounded queue + flush interval); `before-quit` drains the queue. The log UI is **ephemeral per app launch** ([js/log.js](js/log.js)): main sends `resetLogSession` with a new session id on each process start; the log window does **not** restore or persist HTML to `localStorage` (legacy `log` / `logTime` keys are cleared). DOM is capped at 8000 lines. `createLogFile` appends to `{homeDir}/masonjar.log` on some failure paths. The log window is **closeable**; when closed, `logWin` is nulled and recreated on demand (same session, empty DOM). Hub **Application log** ([`pages/menu.html`](pages/menu.html), [`pages/workspace_menu.html`](pages/workspace_menu.html)) sends `toggleLogWindow` / `showLogWindow` (preference `masonjar.showLogWindow`).
+**Logs**: `console.log` is wrapped and **batched** to the log window (bounded queue + flush interval); `before-quit` drains the queue. The log UI is **ephemeral per app launch** ([js/log.js](js/log.js)): main sends `resetLogSession` with a new session id on each process start; the log window does **not** restore or persist HTML to `localStorage` (legacy `log` / `logTime` keys are cleared). DOM is capped at 8000 lines. `createLogFile` appends to `{homeDir}/masonjar.log` on some failure paths. On startup the log window is **not** created (`logDismissedByUser` defaults true); [`createLogWindow`](src/main.ts) uses `show: false`. Closing or hiding the log sets dismissed; normal log/stderr lines still queue but do not auto-show. **Python non-zero exit** and renderer errors call `reportPythonFailure` / `reportRendererError`, which **force** show and focus the log. Hub **Show log** / **Hide log** ([`js/app_log_toggle.js`](js/app_log_toggle.js) on [`pages/menu.html`](pages/menu.html) and [`pages/workspace_menu.html`](pages/workspace_menu.html)): `toggleLogWindow` / `getLogWindowState` / `logWindowState`; preference `masonjar.logDismissed` (migrates legacy `masonjar.showLogWindow` once).
 
 ## IPC: renderer → main → Python
 
@@ -95,8 +95,10 @@ Renderer scripts use `require("electron").ipcRenderer`. Main handlers are `ipcMa
 | `killCziImport` | once `killCziImport` | — | |
 | `runApplyGeometry` | `runApplyGeometry` | `apply_geometry.py` | `applyGeometryResult`, `updateLoad`. Args: bundle root, config JSON (includes `geometry` map). |
 | `killApplyGeometry` | once `killApplyGeometry` | — | |
-| `showLogWindow` | `showLogWindow` | — | Recreate or show/focus `pages/log.html`. |
-| `toggleLogWindow` | `toggleLogWindow` | — | Show/focus log window if hidden or closed; otherwise hide (does not destroy). |
+| `showLogWindow` | `showLogWindow` | — | User open: clear dismissed, show/focus `pages/log.html`; replies `logWindowState`. |
+| `toggleLogWindow` | `toggleLogWindow` | — | Show/focus or hide (does not destroy); replies `logWindowState`. |
+| `getLogWindowState` | `getLogWindowState` | — | Reply: `logWindowState` `{ visible, dismissed }`. |
+| `reportRendererError` | `reportRendererError` | — | Force log visible; queue error line ([`js/page_init.js`](js/page_init.js)). |
 
 ### Channels the main process pushes (selection)
 
@@ -109,9 +111,13 @@ Renderer scripts use `require("electron").ipcRenderer`. Main handlers are `ipcMa
 | `version` | Reply to `getVersion` |
 | `returnPath` | Directory or file picker result |
 
-Some renderer files register `*Error` listeners (e.g. `alignError`, `detectError`). The main process logs Python non-zero exits to the Log and avoids throwing; **Isolate Regions** also emits `intensityError` with a short message after `intensityResult` when Python fails.
+Some renderer files register `*Error` listeners (e.g. `alignError`, `detectError`). The main process logs Python non-zero exits to the Log (forcing the log window visible) and avoids throwing; **Isolate Regions** also emits `intensityError` with a short message after `intensityResult` when Python fails or writes zero PKLs.
 
 ## Isolate Regions PKL schema (with DAPI)
+
+**Whole vs hemisphere** ([py/region.py](py/region.py), [pages/intensity.html](pages/intensity.html)): IPC sends `-w` + `True`/`False` strings. Processing uses `parse_whole_flag()` (never `bool("False")` or `eval`). **Whole Slice** (`True`): only pixels with `x < width/2` (left half). **Hemisphere Only** (`False`): all pixels in matched VIS/RSP regions. UI choice persists in `masonjar.intensity.whole`. Run slug `_whole` / `_hemi` follows the same flag. Logs include `LOG: intensity_mode=whole|hemisphere` and per-slice `LOG: … wrote N PKLs`.
+
+**Zero PKL output is a failed run**: only VIS/RSP acronyms are exported. If at least one slice was processed but no `{sliceId}_{region}.pkl` files were written, Python prints `NO_PKLS_WRITTEN`, writes `run_manifest.json` with `pkls_written: 0`, and exits **1**; main sends `intensityError` and forces the log open.
 
 **Pairing** ([py/region.py](py/region.py)): each intensity image is matched to an Align annotation PKL by slice id (case-insensitive), not by sorted list index. Accepts **`Annotation_{id}.pkl`** (as written by [py/map.py](py/map.py)), plain **`{id}.pkl`**, and the map.py stripped basename (e.g. `M528_s061.ome.tiff` → `Annotation_M528_s061.pkl` or `Annotation_M528_s061.ome.pkl`). Slice id is the part before the first dot (`M528_s061`).
 

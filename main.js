@@ -41,6 +41,8 @@ const serverFetch = require("node-fetch");
 var appDir = app.getAppPath();
 var win = null;
 var logWin = null;
+/** When true, log lines queue but the window stays hidden until user opens it or an error forces show. */
+var logDismissedByUser = true;
 var isQuitting = false;
 /** Batch console mirroring to the log window to avoid IPC/DOM floods. */
 const LOG_UI_FLUSH_MS = 150;
@@ -743,6 +745,7 @@ function createLogWindow() {
         height: 250,
         resizable: true,
         autoHideMenuBar: true,
+        show: false,
         webPreferences: { nodeIntegration: true, contextIsolation: false },
         closeable: true,
     });
@@ -757,19 +760,50 @@ function createLogWindow() {
     });
     win.on("closed", () => {
         logWin = null;
+        logDismissedByUser = true;
     });
     return win;
 }
-function ensureLogWindowVisible() {
+function getLogWindowState() {
+    const exists = logWin != null && !logWin.isDestroyed();
+    return {
+        visible: exists && logWin.isVisible(),
+        dismissed: logDismissedByUser,
+    };
+}
+function replyLogWindowState(event) {
+    event.sender.send("logWindowState", getLogWindowState());
+}
+function ensureLogWindowVisible(opts) {
+    const force = !!(opts && opts.force);
     if (!logWin || logWin.isDestroyed()) {
         logWin = createLogWindow();
-        return true;
+    }
+    if (force) {
+        logDismissedByUser = false;
+    }
+    if (!force && logDismissedByUser) {
+        return false;
     }
     if (!logWin.isVisible()) {
         logWin.show();
     }
     logWin.focus();
     return true;
+}
+function hideLogWindowByUser() {
+    logDismissedByUser = true;
+    if (logWin && !logWin.isDestroyed()) {
+        logWin.hide();
+    }
+}
+function reportPythonFailure(pyFail) {
+    if (!pyFail) {
+        return;
+    }
+    ensureLogWindowVisible({ force: true });
+    queueLogLineForUi(pyFail);
+    console.error(pyFail);
 }
 app.on("ready", () => {
     logUiQueue = [];
@@ -778,7 +812,6 @@ app.on("ready", () => {
         logUiFlushTimer = null;
     }
     win = createWindow();
-    logWin = createLogWindow();
     // Uncomment if you want tools on launch
     // win.webContents.toggleDevTools()
     win.on("close", function (e) {
@@ -1065,8 +1098,7 @@ ipcMain.on("runMax", function (event, data) {
             pyshell.end((err, code, signal) => {
                 const pyFail = describePythonShellFailure(err, code, signal);
                 if (pyFail) {
-                    queueLogLineForUi(pyFail);
-                    console.error(pyFail, err);
+                    reportPythonFailure(pyFail);
                 }
                 else {
                     console.log("The exit code was: " + code);
@@ -1113,8 +1145,7 @@ ipcMain.on("runAdjust", function (event, data) {
             pyshell.end((err, code, signal) => {
                 const pyFail = describePythonShellFailure(err, code, signal);
                 if (pyFail) {
-                    queueLogLineForUi(pyFail);
-                    console.error(pyFail, err);
+                    reportPythonFailure(pyFail);
                 }
                 else {
                     console.log("The exit code was: " + code);
@@ -1172,8 +1203,7 @@ ipcMain.on("runAlign", function (event, data) {
             pyshell.end((err, code, signal) => {
                 const pyFail = describePythonShellFailure(err, code, signal);
                 if (pyFail) {
-                    queueLogLineForUi(pyFail);
-                    console.error(pyFail, err);
+                    reportPythonFailure(pyFail);
                 }
                 else {
                     console.log("The exit code was: " + code);
@@ -1223,7 +1253,9 @@ ipcMain.on("runIntensity", function (event, data) {
     attachPythonShellKillCleanup(pyshell, "killIntensity");
     var total = 0;
     var current = 0;
+    let intensityStderr = "";
     pyshell.on("stderr", function (stderr) {
+        intensityStderr += stderr;
         queueLogLineForUi(stderr);
     });
     pyshell.on("message", (message) => {
@@ -1233,17 +1265,22 @@ ipcMain.on("runIntensity", function (event, data) {
         else if (message == "Done!") {
             pyshell.end((err, code, signal) => {
                 const pyFail = describePythonShellFailure(err, code, signal);
-                if (pyFail) {
-                    queueLogLineForUi(pyFail);
-                    console.error(pyFail, err);
+                const noPkls = intensityStderr.indexOf("NO_PKLS_WRITTEN") >= 0 ||
+                    intensityStderr.indexOf("wrote 0 PKL") >= 0;
+                const errMsg = pyFail ||
+                    (noPkls
+                        ? "Isolate Regions wrote no PKL files. Check alignment, VIS/RSP regions, and whole vs hemisphere mode in the Application log."
+                        : null);
+                if (errMsg) {
+                    reportPythonFailure(errMsg);
                 }
                 else {
                     console.log("The exit code was: " + code);
                     console.log("The exit signal was: " + signal);
                 }
                 event.sender.send("intensityResult");
-                if (pyFail) {
-                    event.sender.send("intensityError", [pyFail]);
+                if (errMsg) {
+                    event.sender.send("intensityError", [errMsg]);
                 }
                 ipcMain.removeAllListeners("killIntensity");
             });
@@ -1283,8 +1320,7 @@ ipcMain.on("runExportDualTif", function (event, data) {
             pyshell.end((err, code, signal) => {
                 const pyFail = describePythonShellFailure(err, code, signal);
                 if (pyFail) {
-                    queueLogLineForUi(pyFail);
-                    console.error(pyFail, err);
+                    reportPythonFailure(pyFail);
                 }
                 else {
                     console.log("The exit code was: " + code);
@@ -1340,8 +1376,7 @@ ipcMain.on("runCount", function (event, data) {
             pyshell.end((err, code, signal) => {
                 const pyFail = describePythonShellFailure(err, code, signal);
                 if (pyFail) {
-                    queueLogLineForUi(pyFail);
-                    console.error(pyFail, err);
+                    reportPythonFailure(pyFail);
                 }
                 else {
                     console.log("The exit code was: " + code);
@@ -1383,8 +1418,7 @@ ipcMain.on("runCollate", function (event, data) {
         cleanupPythonKillListener("killCollate");
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
-            queueLogLineForUi(pyFail);
-            console.error(pyFail, err);
+            reportPythonFailure(pyFail);
         }
         else {
             console.log("The exit code was: " + code);
@@ -1425,8 +1459,7 @@ ipcMain.on("runSharpen", function (event, data) {
             pyshell.end((err, code, signal) => {
                 const pyFail = describePythonShellFailure(err, code, signal);
                 if (pyFail) {
-                    queueLogLineForUi(pyFail);
-                    console.error(pyFail, err);
+                    reportPythonFailure(pyFail);
                 }
                 else {
                     console.log("The exit code was: " + code);
@@ -1491,8 +1524,7 @@ ipcMain.on("runDapiCleanup", function (event, data) {
             pyshell.end((err, code, signal) => {
                 const pyFail = describePythonShellFailure(err, code, signal);
                 if (pyFail) {
-                    queueLogLineForUi(pyFail);
-                    console.error(pyFail, err);
+                    reportPythonFailure(pyFail);
                 }
                 else {
                     console.log("The exit code was: " + code);
@@ -1564,8 +1596,7 @@ ipcMain.on("runDetection", function (event, data) {
             pyshell.end((err, code, signal) => {
                 const pyFail = describePythonShellFailure(err, code, signal);
                 if (pyFail) {
-                    queueLogLineForUi(pyFail);
-                    console.error(pyFail, err);
+                    reportPythonFailure(pyFail);
                 }
                 else {
                     console.log("The exit code was: " + code);
@@ -1679,8 +1710,7 @@ function runCziPythonScript(event, scriptName, args, killChannel, resultChannel)
             pyshell.end((err, code, signal) => {
                 const pyFail = describePythonShellFailure(err, code, signal);
                 if (pyFail) {
-                    queueLogLineForUi(pyFail);
-                    console.error(pyFail, err);
+                    reportPythonFailure(pyFail);
                 }
                 event.sender.send(resultChannel, pyFail ? { ok: false, error: pyFail } : resultPayload);
                 cleanupPythonKillListener(killChannel);
@@ -1729,21 +1759,35 @@ ipcMain.on("runCziImport", function (event, data) {
     appendCziPathArgs(importArgs, bundleRoot, configPath);
     runCziPythonScript(event, "czi_extract.py", importArgs, "killCziImport", "cziImportResult");
 });
-ipcMain.on("showLogWindow", function () {
-    ensureLogWindowVisible();
+ipcMain.on("showLogWindow", function (event) {
+    logDismissedByUser = false;
+    ensureLogWindowVisible({ force: true });
+    replyLogWindowState(event);
 });
-ipcMain.on("toggleLogWindow", function () {
+ipcMain.on("getLogWindowState", function (event) {
+    replyLogWindowState(event);
+});
+ipcMain.on("toggleLogWindow", function (event) {
     if (!logWin || logWin.isDestroyed()) {
-        ensureLogWindowVisible();
+        logDismissedByUser = false;
+        ensureLogWindowVisible({ force: true });
+        replyLogWindowState(event);
         return;
     }
     if (logWin.isVisible()) {
-        logWin.hide();
+        hideLogWindowByUser();
     }
     else {
+        logDismissedByUser = false;
         logWin.show();
         logWin.focus();
     }
+    replyLogWindowState(event);
+});
+ipcMain.on("reportRendererError", function (_event, data) {
+    const msg = String(data && data[0] != null ? data[0] : "Renderer error");
+    ensureLogWindowVisible({ force: true });
+    queueLogLineForUi(`Renderer: ${msg}`);
 });
 ipcMain.on("runApplyGeometry", function (event, data) {
     const bundleRoot = data[0] || "";

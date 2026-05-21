@@ -27,6 +27,40 @@ module.exports = {
 	LEGACY_WORKSPACE_KEY: "belljar.workspace",
 	SHOW_LOG_WINDOW_KEY: "masonjar.showLogWindow",
 	LEGACY_SHOW_LOG_WINDOW_KEY: "belljar.showLogWindow",
+	LOG_DISMISSED_KEY: "masonjar.logDismissed",
+	INTENSITY_WHOLE_KEY: "masonjar.intensity.whole",
+	readLogDismissed: function () {
+		try {
+			var dismissed = localStorage.getItem(module.exports.LOG_DISMISSED_KEY);
+			if (dismissed !== null) {
+				return dismissed === "1";
+			}
+			var show = localStorage.getItem(module.exports.SHOW_LOG_WINDOW_KEY);
+			if (show === null) {
+				show = localStorage.getItem(module.exports.LEGACY_SHOW_LOG_WINDOW_KEY);
+			}
+			if (show === "1" || show === "true") {
+				return false;
+			}
+			return true;
+		} catch (_err) {
+			return true;
+		}
+	},
+	setLogDismissed: function (dismissed) {
+		try {
+			localStorage.setItem(
+				module.exports.LOG_DISMISSED_KEY,
+				dismissed ? "1" : "0",
+			);
+			if (!dismissed) {
+				localStorage.removeItem(module.exports.SHOW_LOG_WINDOW_KEY);
+				localStorage.removeItem(module.exports.LEGACY_SHOW_LOG_WINDOW_KEY);
+			}
+		} catch (_err) {
+			// ignore
+		}
+	},
 	/** Per-process log UI session; new id each app launch. */
 	LOG_SESSION_KEY: "masonjar.logSession",
 	LEGACY_LOG_UI_KEY: "log",

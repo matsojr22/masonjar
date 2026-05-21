@@ -7,7 +7,7 @@ var project = require("./project");
 var workspace = require("./workspace");
 var pipelineGate = require("./pipeline_gate");
 var dialogs = require("./dialogs");
-var branding = require("./branding");
+var appLogToggle = require("./app_log_toggle");
 
 var WORKSPACE_MENU = "./workspace_menu.html";
 
@@ -21,39 +21,6 @@ var rescanHubBtn = null;
 var toggleAppLogBtn = null;
 
 var coldStartHadContext = false;
-
-function readShowLogPreference() {
-	try {
-		var v = localStorage.getItem(branding.SHOW_LOG_WINDOW_KEY);
-		if (v === null) {
-			v = localStorage.getItem(branding.LEGACY_SHOW_LOG_WINDOW_KEY);
-		}
-		return v === "1" || v === "true";
-	} catch (_err) {
-		return false;
-	}
-}
-
-function setShowLogPreference(on) {
-	try {
-		localStorage.setItem(branding.SHOW_LOG_WINDOW_KEY, on ? "1" : "0");
-	} catch (_err) {
-		// ignore
-	}
-}
-
-function bindAppLogToggle() {
-	if (!toggleAppLogBtn) {
-		return;
-	}
-	toggleAppLogBtn.addEventListener("click", function () {
-		ipc.send("toggleLogWindow");
-		setShowLogPreference(true);
-	});
-	if (readShowLogPreference()) {
-		ipc.send("showLogWindow");
-	}
-}
 
 function readAppVersion() {
 	return appPaths.readPackageVersion();
@@ -238,7 +205,7 @@ pageInit.onReady(function () {
 	}
 
 	bindOpenProject();
-	bindAppLogToggle();
+	appLogToggle.bindAppLogToggle(toggleAppLogBtn);
 	if (checkUpdatesBtn) {
 		checkUpdatesBtn.addEventListener("click", function () {
 			ipc.send("checkForUpdates", []);

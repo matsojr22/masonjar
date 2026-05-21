@@ -6,6 +6,7 @@ var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
+var branding = require("./branding");
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
 var run = document.getElementById("run");
@@ -35,15 +36,38 @@ if (usedapi && dapidir) {
 	});
 }
 
-whole.addEventListener("click", function () {
-	methods.textContent = "Whole Slice";
-	alignmentMethod = "True";
+function applyWholeChoice(isWhole) {
+	alignmentMethod = isWhole ? "True" : "False";
+	if (methods) {
+		methods.textContent = isWhole ? "Whole Slice" : "Hemisphere Only";
+	}
+	try {
+		localStorage.setItem(branding.INTENSITY_WHOLE_KEY, alignmentMethod);
+	} catch (_err) {
+		// ignore
+	}
+}
+
+whole.addEventListener("click", function (event) {
+	event.preventDefault();
+	applyWholeChoice(true);
 });
 
-half.addEventListener("click", function () {
-	methods.textContent = "Hemisphere Only";
-	alignmentMethod = "False";
+half.addEventListener("click", function (event) {
+	event.preventDefault();
+	applyWholeChoice(false);
 });
+
+try {
+	var savedWhole = localStorage.getItem(branding.INTENSITY_WHOLE_KEY);
+	if (savedWhole === "False") {
+		applyWholeChoice(false);
+	} else if (savedWhole === "True") {
+		applyWholeChoice(true);
+	}
+} catch (_restoreErr) {
+	// ignore
+}
 
 run.addEventListener("click", function () {
 	if (indir && outdir && indir.value && outdir.value && annodir && annodir.value) {
