@@ -4,13 +4,13 @@
 
 # Introduction
 
-Mason Jar is a fork of [Bell Jar](https://github.com/asoronow/belljar) for neurohistology analysis of the mouse brain. It supports new `.masonjar` project bundles while remaining compatible with legacy `.belljar` projects and `~/.belljar` user data.
+Mason Jar is a fork of [Bell Jar](https://github.com/asoronow/belljar) for neurohistology analysis of the mouse brain. It supports new `.masonjar` project bundles while remaining compatible with legacy `.belljar` project files inside bundles.
 
 # Compatibility
 
 Mason Jar aims to run on any platform; release binaries are provided where tested. If you do not see your OS, build from source using the instructions below.
 
-Legacy Bell Jar projects (`*.belljar`, `project.belljar`, `~/.belljar`) open without conversion. New projects use `*.masonjar`, `project.masonjar`, and `~/.masonjar` by default.
+Legacy Bell Jar **project** bundles (`*.belljar`, `project.belljar`, `.belljar/` meta) open without conversion. Mason Jar **always** stores its app environment under `~/.masonjar` (embedded Python, venv, models, log). Bell Jar continues to use `~/.belljar`. On first launch, if only `~/.belljar` has an environment, Mason Jar offers to **copy** it into `~/.masonjar` (read-only on Bell Jar’s folder) or install fresh.
 
 # Usage
 
@@ -44,7 +44,7 @@ yarn compile
 yarn start
 ```
 
-First launch downloads ~20GB of models and embeddings from the upstream Bell Jar CDN (`storage.googleapis.com/belljar_updates`).
+First launch into a new `~/.masonjar` downloads ~20GB of models and embeddings from the upstream Bell Jar CDN (`storage.googleapis.com/belljar_updates`). If you already use Bell Jar, choose **Copy from Bell Jar** to avoid re-downloading.
 
 # How to work with annotations
 

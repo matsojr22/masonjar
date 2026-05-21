@@ -1079,7 +1079,9 @@ class AlignmentController:
                 "whole": self.is_whole,
                 "spacing": self.spacing,
                 "legacy": self.use_legacy,
-                "slice_filter": self.slice_filter,
+                "slice_filter": sorted(self.slice_filter)
+                if self.slice_filter is not None
+                else None,
             },
         )
         print("Done!", flush=True)

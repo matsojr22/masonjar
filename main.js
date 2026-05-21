@@ -120,19 +120,79 @@ const BRANDING = {
     LOG_FILE: "masonjar.log",
     GITHUB_REPO: "matsojr22/masonjar",
 };
+const LEGACY_HOME_COPY_ENTRIES = [
+    "python",
+    "benv",
+    "models",
+    "embeddings",
+    "nrrd",
+    "manifest.json",
+];
 function resolveHomeDir() {
-    const masonDir = path.join(app.getPath("home"), BRANDING.HOME_DIR);
-    const legacyDir = path.join(app.getPath("home"), BRANDING.LEGACY_HOME_DIR);
-    if (fs.existsSync(masonDir)) {
-        return masonDir;
-    }
-    const legacyHasEnv = fs.existsSync(path.join(legacyDir, "python")) ||
-        fs.existsSync(path.join(legacyDir, "benv"));
-    if (legacyHasEnv) {
-        console.log("Using legacy Bell Jar data directory:", legacyDir);
-        return legacyDir;
-    }
-    return masonDir;
+    return path.join(app.getPath("home"), BRANDING.HOME_DIR);
+}
+function legacyHomePath() {
+    return path.join(app.getPath("home"), BRANDING.LEGACY_HOME_DIR);
+}
+function envIsReady(homePath) {
+    return (fs.existsSync(path.join(homePath, "python")) ||
+        fs.existsSync(path.join(homePath, "benv")));
+}
+function needsLegacyHomeMigration() {
+    return !envIsReady(homeDir) && envIsReady(legacyHomePath());
+}
+function copyLegacyHomeEntries(win) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const legacyDir = legacyHomePath();
+        for (const entry of LEGACY_HOME_COPY_ENTRIES) {
+            const src = path.join(legacyDir, entry);
+            if (!fs.existsSync(src)) {
+                continue;
+            }
+            const dest = path.join(homeDir, entry);
+            win.webContents.send("updateStatus", `Copying ${entry} from Bell Jar…`);
+            yield fs.promises.cp(src, dest, { recursive: true });
+        }
+    });
+}
+function maybeMigrateLegacyHome(win) {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (!needsLegacyHomeMigration()) {
+            return true;
+        }
+        const choice = dialog.showMessageBoxSync(win, {
+            type: "question",
+            message: "Mason Jar uses ~/.masonjar (separate from Bell Jar's ~/.belljar).",
+            detail: "Copy your existing Bell Jar environment to save re-downloading ~20GB, or install fresh into ~/.masonjar.",
+            buttons: ["Copy from Bell Jar", "Fresh install", "Cancel"],
+            defaultId: 0,
+            cancelId: 2,
+        });
+        if (choice === 2) {
+            app.quit();
+            return false;
+        }
+        if (choice === 1) {
+            console.log("Using new ~/.masonjar; ~/.belljar left untouched.");
+            return true;
+        }
+        try {
+            yield copyLegacyHomeEntries(win);
+            return true;
+        }
+        catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            console.error("Legacy home copy failed:", error);
+            createLogFile(`Legacy home copy failed: ${msg}\n`);
+            dialog.showMessageBoxSync(win, {
+                type: "error",
+                message: "Could not copy Bell Jar environment",
+                detail: msg,
+            });
+            app.quit();
+            return false;
+        }
+    });
 }
 // Path variables for easy management of execution
 const homeDir = resolveHomeDir();
@@ -737,30 +797,27 @@ app.on("ready", () => {
         }
     });
     win.webContents.once("did-finish-load", () => {
-        // Make a directory to house enviornment, settings, etc.yarn
         checkLocalDir();
-        // Setup python for running the pipeline
-        setupPython(win)
-            .then((installed) => {
-            // If we just installed python, we need to continue the complete
-            // setup of the enviornment
-            if (installed) {
-                setupEnvironment(win);
+        void maybeMigrateLegacyHome(win).then((ok) => {
+            if (!ok) {
+                return;
             }
-            else {
-                // Otherwise, we can just update the dependencies
-                updatePythonDependencies(win).then(() => {
-                    // Check for new patch
-                    // Check if any directories are missing
-                    fixMissingDirectories(win).then(() => {
-                        loadMenuAndCheckUpdates(win);
+            setupPython(win)
+                .then((installed) => {
+                if (installed) {
+                    setupEnvironment(win);
+                }
+                else {
+                    updatePythonDependencies(win).then(() => {
+                        fixMissingDirectories(win).then(() => {
+                            loadMenuAndCheckUpdates(win);
+                        });
                     });
-                });
-            }
-        })
-            .catch((error) => {
-            // Python install failed
-            console.log(error);
+                }
+            })
+                .catch((error) => {
+                console.log(error);
+            });
         });
     });
 });
@@ -1116,6 +1173,9 @@ ipcMain.on("runAlign", function (event, data) {
                     console.log("The exit signal was: " + signal);
                 }
                 event.sender.send("alignResult");
+                if (pyFail) {
+                    event.sender.send("alignError", [pyFail]);
+                }
                 ipcMain.removeAllListeners("killAlign");
             });
         }

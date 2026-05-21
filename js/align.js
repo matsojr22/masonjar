@@ -132,6 +132,18 @@ ipc.on("alignResult", function (event, response) {
 	}
 });
 
+ipc.on("alignError", function (event, response) {
+	run.innerHTML = "Run";
+	run.classList.remove("disabled");
+	back.classList.add("btn-warning");
+	back.classList.remove("btn-danger");
+	back.innerHTML = "Back";
+	loadbar.style.width = "0";
+	if (response && response[0]) {
+		loadmessage.textContent = String(response[0]);
+	}
+});
+
 ipc.on("updateLoad", function (event, response) {
 	loadbar.style.width = String(response[0]) + "%";
 	loadmessage.innerHTML = response[1];

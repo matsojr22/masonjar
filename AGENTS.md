@@ -9,8 +9,8 @@ Shared constants live in [`js/branding.js`](js/branding.js) (renderer) and `BRAN
 | Constant | New (default) | Legacy (still accepted) |
 |----------|---------------|-------------------------|
 | Product name | `Mason Jar` | `Bell Jar` (credits only) |
-| User data dir | `~/.masonjar` | `~/.belljar` (fallback if mason missing but legacy has python/benv) |
-| Log file | `masonjar.log` | read legacy dir if using `~/.belljar` |
+| User data dir | `~/.masonjar` only (never `~/.belljar`) | `~/.belljar` (Bell Jar app) |
+| Log file | `~/.masonjar/masonjar.log` | (Bell Jar’s own log) |
 | Bundle suffix | `.masonjar` | `.belljar` |
 | Project file | `{name}.masonjar` (e.g. `M528.masonjar` in `M528_masonjar/`) | `project.belljar` / `project.masonjar` |
 | Meta dir | `.masonjar/` | `.belljar/` |
@@ -25,7 +25,8 @@ Updates API: `https://api.github.com/repos/matsojr22/masonjar/releases/latest`. 
 
 | Path | Purpose |
 |------|---------|
-| `src/main.ts` | Electron **main process** (authoritative source): windows, `~/.masonjar` bootstrap (legacy `~/.belljar` fallback), IPC, `python-shell` workers |
+| `src/main.ts` | Electron **main process** (authoritative source): windows, `~/.masonjar` bootstrap (optional one-time copy from `~/.belljar`), IPC, `python-shell` workers |
+| `js/home_dir.js` | Shared home-dir helpers: `masonHomePath`, `needsLegacyHomeMigration`, `LEGACY_HOME_COPY_ENTRIES` |
 | `main.js` | **Emitted** JavaScript from TypeScript (`tsconfig.json` sets `outDir` to the repo root). **Edit `src/main.ts`, then compile** so `main.js` stays in sync. |
 | `pages/`, `css/`, `js/` | Renderer UI: static HTML, Bootstrap + theme, vanilla JS using `ipcRenderer` |
 | `py/` | **Legacy Python** scripts the packaged app runs (`PythonShell`, `scriptPath: app/py`) |
@@ -36,18 +37,19 @@ Updates API: `https://api.github.com/repos/matsojr22/masonjar/releases/latest`. 
 
 ## Main process bootstrap (`~/.masonjar`)
 
-On startup (`app.on("ready")` → `did-finish-load`), the main process uses `resolveHomeDir()`: prefer `~/.masonjar`; if missing and `~/.belljar` has `python/` or `benv`, use the legacy directory.
+On startup (`app.on("ready")` → `did-finish-load`), the main process **always** uses `~/.masonjar` (`resolveHomeDir()`). Mason Jar never reads or writes Bell Jar’s `~/.belljar` except for an optional **read-only** one-time copy when `~/.masonjar` has no `python/` or `benv/` but `~/.belljar` does.
 
-1. **`checkLocalDir()`** — ensures the resolved home dir exists.
-2. **`setupPython(win)`** — if `{homeDir}/python` is missing, downloads a **standalone CPython 3.10.13** tarball from `https://storage.googleapis.com/belljar_updates/` (platform-specific: Windows, Linux x64, macOS Intel vs Apple Silicon), extracts into `homeDir`.
-3. **First-time path** (`setupPython` resolves `true`): **`setupEnvironment(win)`** — `downloadResources(win, true)` pulls **embeddings**, **models**, **nrrd** archives into `homeDir`, then:
+1. **`checkLocalDir()`** — ensures `~/.masonjar` exists.
+2. **Legacy migration dialog** (when `needsLegacyHomeMigration()`): **Copy from Bell Jar** copies `python`, `benv`, `models`, `embeddings`, `nrrd`, `manifest.json` into `~/.masonjar`; **Fresh install** leaves `~/.belljar` untouched; **Cancel** quits. Copy errors log to `masonjar.log`, show an error dialog, and quit.
+3. **`setupPython(win)`** — if `{homeDir}/python` is missing, downloads a **standalone CPython 3.10.13** tarball from `https://storage.googleapis.com/belljar_updates/` (platform-specific: Windows, Linux x64, macOS Intel vs Apple Silicon), extracts into `homeDir`.
+4. **First-time path** (`setupPython` resolves `true`): **`setupEnvironment(win)`** — `downloadResources(win, true)` pulls **embeddings**, **models**, **nrrd** archives into `homeDir`, then:
    - `installVenv`: `python -m pip install --user virtualenv` with `cwd` = extracted `python/` (or `python/bin/` on Unix — see `pythonPath` / `pyCommand` in `src/main.ts`).
    - `createVenv`: `python -m venv` targeting `{homeDir}/benv` (`benv`).
    - `installDeps`: `pip install -r py/requirements.txt` with `cwd` = venv’s `Scripts/` or `bin/`.
    - Loads `pages/menu.html` on success (start hub).
-4. **Returning user path** (`setupPython` resolves `false` when `python` and `benv` already exist): **`updatePythonDependencies`** then **`fixMissingDirectories`** (incremental `downloadResources(win, false)` using `manifest.json` version keys vs embedded `currnet_versions`), then loads `pages/menu.html`.
+5. **Returning user path** (`setupPython` resolves `false` when `python` and `benv` already exist): **`updatePythonDependencies`** then **`fixMissingDirectories`** (incremental `downloadResources(win, false)` using `manifest.json` version keys vs embedded `currnet_versions`), then loads `pages/menu.html`.
 
-**Path constants** (under resolved `homeDir`, typically `~/.masonjar` or legacy `~/.belljar`):
+**Path constants** (under `~/.masonjar` only):
 
 - `pythonPath` → `{homeDir}/python/` (Windows) or `{homeDir}/python/bin/` (Unix) for the embedded interpreter.
 - `envPath` → `{homeDir}/benv` (virtualenv).

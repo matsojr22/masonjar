@@ -13,13 +13,14 @@ var helpers = require("./test-helpers");
 
 function resolveEnvPython() {
 	var homeDir = path.join(os.homedir(), ".masonjar");
-	var legacy = path.join(os.homedir(), ".belljar");
-	var benvMason = path.join(homeDir, "benv");
-	var root = fs.existsSync(benvMason) ? homeDir : legacy;
-	if (process.platform === "win32") {
-		return path.join(root, "benv", "Scripts", "python.exe");
+	var benv = path.join(homeDir, "benv");
+	if (!fs.existsSync(benv)) {
+		return null;
 	}
-	return path.join(root, "benv", "bin", "python3");
+	if (process.platform === "win32") {
+		return path.join(homeDir, "benv", "Scripts", "python.exe");
+	}
+	return path.join(homeDir, "benv", "bin", "python3");
 }
 
 function writeSyntheticWithPython(python, outFile) {
@@ -58,8 +59,10 @@ function main() {
 	var repoRoot = path.join(__dirname, "..");
 	var scriptPath = path.join(repoRoot, "py", "dapi_cleanup.py");
 	var python = resolveEnvPython();
-	if (!fs.existsSync(python)) {
-		console.log("test-dapi-cleanup.js: SKIP (no benv at " + python + ")");
+	if (!python || !fs.existsSync(python)) {
+		console.log(
+			"test-dapi-cleanup.js: SKIP (no ~/.masonjar/benv — run Mason Jar once to bootstrap)",
+		);
 		return;
 	}
 

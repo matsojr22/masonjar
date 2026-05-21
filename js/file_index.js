@@ -2,9 +2,8 @@
 
 var fs = require("fs");
 var path = require("path");
-var os = require("os");
 var childProcess = require("child_process");
-var branding = require("./branding");
+var homeDir = require("./home_dir");
 var pipelineRuns = require("./pipeline_runs");
 
 var FILE_INDEX_VERSION = 1;
@@ -37,24 +36,12 @@ var STEP_OUTPUT = {
 
 var IMAGE_EXT_RE = /\.(tif|tiff|png|jpe?g)$/i;
 
-function resolveHomeDir() {
-	var mason = path.join(os.homedir(), branding.HOME_DIR);
-	var legacy = path.join(os.homedir(), branding.LEGACY_HOME_DIR);
-	if (
-		!fs.existsSync(path.join(mason, "benv")) &&
-		fs.existsSync(path.join(legacy, "benv"))
-	) {
-		return legacy;
-	}
-	return mason;
-}
-
 function resolveEnvPython() {
-	var homeDir = resolveHomeDir();
+	var home = homeDir.masonHomePath();
 	if (process.platform === "win32") {
-		return path.join(homeDir, "benv", "Scripts", "python.exe");
+		return path.join(home, "benv", "Scripts", "python.exe");
 	}
-	return path.join(homeDir, "benv", "bin", "python3");
+	return path.join(home, "benv", "bin", "python3");
 }
 
 function sliceIdFromFilename(filename) {
