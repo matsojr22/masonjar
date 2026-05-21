@@ -12,7 +12,13 @@ function appendCziInputArg(args, inputDir) {
 	args.push("-i", String(inputDir || "").trim());
 }
 
+/** Mirror of appendFlagPathArg in src/main.ts (Isolate Regions and other pipeline tools). */
+function appendFlagPathArg(args, flag, value) {
+	args.push(flag, String(value || "").trim());
+}
+
 module.exports = {
 	appendCziPathArgs: appendCziPathArgs,
 	appendCziInputArg: appendCziInputArg,
+	appendFlagPathArg: appendFlagPathArg,
 };

@@ -15,8 +15,8 @@ function attachRunDeleteButton(selectEl, role, options) {
 	var btn = document.createElement("button");
 	btn.type = "button";
 	btn.className = "btn btn-sm btn-outline-danger ms-1";
-	btn.title = "Delete selected run folder";
-	btn.setAttribute("aria-label", "Delete selected run");
+	btn.title = "Delete selected task folder";
+	btn.setAttribute("aria-label", "Delete selected task");
 	btn.innerHTML = '<i class="fas fa-trash-alt" aria-hidden="true"></i>';
 
 	function syncDisabled() {
@@ -35,7 +35,7 @@ function attachRunDeleteButton(selectEl, role, options) {
 		}
 		var rel = String(selectEl.value || "").trim();
 		if (!rel) {
-			alert("Cannot delete the flat role root. Pick a nested run folder first.");
+			alert("Cannot delete the flat role root. Pick a nested task folder first.");
 			return;
 		}
 		var bundleRoot = project.getBundleRoot();
@@ -43,7 +43,7 @@ function attachRunDeleteButton(selectEl, role, options) {
 		var roles = (proj && proj.roles) || project.CANONICAL_ROLES;
 		var targets = pipelineRuns.collectRunDeleteTargets(bundleRoot, roles, role, rel);
 		if (!targets.length) {
-			alert("No run folder found on disk for:\n" + rel);
+			alert("No task folder found on disk for:\n" + rel);
 			return;
 		}
 		var msg = pipelineRuns.buildRunDeleteConfirmMessage(role, rel, targets);

@@ -34,7 +34,22 @@ function testTrimBundleOnly() {
 	assert.deepStrictEqual(args, ["-b", "C:\\bundle_masonjar"]);
 }
 
+function testIntensityArgsWithSpaces() {
+	var args = [];
+	var anno =
+		"Z:\\Matt Jacobs\\masonjar_projects\\M465_masonjar\\data\\counting\\01_slices\\align\\M465_s001-M465_s005_h83c9_sp100_half_sub5";
+	cziArgv.appendFlagPathArg(args, "-i", "Z:\\Matt Jacobs\\max\\run");
+	cziArgv.appendFlagPathArg(args, "-o", "Z:\\Matt Jacobs\\07_pkls\\intensity\\run");
+	cziArgv.appendFlagPathArg(args, "-a", anno);
+	args.push("-w", "True");
+	assert.deepStrictEqual(args[0], "-i");
+	assert.strictEqual(args[4], "-a");
+	assert.strictEqual(args[5], anno);
+	assert.strictEqual(args[6], "-w");
+}
+
 testImportArgsWithSpaces();
 testProbeArgsWithSpaces();
 testTrimBundleOnly();
+testIntensityArgsWithSpaces();
 console.log("test-czi-argv.js: OK");

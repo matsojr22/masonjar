@@ -66,10 +66,10 @@ function preparePipelineRun(stepId, runMode) {
 			countExtra =
 				" " +
 				dropped +
-				" slice(s) skipped (no matching prediction PKL in the active run folder).";
+				" slice(s) skipped (no matching prediction PKL in the selected predictions folder).";
 		}
 		if (!predLeaf || !slicesLeaf) {
-			countExtra += " Ensure active prediction and slices runs are set.";
+			countExtra += " Choose predictions and slices on the Count page.";
 		}
 	}
 

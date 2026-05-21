@@ -212,6 +212,8 @@ if __name__ == "__main__":
 
     annotationPath = args.annotations.strip()
     annotation_dir = Path(annotationPath)
+    print(f"LOG: intensity_dir={intensityPath}", flush=True)
+    print(f"LOG: annotation_dir={annotationPath}", flush=True)
 
     print(2 + len(intensityFiles), flush=True)
     print("Setting up...", flush=True)

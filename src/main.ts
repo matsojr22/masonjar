@@ -260,6 +260,14 @@ function appendCziInputArg(args: string[], inputDir: string) {
   args.push("-i", String(inputDir || "").trim());
 }
 
+/** Separate flag and path argv tokens so Windows paths with spaces parse correctly in argparse. */
+function appendFlagPathArg(args: string[], flag: string, value: string) {
+  const v = String(value ?? "").trim();
+  if (v.length > 0) {
+    args.push(flag, v);
+  }
+}
+
 async function checkForUpdates(parentWin?: typeof BrowserWindow) {
   try {
     const response = await serverFetch(GITHUB_API_RELEASES, {
@@ -1388,17 +1396,16 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
 ipcMain.on("runIntensity", function (event: any, data: any[]) {
   const structPath = path.join(appDir, "csv/structure_map.pkl");
 
-  const args: string[] = [
-    `-i ${data[0]}`,
-    `-o ${data[1]}`,
-    `-a ${data[2]}`,
-    `-w ${data[3]}`,
-    `-m ${structPath}`,
-  ];
+  const args: string[] = [];
+  appendFlagPathArg(args, "-i", data[0]);
+  appendFlagPathArg(args, "-o", data[1]);
+  appendFlagPathArg(args, "-a", data[2]);
+  args.push("-w", String(data[3] ?? "").trim());
+  appendFlagPathArg(args, "-m", structPath);
   const dapiDir =
     data.length > 4 && data[4] != null ? String(data[4]).trim() : "";
   if (dapiDir.length > 0) {
-    args.push(`-d ${dapiDir}`);
+    appendFlagPathArg(args, "-d", dapiDir);
   }
   appendSliceListArg(args, data, 5);
 

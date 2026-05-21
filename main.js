@@ -237,6 +237,13 @@ function appendCziPathArgs(args, bundleRoot, configPath) {
 function appendCziInputArg(args, inputDir) {
     args.push("-i", String(inputDir || "").trim());
 }
+/** Separate flag and path argv tokens so Windows paths with spaces parse correctly in argparse. */
+function appendFlagPathArg(args, flag, value) {
+    const v = String(value !== null && value !== void 0 ? value : "").trim();
+    if (v.length > 0) {
+        args.push(flag, v);
+    }
+}
 function checkForUpdates(parentWin) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
@@ -1193,17 +1200,17 @@ ipcMain.on("runAlign", function (event, data) {
 });
 // Intensity by Region
 ipcMain.on("runIntensity", function (event, data) {
+    var _a;
     const structPath = path.join(appDir, "csv/structure_map.pkl");
-    const args = [
-        `-i ${data[0]}`,
-        `-o ${data[1]}`,
-        `-a ${data[2]}`,
-        `-w ${data[3]}`,
-        `-m ${structPath}`,
-    ];
+    const args = [];
+    appendFlagPathArg(args, "-i", data[0]);
+    appendFlagPathArg(args, "-o", data[1]);
+    appendFlagPathArg(args, "-a", data[2]);
+    args.push("-w", String((_a = data[3]) !== null && _a !== void 0 ? _a : "").trim());
+    appendFlagPathArg(args, "-m", structPath);
     const dapiDir = data.length > 4 && data[4] != null ? String(data[4]).trim() : "";
     if (dapiDir.length > 0) {
-        args.push(`-d ${dapiDir}`);
+        appendFlagPathArg(args, "-d", dapiDir);
     }
     appendSliceListArg(args, data, 5);
     let options = {

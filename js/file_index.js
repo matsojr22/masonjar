@@ -456,7 +456,7 @@ function resolvePredictionsScan(predBaseDir, maxDepth) {
 	result.resolvedPath = result.candidates[0].path;
 	if (result.candidates.length > 1) {
 		result.warning =
-			"Multiple nested prediction runs found under predictions; using the most recently modified folder. Pick the active run on the Count page if needed.";
+			"Multiple nested prediction outputs found under predictions; using the most recently modified folder. Choose predictions and slices on the Count page if needed.";
 	}
 	return result;
 }

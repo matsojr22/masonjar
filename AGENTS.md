@@ -145,7 +145,7 @@ Shared contract: [`js/pipeline_runs.js`](js/pipeline_runs.js), [`py/run_manifest
 | Collate | `quantification` | `collate` | `06_quantification/collate/<slug>/` | [`py/collate.py`](py/collate.py) |
 | Dual export | `dual` | `dual` | `08_dual/dual/<slug>/` | [`py/export_roi_dual_tif.py`](py/export_roi_dual_tif.py) |
 
-- **Project state**: `processing.active_runs[<role>]` stores the path relative to that role’s base (e.g. `align/M528_s027-…`, `somata/M528_…`). Legacy `active_prediction_run` migrates to `active_runs.predictions` on open.
+- **Project state**: `processing.active_runs[<role>]` stores the path relative to that role’s base (e.g. `align/M528_s027-…`, `somata/M528_…`). Legacy `active_prediction_run` migrates to `active_runs.predictions` on open. **UI** labels this **Completed tasks** on the workspace menu (`projectActiveRunsSection`); Count page uses role names **predictions** / **slices** (code identifiers unchanged).
 - **Flat legacy checkbox**: each output step page offers *Write outputs directly to the output folder*; when checked, `-o` stays the role root for that run only.
 - **Indexing**: [`js/file_index.js`](js/file_index.js) indexes output roles only under the **active run leaf** (no blind merge of sibling run folders). Full run inventory for pickers lives in `.masonjar/runs_catalog.json` on rescan.
 - **Import**: [`project.importSourceToRoleWithLayout`](js/project.js) preserves nested run trees; flat files in a mixed source go to `import_<ISO-date>/`.

@@ -62,6 +62,12 @@ run.addEventListener("click", function () {
 			if (slicesLeaf) {
 				annodir.value = slicesLeaf;
 			}
+			if (!slicesLeaf || !pipelineRuns.hasRunMarkers(slicesLeaf, "align")) {
+				alert(
+					"No alignment output with annotation PKLs. Choose slices on the workspace menu under Completed tasks (01_slices/align/...).",
+				);
+				return;
+			}
 		}
 		var mode = pipelineRun.getSelectedRunMode("intensity");
 		var plan = pipelineRun.preparePipelineRun("intensity", mode);
@@ -162,10 +168,18 @@ ipc.on("updateLoad", function (event, response) {
 });
 
 workspace.applyPreset("intensity");
-if (project.isActive() && outdir) {
-	var pklsBase = pipelineRuns.resolveRoleBaseAbs("pkls");
-	if (pklsBase) {
-		outdir.value = pklsBase;
+if (project.isActive()) {
+	if (outdir) {
+		var pklsBase = pipelineRuns.resolveRoleBaseAbs("pkls");
+		if (pklsBase) {
+			outdir.value = pklsBase;
+		}
+	}
+	if (annodir) {
+		var slicesLeafPreset = pipelineRuns.resolveActiveRunLeafAbs("slices");
+		if (slicesLeafPreset) {
+			annodir.value = slicesLeafPreset;
+		}
 	}
 }
 workspace.bindPathPicker(indir, "indir", "max");

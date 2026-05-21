@@ -62,7 +62,7 @@ function bindActiveRunControls(containerId) {
 	container.innerHTML = "";
 	var heading = document.createElement("h2");
 	heading.className = "h6 text-muted mb-2";
-	heading.textContent = "Active pipeline runs (project)";
+	heading.textContent = "Completed tasks (project)";
 	container.appendChild(heading);
 
 	for (var i = 0; i < pipelineRuns.OUTPUT_ROLES.length; i++) {

@@ -727,10 +727,10 @@ function buildRunDeleteConfirmMessage(role, rel, targets) {
 		return "";
 	}
 	var lines = [
-		"Delete this pipeline run folder from the project bundle?",
+		"Delete this pipeline output folder from the project bundle?",
 		"",
 		"Role: " + role,
-		"Run: " + rel,
+		"Task: " + rel,
 		"",
 		"Folder(s) to remove:",
 	];
