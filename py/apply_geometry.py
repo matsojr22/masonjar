@@ -64,6 +64,9 @@ def _read_image_array(path: Path) -> np.ndarray:
 
 
 def _write_image_array(path: Path, arr: np.ndarray) -> None:
+    parts = {p.lower() for p in path.parts}
+    if "00_dapi" in parts and path.suffix.lower() != ".png":
+        raise ValueError(f"00_dapi accepts PNG only, not {path}")
     if path.suffix.lower() == ".png":
         cv2.imwrite(str(path), arr)
         return

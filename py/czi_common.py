@@ -208,8 +208,8 @@ def dapi_preview_path(bundle_root: Path, slice_id: str) -> Path:
 
 
 def orient_dapi_preview_path(bundle_root: Path, slice_id: str) -> Path:
-    """Legacy alias — low-res DAPI lives in ``00_dapi/{sliceId}.png`` only."""
-    return dapi_preview_path(bundle_root, slice_id)
+    """Orient / wizard display — ``_previews/{sliceId}_dapi.png`` (not ``00_dapi``)."""
+    return bundle_root / CANONICAL_REL["previews"] / f"{slice_id}_dapi.png"
 
 
 def signal_preview_path(bundle_root: Path, slice_id: str, channel: Mapping[str, Any]) -> Path:

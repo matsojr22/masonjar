@@ -27,6 +27,7 @@ from czi_common import (  # noqa: E402
     collapse_z_stack_to_2d,
     default_slice_id,
     dapi_preview_path,
+    orient_dapi_preview_path,
     load_import_config,
     max_output_run_dir,
     m_tile_count_from_czi,
@@ -105,6 +106,14 @@ def test_dapi_preview_path_png(tmp_path: Path) -> None:
     path = dapi_preview_path(bundle, "M528_s001")
     assert path == bundle / "data/counting/00_dapi/M528_s001.png"
     assert path.suffix.lower() == ".png"
+
+
+def test_orient_dapi_preview_path_previews(tmp_path: Path) -> None:
+    bundle = tmp_path / "Brain_masonjar"
+    path = orient_dapi_preview_path(bundle, "M528_s001")
+    assert path == bundle / "data/counting/_previews/M528_s001_dapi.png"
+    assert "_previews" in path.parts
+    assert "00_dapi" not in path.parts
 
 
 def test_branch_paths(tmp_path: Path) -> None:

@@ -25,19 +25,20 @@
       <nav id="navTrail" class="mb-3"></nav>
       <h1 class="h4 mb-2">Orient slices</h1>
       <p class="text-muted small">
-        Rotate or flip low-res previews, then apply the same geometry to DAPI PNGs, signal
-        previews, z-stacks, and max TIFFs. Requires a project with CZI import settings or indexed
-        DAPI slices.
+        Rotate or flip low-res previews in <code>_previews</code>, then apply the same geometry to
+        pipeline DAPI PNGs (<code>00_dapi</code>), all <code>_previews</code>, z-stacks, and max
+        TIFFs. Requires a project with CZI import settings or indexed DAPI slices.
       </p>
       <div id="orientMissing" class="alert alert-warning d-none">
         Open a project with DAPI previews before orienting slices.
       </div>
       <div id="orientPanel" class="d-none">
         <div class="alert alert-info small py-2 mb-3">
-          Orientation is set <strong>once per slice</strong> and applied to every file for that
-          section (DAPI, all signal channels, z-stacks, and max projections). You do not need to
-          orient separately for each channel.
+          The grid shows <strong>_previews</strong> PNGs only (DAPI:
+          <code>{sliceId}_dapi.png</code>). Orientation is set <strong>once per slice</strong> and
+          applied to <code>00_dapi</code>, all <code>_previews</code>, z-stacks, and max projections.
         </div>
+        <div id="orientPreviewBanner" class="alert alert-warning d-none small py-2 mb-3"></div>
         <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
           <label class="small mb-0" for="orientDisplayChannel">Display channel</label>
           <select id="orientDisplayChannel" class="form-select form-select-sm" style="width: auto"></select>
@@ -59,6 +60,9 @@
           ></div>
         </div>
         <pre id="orientLog" class="wizard-log czi-extract-log small text-muted mb-3"></pre>
+        <button type="button" class="btn btn-outline-warning d-none me-2" id="orientRepairPreviews">
+          Repair previews
+        </button>
         <button type="button" class="btn btn-primary" id="orientApply">Apply geometry</button>
         <a class="btn btn-outline-secondary ms-2" href="./workspace_menu.html">Workspace</a>
       </div>

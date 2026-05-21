@@ -313,14 +313,17 @@ function testResolveOrientPreviewPath() {
 	var bundle = fs.mkdtempSync(path.join(os.tmpdir(), "czi-orient-"));
 	var sliceId = "M528_s001";
 	var dapiPath = cziImport.dapiPreviewPath(bundle, sliceId);
+	var orientDapiPath = cziImport.orientDapiPreviewPath(bundle, sliceId);
 	var prevDir = path.join(bundle, cziImport.PREVIEWS_REL);
 	fs.mkdirSync(path.dirname(dapiPath), { recursive: true });
 	fs.mkdirSync(prevDir, { recursive: true });
-	fs.writeFileSync(dapiPath, "dapi");
+	fs.writeFileSync(orientDapiPath, "dapi-orient");
+	fs.writeFileSync(dapiPath, "dapi-pipeline");
 	var somataPrev = path.join(prevDir, sliceId + "_somata.png");
 	fs.writeFileSync(somataPrev, "somata");
 	var cziCfg = {
 		primary_signal_role: cziImport.ROLE_SIGNAL_SOMATA,
+		preview_format_version: cziImport.PREVIEW_FORMAT_VERSION,
 		channels: [
 			{ file: "M528.czi", index: 0, role: cziImport.ROLE_DAPI, keep: true },
 			{ file: "M528.czi", index: 1, role: cziImport.ROLE_SIGNAL_SOMATA, keep: true },
@@ -328,8 +331,19 @@ function testResolveOrientPreviewPath() {
 	};
 	assert.strictEqual(
 		cziImport.resolveOrientPreviewPath(bundle, cziCfg, null, sliceId),
+		orientDapiPath,
+	);
+	assert.notStrictEqual(
+		cziImport.resolveOrientPreviewPath(bundle, cziCfg, null, sliceId),
 		dapiPath,
 	);
+	var legacyTif00 = path.join(bundle, "data/counting/00_dapi", sliceId + ".tif");
+	fs.writeFileSync(legacyTif00, "legacy");
+	assert.strictEqual(
+		cziImport.resolveOrientPreviewPath(bundle, cziCfg, null, sliceId),
+		orientDapiPath,
+	);
+	fs.unlinkSync(legacyTif00);
 	assert.strictEqual(
 		cziImport.resolveOrientPreviewPath(bundle, cziCfg, null, sliceId, "somata"),
 		somataPrev,
@@ -347,18 +361,17 @@ function testResolveOrientPreviewPath() {
 	fs.unlinkSync(somataPrev);
 	assert.strictEqual(
 		cziImport.resolveOrientPreviewPath(bundle, cziCfg, null, sliceId),
-		dapiPath,
+		orientDapiPath,
 	);
 }
 
 function testListOrientDisplayChannels() {
 	var bundle = fs.mkdtempSync(path.join(os.tmpdir(), "czi-orient-ch-"));
 	var sliceId = "M528_s001";
-	var dapiPath = cziImport.dapiPreviewPath(bundle, sliceId);
+	var orientDapiPath = cziImport.orientDapiPreviewPath(bundle, sliceId);
 	var prevDir = path.join(bundle, cziImport.PREVIEWS_REL);
-	fs.mkdirSync(path.dirname(dapiPath), { recursive: true });
 	fs.mkdirSync(prevDir, { recursive: true });
-	fs.writeFileSync(dapiPath, "dapi");
+	fs.writeFileSync(orientDapiPath, "dapi");
 	fs.writeFileSync(path.join(prevDir, sliceId + "_somata.png"), "somata");
 	var cziCfg = {
 		slice_order: [{ ordinal: 1, sliceId: sliceId, path: "/scan/M528.czi", scene_index: 0 }],
@@ -370,7 +383,7 @@ function testListOrientDisplayChannels() {
 	var channels = cziImport.listOrientDisplayChannels(bundle, cziCfg);
 	assert.strictEqual(channels.length, 2);
 	assert.strictEqual(channels[0].key, cziImport.ORIENT_DISPLAY_DAPI);
-	assert.strictEqual(channels[0].label, "DAPI (00_dapi)");
+	assert.strictEqual(channels[0].label, "DAPI (_previews)");
 	assert.strictEqual(channels[1].key, "somata");
 	assert.strictEqual(channels[1].label, "Somata");
 }
@@ -420,7 +433,9 @@ function testAuditCziImportCompletion() {
 	fs.mkdirSync(path.dirname(dapiPrev), { recursive: true });
 	fs.writeFileSync(dapiPrev, "preview");
 	var orientDapiPrev = cziImport.orientDapiPreviewPath(bundle, sliceId);
-	assert.strictEqual(orientDapiPrev, dapiPrev);
+	fs.mkdirSync(path.dirname(orientDapiPrev), { recursive: true });
+	fs.writeFileSync(orientDapiPrev, "orient");
+	assert.notStrictEqual(orientDapiPrev, dapiPrev);
 	var somataPrev = cziImport.signalPreviewPath(bundle, sliceId, cziCfg.channels[1]);
 	fs.mkdirSync(path.dirname(somataPrev), { recursive: true });
 	fs.writeFileSync(somataPrev, "preview");

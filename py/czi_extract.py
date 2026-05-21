@@ -23,6 +23,7 @@ from czi_common import (
     clamp_preview_scale,
     collapse_z_stack_to_2d,
     dapi_preview_path,
+    orient_dapi_preview_path,
     default_slice_id,
     dim_size,
     emit_log,
@@ -183,15 +184,20 @@ def extract_z_stack(
         approx_mb = nbytes / (1024 * 1024)
     emit_log(f"  Writing {'plane' if n_z == 1 else 'z-stack'} -> {rel} ({approx_mb:.1f} MB approx)")
 
-    if preview_path is not None:
+    if preview_path is not None or role_key == ROLE_DAPI:
         preview_plane = planes[z_indices.index(mid_z)] if z_indices else planes[0]
-        write_preview_at_path(
-            preview_path,
-            preview_plane,
-            preview_scale,
-            bundle_root,
-            slice_id=slice_id,
-        )
+        if role_key == ROLE_DAPI:
+            if bundle_root is None:
+                raise ValueError("bundle_root required for DAPI preview dual-write")
+            write_dapi_preview_pair(bundle_root, slice_id, preview_plane, preview_scale)
+        elif preview_path is not None:
+            write_preview_at_path(
+                preview_path,
+                preview_plane,
+                preview_scale,
+                bundle_root,
+                slice_id=slice_id,
+            )
 
 
 def slice_id_for_scene(file_entry: dict, scene_index: int) -> str:
@@ -263,6 +269,7 @@ def collect_output_dirs(bundle_root: Path, work: list[dict]) -> list[Path]:
         role = ch.get("role")
         if role == ROLE_DAPI:
             dirs.add(dapi_preview_path(bundle_root, slice_id).parent)
+            dirs.add(orient_dapi_preview_path(bundle_root, slice_id).parent)
         elif branch_for_channel(ch):
             dirs.add(signal_preview_path(bundle_root, slice_id, ch).parent)
     meta = meta_state_path(bundle_root).parent
@@ -329,7 +336,13 @@ def _is_low_res_preview_path(preview_path: Path) -> bool:
     return "00_dapi" in parts or "_previews" in parts
 
 
+def _path_under_00_dapi(preview_path: Path) -> bool:
+    return "00_dapi" in {p.lower() for p in preview_path.parts}
+
+
 def _write_preview_array(preview, preview_path: Path) -> None:
+    if _path_under_00_dapi(preview_path) and preview_path.suffix.lower() != ".png":
+        raise ValueError(f"00_dapi accepts PNG only, not {preview_path}")
     preview_path.parent.mkdir(parents=True, exist_ok=True)
     if _is_low_res_preview_path(preview_path):
         cv2.imwrite(str(preview_path), preview)
@@ -356,26 +369,55 @@ def write_preview_at_path(
     emit_log(f"  Writing preview -> {prev_rel} ({slice_id})")
 
 
+def write_dapi_preview_pair(
+    bundle_root: Path,
+    slice_id: str,
+    plane,
+    preview_scale: float,
+) -> None:
+    """Write orient ``_previews/{id}_dapi.png`` and pipeline ``00_dapi/{id}.png``."""
+    preview = downscale_plane(preview_autoscale_to_uint8(plane), preview_scale)
+    for dest in (
+        orient_dapi_preview_path(bundle_root, slice_id),
+        dapi_preview_path(bundle_root, slice_id),
+    ):
+        _write_preview_array(preview, dest)
+        try:
+            rel = dest.relative_to(bundle_root)
+        except ValueError:
+            rel = dest.name
+        emit_log(f"  Writing preview -> {rel} ({slice_id})")
+
+
+def _remaining_00_dapi_tiffs(dapi_dir: Path) -> list[Path]:
+    if not dapi_dir.is_dir():
+        return []
+    return sorted(dapi_dir.glob("*.tif")) + sorted(dapi_dir.glob("*.tiff"))
+
+
 def migrate_low_res_tiffs(bundle_root: Path, cfg: dict, preview_scale: float) -> int:
-    """Convert legacy low-res TIFFs to PNG and drop redundant DAPI duplicates."""
+    """Convert legacy low-res TIFFs to PNG; sync orient DAPI previews; delete TIFFs."""
     migrated = 0
     dapi_dir = bundle_root / CANONICAL_REL["dapi"]
     if dapi_dir.is_dir():
-        legacy_tifs = sorted(dapi_dir.glob("*.tif")) + sorted(dapi_dir.glob("*.tiff"))
+        legacy_tifs = _remaining_00_dapi_tiffs(dapi_dir)
         for tif_path in legacy_tifs:
             slice_id = tif_path.stem
-            png_path = dapi_preview_path(bundle_root, slice_id)
-            if png_path.exists():
-                tif_path.unlink(missing_ok=True)
-                emit_log(f"  removed stale DAPI TIFF {tif_path.name}")
-                migrated += 1
-                continue
             arr = np.asarray(tiff.imread(str(tif_path)))
             plane = plane_from_zstack(arr) if arr.ndim > 2 else arr
-            write_preview_at_path(png_path, plane, preview_scale, bundle_root, slice_id)
+            write_dapi_preview_pair(bundle_root, slice_id, plane, preview_scale)
             tif_path.unlink(missing_ok=True)
-            emit_log(f"  migrated {tif_path.name} -> {png_path.name}")
+            emit_log(f"  migrated {tif_path.name} -> PNG (pipeline + orient)")
             migrated += 1
+        for png_path in sorted(dapi_dir.glob("*.png")):
+            slice_id = png_path.stem
+            orient_png = orient_dapi_preview_path(bundle_root, slice_id)
+            if not orient_png.exists():
+                arr = cv2.imread(str(png_path), cv2.IMREAD_UNCHANGED)
+                if arr is not None:
+                    _write_preview_array(np.asarray(arr), orient_png)
+                    emit_log(f"  synced orient preview from {png_path.name}")
+                    migrated += 1
 
     prev_dir = bundle_root / CANONICAL_REL["previews"]
     if prev_dir.is_dir():
@@ -388,12 +430,12 @@ def migrate_low_res_tiffs(bundle_root: Path, cfg: dict, preview_scale: float) ->
             tif_path.unlink(missing_ok=True)
             emit_log(f"  migrated {tif_path.name} -> {png_path.name}")
             migrated += 1
-        for dup in sorted(prev_dir.glob("*_dapi.png")):
-            slice_id = dup.stem[: -len("_dapi")]
-            if dapi_preview_path(bundle_root, slice_id).exists():
-                dup.unlink(missing_ok=True)
-                emit_log(f"  removed redundant preview {dup.name}")
-                migrated += 1
+
+    leftover = _remaining_00_dapi_tiffs(dapi_dir)
+    if leftover:
+        names = ", ".join(p.name for p in leftover)
+        emit_log(f"  ERROR: TIFF still in 00_dapi after migrate: {names}")
+        raise RuntimeError(f"00_dapi must not contain TIFF files: {names}")
     return migrated
 
 
@@ -407,12 +449,15 @@ def repair_preview_from_zstack(
     if not z_path.is_file():
         emit_log(f"  z-stack missing for repair: {z_path.name}")
         return False
-    preview_path = preview_path_for_channel(bundle_root, ch, slice_id)
-    if preview_path is None:
-        return False
     emit_log(f"  Repair preview from z-stack {z_path.name}")
     arr = np.asarray(tiff.imread(str(z_path)))
     plane = plane_from_zstack(arr)
+    if ch.get("role") == ROLE_DAPI:
+        write_dapi_preview_pair(bundle_root, slice_id, plane, preview_scale)
+        return True
+    preview_path = preview_path_for_channel(bundle_root, ch, slice_id)
+    if preview_path is None:
+        return False
     write_preview_at_path(preview_path, plane, preview_scale, bundle_root, slice_id)
     return True
 
@@ -561,9 +606,29 @@ def main() -> int:
     prior_state = read_import_state(bundle_root)
     max_runs_existing = dict(cfg.get("max_runs") or prior_state.get("max_runs") or {})
 
-    if repair_mode == "previews" and repair_targets:
-        emit_log(f"Preview repair mode ({len(repair_targets)} target(s))")
+    if repair_mode == "previews":
+        emit_log("Preview repair mode — migrating legacy TIFFs to PNG")
         migrate_low_res_tiffs(bundle_root, cfg, preview_scale)
+        if not repair_targets:
+            state = read_import_state(bundle_root) or {}
+            state["phase"] = "complete"
+            state["repair_mode"] = repair_mode
+            state["preview_format_version"] = PREVIEW_FORMAT_VERSION
+            write_import_state(bundle_root, state)
+            emit_result(
+                {
+                    "ok": True,
+                    "extracted": {},
+                    "max_runs": dict(max_runs_existing),
+                    "primary_signal_role": cfg.get("primary_signal_role") or "",
+                    "repair_mode": repair_mode,
+                    "repaired_previews": 0,
+                    "migrate_only": True,
+                }
+            )
+            print("Done!", flush=True)
+            return 0
+        emit_log(f"Preview repair ({len(repair_targets)} target(s))")
         files_by_name: dict[str, dict] = {}
         for f in cfg.get("files") or []:
             files_by_name[Path(f.get("path", "")).name] = f
@@ -690,7 +755,7 @@ def main() -> int:
         out_path = original_scans_path(bundle_root, ch, slice_id)
         preview_path = None
         if role == ROLE_DAPI:
-            preview_path = dapi_preview_path(bundle_root, slice_id)
+            preview_path = None
         elif branch_for_channel(ch):
             preview_path = signal_preview_path(bundle_root, slice_id, ch)
 

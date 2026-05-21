@@ -99,6 +99,7 @@ function setStep(step) {
 	updateWizardCancelVisibility();
 	if (step === 5) {
 		populateOrientDisplayChannelSelect();
+		updateOrientPreviewBanner();
 		renderOrientationGrid();
 	}
 }
@@ -980,6 +981,50 @@ function populateOrientDisplayChannelSelect() {
 	select.value = wizardState.orientDisplayChannel;
 }
 
+function updateOrientPreviewBanner() {
+	var health = cziImport.assessOrientPreviewHealth(
+		wizardState.bundleRoot,
+		wizardState.cziImport,
+	);
+	var banner = qs("orientPreviewBanner");
+	var repairBtn = qs("orientRepairPreviews");
+	var step5Next = qs("step5Next");
+	var msg = cziImport.orientPreviewBannerText(health);
+	if (banner) {
+		if (msg) {
+			banner.textContent = msg;
+			banner.classList.remove("d-none");
+		} else {
+			banner.textContent = "";
+			banner.classList.add("d-none");
+		}
+	}
+	if (repairBtn) {
+		repairBtn.classList.toggle("d-none", !health.needsRepair);
+	}
+	if (step5Next && !geometryRunning) {
+		step5Next.disabled = !health.canApply;
+	}
+	return health;
+}
+
+async function runOrientPreviewRepair() {
+	var health = updateOrientPreviewBanner();
+	wizardState.repairMode = true;
+	wizardState.repairTargets = cziImport.buildRepairTargetsFromAudit(
+		health.audit,
+		wizardState.cziImport,
+	);
+	try {
+		await runExtract({ repairOnly: true });
+		updateOrientPreviewBanner();
+		renderOrientationGrid();
+	} finally {
+		wizardState.repairMode = false;
+		wizardState.repairTargets = [];
+	}
+}
+
 function renderOrientationGrid() {
 	ensureGeometryMap();
 	var grid = qs("orientGrid");
@@ -1285,7 +1330,7 @@ async function tryResumeCziImportAfterStep1() {
 	}
 	if (audit.needsPreviewRepair) {
 		wizardState.repairMode = true;
-		wizardState.repairTargets = cziImport.buildRepairTargetsFromAudit(audit);
+		wizardState.repairTargets = cziImport.buildRepairTargetsFromAudit(audit, saved);
 		verboseExtractLog(
 			"Repairing " + wizardState.repairTargets.length + " preview(s) from existing z-stacks…",
 		);
@@ -1790,7 +1835,16 @@ function bindStep5() {
 	if (displaySelect) {
 		displaySelect.addEventListener("change", function (ev) {
 			wizardState.orientDisplayChannel = ev.target.value;
+			updateOrientPreviewBanner();
 			renderOrientationGrid();
+		});
+	}
+	var repairBtn = qs("orientRepairPreviews");
+	if (repairBtn) {
+		repairBtn.addEventListener("click", function () {
+			runOrientPreviewRepair().catch(function (err) {
+				alert(String(err.message || err));
+			});
 		});
 	}
 	qs("orientApplyAll").addEventListener("click", function () {

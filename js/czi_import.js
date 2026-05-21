@@ -627,7 +627,7 @@ function dapiPreviewPath(bundleRoot, sliceId) {
 }
 
 function orientDapiPreviewPath(bundleRoot, sliceId) {
-	return dapiPreviewPath(bundleRoot, sliceId);
+	return path.join(bundleRoot, PREVIEWS_REL, sliceId + "_dapi.png");
 }
 
 function signalPreviewPath(bundleRoot, sliceId, channel) {
@@ -720,17 +720,17 @@ function findKeptChannelForDisplayKey(cziImport, displayKey) {
 	return null;
 }
 
-function dapiPngExistsInBundle(bundleRoot) {
+function orientDapiPngExistsInBundle(bundleRoot) {
 	if (!bundleRoot) {
 		return false;
 	}
-	var dapiDir = path.join(bundleRoot, "data/counting/00_dapi");
-	if (!fs.existsSync(dapiDir)) {
+	var prevDir = path.join(bundleRoot, PREVIEWS_REL);
+	if (!fs.existsSync(prevDir)) {
 		return false;
 	}
-	var entries = fs.readdirSync(dapiDir);
+	var entries = fs.readdirSync(prevDir);
 	for (var i = 0; i < entries.length; i++) {
-		if (entries[i].toLowerCase().endsWith(".png")) {
+		if (/_dapi\.png$/i.test(entries[i])) {
 			return true;
 		}
 	}
@@ -758,8 +758,8 @@ function listOrientDisplayChannels(bundleRoot, cziImport) {
 			break;
 		}
 	}
-	if (dapiPngExistsInBundle(bundleRoot) || hasDapiRole) {
-		addEntry(ORIENT_DISPLAY_DAPI, "DAPI (00_dapi)");
+	if (orientDapiPngExistsInBundle(bundleRoot) || hasDapiRole) {
+		addEntry(ORIENT_DISPLAY_DAPI, "DAPI (_previews)");
 	}
 
 	for (var c = 0; c < channels.length; c++) {
@@ -785,7 +785,7 @@ function listOrientDisplayChannels(bundleRoot, cziImport) {
 						continue;
 					}
 					var suffix = name.slice(prefix.length, -4);
-					if (suffix === "dapi" && (dapiPngExistsInBundle(bundleRoot) || hasDapiRole)) {
+					if (suffix === "dapi" && (orientDapiPngExistsInBundle(bundleRoot) || hasDapiRole)) {
 						continue;
 					}
 					suffixes[suffix] = true;
@@ -801,7 +801,7 @@ function listOrientDisplayChannels(bundleRoot, cziImport) {
 	}
 
 	if (!out.length) {
-		addEntry(ORIENT_DISPLAY_DAPI, "DAPI (00_dapi)");
+		addEntry(ORIENT_DISPLAY_DAPI, "DAPI (_previews)");
 	}
 	return out;
 }
@@ -834,13 +834,9 @@ function resolveOrientPreviewPath(
 	}
 
 	if (displayChannelKey === ORIENT_DISPLAY_DAPI) {
-		var dapi = dapiPreviewPath(bundleRoot, sliceId);
-		if (fs.existsSync(dapi)) {
-			return dapi;
-		}
-		var legacyDapiTif = path.join(bundleRoot, "data/counting/00_dapi", sliceId + ".tif");
-		if (fs.existsSync(legacyDapiTif)) {
-			return legacyDapiTif;
+		var orientDapi = orientDapiPreviewPath(bundleRoot, sliceId);
+		if (fs.existsSync(orientDapi)) {
+			return orientDapi;
 		}
 		return "";
 	}
@@ -851,14 +847,30 @@ function resolveOrientPreviewPath(
 		if (fs.existsSync(signalPrev)) {
 			return signalPrev;
 		}
-		var legacySuffix = branchForChannel(ch) || roleKeyForChannel(ch);
-		var legacySignalPrev = path.join(
+	}
+
+	var previewFormatVersion =
+		(cziImport && cziImport.preview_format_version) || PREVIEW_FORMAT_VERSION;
+	if (previewFormatVersion < PREVIEW_FORMAT_VERSION) {
+		var ch2 = findKeptChannelForDisplayKey(cziImport || {}, displayChannelKey);
+		if (ch2) {
+			var legacySuffix = branchForChannel(ch2) || roleKeyForChannel(ch2);
+			var legacySignalPrev = path.join(
+				bundleRoot,
+				PREVIEWS_REL,
+				sliceId + "_" + legacySuffix + ".tif",
+			);
+			if (fs.existsSync(legacySignalPrev)) {
+				return legacySignalPrev;
+			}
+		}
+		var legacyDirectTif = path.join(
 			bundleRoot,
 			PREVIEWS_REL,
-			sliceId + "_" + legacySuffix + ".tif",
+			sliceId + "_" + displayChannelKey + ".tif",
 		);
-		if (fs.existsSync(legacySignalPrev)) {
-			return legacySignalPrev;
+		if (fs.existsSync(legacyDirectTif)) {
+			return legacyDirectTif;
 		}
 	}
 
@@ -870,13 +882,15 @@ function resolveOrientPreviewPath(
 	if (fs.existsSync(directPng)) {
 		return directPng;
 	}
-	var directTif = path.join(
-		bundleRoot,
-		PREVIEWS_REL,
-		sliceId + "_" + displayChannelKey + ".tif",
-	);
-	if (fs.existsSync(directTif)) {
-		return directTif;
+	if (previewFormatVersion < PREVIEW_FORMAT_VERSION) {
+		var directTif = path.join(
+			bundleRoot,
+			PREVIEWS_REL,
+			sliceId + "_" + displayChannelKey + ".tif",
+		);
+		if (fs.existsSync(directTif)) {
+			return directTif;
+		}
 	}
 	return "";
 }
@@ -1092,23 +1106,50 @@ function findLowResTiffIssues(bundleRoot) {
 				});
 			}
 		}
-		for (var r = 0; r < prevEntries.length; r++) {
-			var rname = prevEntries[r];
-			if (!/_dapi\.png$/i.test(rname)) {
-				continue;
-			}
-			var sid = rname.replace(/_dapi\.png$/i, "");
-			var canonical = dapiPreviewPath(bundleRoot, sid);
-			if (fs.existsSync(canonical)) {
-				issues.push({
-					kind: "redundant_dapi_preview",
-					path: path.join(prevDir, rname),
-					slice_id: sid,
-				});
-			}
-		}
 	}
 	return issues;
+}
+
+function findMissingOrientDapiPreviews(bundleRoot) {
+	var missing = [];
+	if (!bundleRoot) {
+		return missing;
+	}
+	var dapiDir = path.join(bundleRoot, "data/counting/00_dapi");
+	if (!fs.existsSync(dapiDir)) {
+		return missing;
+	}
+	var entries = fs.readdirSync(dapiDir);
+	for (var i = 0; i < entries.length; i++) {
+		var name = entries[i];
+		if (!name.toLowerCase().endsWith(".png")) {
+			continue;
+		}
+		var sliceId = path.basename(name, path.extname(name));
+		var orientPath = orientDapiPreviewPath(bundleRoot, sliceId);
+		if (!fs.existsSync(orientPath)) {
+			missing.push({ slice_id: sliceId, path: orientPath });
+		}
+	}
+	return missing;
+}
+
+function ensureOrientDapiPreviewsFromPipeline(bundleRoot) {
+	var synced = 0;
+	var missing = findMissingOrientDapiPreviews(bundleRoot);
+	for (var i = 0; i < missing.length; i++) {
+		var sliceId = missing[i].slice_id;
+		var src = dapiPreviewPath(bundleRoot, sliceId);
+		var dest = orientDapiPreviewPath(bundleRoot, sliceId);
+		try {
+			fs.mkdirSync(path.dirname(dest), { recursive: true });
+			fs.copyFileSync(src, dest);
+			synced += 1;
+		} catch (e) {
+			console.warn("[czi_import] sync orient DAPI preview failed", sliceId, e);
+		}
+	}
+	return synced;
 }
 
 function auditCziImportCompletion(bundleRoot, cziImport, options) {
@@ -1128,6 +1169,7 @@ function auditCziImportCompletion(bundleRoot, cziImport, options) {
 	var invalidPreviews = [];
 	var missingMaxRuns = [];
 	var lowResTiffIssues = findLowResTiffIssues(bundleRoot);
+	var missingOrientDapiPreviews = findMissingOrientDapiPreviews(bundleRoot);
 	var workItems = iterKeptChannelScenes(cziImport);
 
 	for (var i = 0; i < workItems.length; i++) {
@@ -1187,10 +1229,12 @@ function auditCziImportCompletion(bundleRoot, cziImport, options) {
 		missingZstacks.length === 0 &&
 		invalidPreviews.length === 0 &&
 		missingMaxRuns.length === 0 &&
-		lowResTiffIssues.length === 0;
+		lowResTiffIssues.length === 0 &&
+		missingOrientDapiPreviews.length === 0;
 	var needsPreviewRepair =
 		(extractComplete && missingZstacks.length === 0 && invalidPreviews.length > 0) ||
-		(extractComplete && lowResTiffIssues.length > 0);
+		(extractComplete && lowResTiffIssues.length > 0) ||
+		(extractComplete && missingOrientDapiPreviews.length > 0);
 
 	return {
 		extractComplete: extractComplete,
@@ -1198,6 +1242,7 @@ function auditCziImportCompletion(bundleRoot, cziImport, options) {
 		invalidPreviews: invalidPreviews,
 		missingMaxRuns: missingMaxRuns,
 		lowResTiffIssues: lowResTiffIssues,
+		missingOrientDapiPreviews: missingOrientDapiPreviews,
 		canSkipToOrient: canSkipToOrient,
 		needsPreviewRepair: needsPreviewRepair,
 		previewFormatVersion: previewFormatVersion,
@@ -1205,8 +1250,57 @@ function auditCziImportCompletion(bundleRoot, cziImport, options) {
 	};
 }
 
-function buildRepairTargetsFromAudit(audit) {
-	return (audit.invalidPreviews || []).map(function (item) {
+function assessOrientPreviewHealth(bundleRoot, cziImport) {
+	cziImport = cziImport || {};
+	var synced = ensureOrientDapiPreviewsFromPipeline(bundleRoot);
+	var audit = auditCziImportCompletion(bundleRoot, cziImport, {});
+	var tiffIn00 = (audit.lowResTiffIssues || []).filter(function (i) {
+		return i.kind === "dapi_tif";
+	});
+	var invalidOrient = (audit.invalidPreviews || []).filter(function (item) {
+		return item.role_key === ROLE_DAPI || !item.role_key;
+	});
+	var needsRepair =
+		tiffIn00.length > 0 ||
+		invalidOrient.length > 0 ||
+		(audit.missingOrientDapiPreviews || []).length > 0;
+	return {
+		audit: audit,
+		synced: synced,
+		tiffIn00: tiffIn00,
+		invalidOrient: invalidOrient,
+		missingOrient: audit.missingOrientDapiPreviews || [],
+		needsRepair: needsRepair,
+		canApply: !needsRepair,
+	};
+}
+
+function orientPreviewBannerText(health) {
+	if (!health || !health.needsRepair) {
+		return "";
+	}
+	var parts = [];
+	if (health.tiffIn00.length) {
+		parts.push(
+			health.tiffIn00.length +
+				" invalid TIFF file(s) in 00_dapi (pipeline folder must be PNG only).",
+		);
+	}
+	if (health.missingOrient.length) {
+		parts.push(
+			health.missingOrient.length +
+				" missing orient DAPI preview(s) under _previews (*_dapi.png).",
+		);
+	}
+	if (health.invalidOrient.length) {
+		parts.push(health.invalidOrient.length + " invalid or missing orient preview(s).");
+	}
+	parts.push("Run Repair previews to convert TIFFs, rebuild PNGs, and sync _previews.");
+	return parts.join(" ");
+}
+
+function buildRepairTargetsFromAudit(audit, cziImport) {
+	var targets = (audit.invalidPreviews || []).map(function (item) {
 		return {
 			slice_id: item.slice_id,
 			channel_index: item.channel_index,
@@ -1216,6 +1310,69 @@ function buildRepairTargetsFromAudit(audit) {
 			czi_path: item.czi_path,
 		};
 	});
+	var seen = {};
+	for (var t = 0; t < targets.length; t++) {
+		seen[targets[t].slice_id + ":" + targets[t].channel_index] = true;
+	}
+	var dapiChannel = null;
+	if (cziImport && cziImport.channels) {
+		for (var c = 0; c < cziImport.channels.length; c++) {
+			var ch = cziImport.channels[c];
+			if (ch.keep && ch.role === ROLE_DAPI) {
+				dapiChannel = ch;
+				break;
+			}
+		}
+	}
+	function addDapiTarget(sliceId) {
+		if (!dapiChannel || !sliceId) {
+			return;
+		}
+		var key = sliceId + ":" + dapiChannel.index;
+		if (seen[key]) {
+			return;
+		}
+		seen[key] = true;
+		var fileRef = null;
+		if (cziImport.files) {
+			for (var f = 0; f < cziImport.files.length; f++) {
+				if (
+					cziImport.files[f].basename === dapiChannel.file ||
+					path.basename(cziImport.files[f].path || "") === dapiChannel.file
+				) {
+					fileRef = cziImport.files[f];
+					break;
+				}
+			}
+		}
+		var sceneIndex = 0;
+		if (fileRef && fileRef.scenes) {
+			for (var s = 0; s < fileRef.scenes.length; s++) {
+				if (fileRef.scenes[s].sliceId === sliceId) {
+					sceneIndex = fileRef.scenes[s].index;
+					break;
+				}
+			}
+		}
+		targets.push({
+			slice_id: sliceId,
+			channel_index: dapiChannel.index,
+			role_key: ROLE_DAPI,
+			file: dapiChannel.file,
+			scene_index: sceneIndex,
+			czi_path: fileRef ? fileRef.path : "",
+		});
+	}
+	for (var i = 0; i < (audit.lowResTiffIssues || []).length; i++) {
+		var issue = audit.lowResTiffIssues[i];
+		if (issue.kind === "dapi_tif" && issue.slice_id) {
+			addDapiTarget(issue.slice_id);
+		}
+	}
+	for (var m = 0; m < (audit.missingOrientDapiPreviews || []).length; m++) {
+		addDapiTarget(audit.missingOrientDapiPreviews[m].slice_id);
+	}
+	return targets;
 }
 
 module.exports = {
@@ -1274,6 +1431,10 @@ module.exports = {
 	importStatePath: importStatePath,
 	readImportState: readImportState,
 	findLowResTiffIssues: findLowResTiffIssues,
+	findMissingOrientDapiPreviews: findMissingOrientDapiPreviews,
+	ensureOrientDapiPreviewsFromPipeline: ensureOrientDapiPreviewsFromPipeline,
+	assessOrientPreviewHealth: assessOrientPreviewHealth,
+	orientPreviewBannerText: orientPreviewBannerText,
 	auditCziImportCompletion: auditCziImportCompletion,
 	buildRepairTargetsFromAudit: buildRepairTargetsFromAudit,
 	iterKeptChannelScenes: iterKeptChannelScenes,

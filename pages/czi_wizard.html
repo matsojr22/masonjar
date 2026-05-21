@@ -304,10 +304,11 @@
 
       <section id="step5" class="wizard-panel d-none">
         <div class="alert alert-info small py-2 mb-3">
-          Orientation is set <strong>once per slice</strong> and applied to every file for that
-          section (DAPI, all signal channels, z-stacks, and max projections). You do not need to
-          orient separately for each channel.
+          The grid shows <strong>_previews</strong> PNGs (DAPI: <code>{sliceId}_dapi.png</code>).
+          Geometry applies to <code>00_dapi</code>, all <code>_previews</code>, z-stacks, and max
+          projections — once per slice, not per channel.
         </div>
+        <div id="orientPreviewBanner" class="alert alert-warning d-none small py-2 mb-3"></div>
         <p class="text-muted">
           Review low-res previews. Use toolbar buttons to rotate or flip each slice (OpenCV applied on
           confirm).
@@ -322,6 +323,9 @@
         <div id="orientGrid" class="czi-orient-grid"></div>
         <div class="mt-3">
           <button type="button" class="btn btn-outline-secondary" id="step5Back">Back</button>
+          <button type="button" class="btn btn-outline-warning d-none me-2" id="orientRepairPreviews">
+            Repair previews
+          </button>
           <button type="button" class="btn btn-primary" id="step5Next">Confirm geometry</button>
         </div>
       </section>

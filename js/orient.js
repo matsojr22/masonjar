@@ -17,6 +17,7 @@ project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
 
 var geometryRunning = false;
+var previewRepairRunning = false;
 var orientState = {
 	bundleRoot: "",
 	cziImport: null,
@@ -169,6 +170,101 @@ function populateOrientDisplayChannelSelect() {
 		orientState.displayChannel = cziImport.ORIENT_DISPLAY_DAPI;
 	}
 	select.value = orientState.displayChannel;
+}
+
+function updateOrientPreviewBanner() {
+	var health = cziImport.assessOrientPreviewHealth(
+		orientState.bundleRoot,
+		orientState.cziImport,
+	);
+	var banner = qs("orientPreviewBanner");
+	var repairBtn = qs("orientRepairPreviews");
+	var applyBtn = qs("orientApply");
+	var msg = cziImport.orientPreviewBannerText(health);
+	if (banner) {
+		if (msg) {
+			banner.textContent = msg;
+			banner.classList.remove("d-none");
+		} else {
+			banner.textContent = "";
+			banner.classList.add("d-none");
+		}
+	}
+	if (repairBtn) {
+		repairBtn.classList.toggle("d-none", !health.needsRepair);
+		repairBtn.disabled = previewRepairRunning;
+	}
+	if (applyBtn && !geometryRunning) {
+		applyBtn.disabled = !health.canApply;
+	}
+	return health;
+}
+
+function runPreviewRepair() {
+	if (previewRepairRunning || geometryRunning) {
+		return Promise.reject(new Error("Another job is running"));
+	}
+	var health = updateOrientPreviewBanner();
+	var audit = health.audit;
+	var targets = cziImport.buildRepairTargetsFromAudit(audit, orientState.cziImport);
+	previewRepairRunning = true;
+	var repairBtn = qs("orientRepairPreviews");
+	if (repairBtn) {
+		repairBtn.disabled = true;
+	}
+	setActivity("Repairing previews…", 5);
+	verboseLog("Starting preview repair (migrate + " + targets.length + " target(s))…");
+
+	var payload = Object.assign({}, orientState.cziImport);
+	payload.repair_mode = "previews";
+	payload.repair_targets = targets;
+	payload.config_fingerprint = cziImport.cziImportFingerprint(payload);
+	var cfgPath = cziImport.importConfigPath(orientState.bundleRoot);
+	fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+	fs.writeFileSync(cfgPath, JSON.stringify({ czi_import: payload }, null, 2), "utf8");
+
+	return new Promise(function (resolve, reject) {
+		function onProgress(ev, data) {
+			var pct = Number(data[0]) || 0;
+			setActivity(String(data[1] || "Repairing previews…"), pct);
+		}
+		function onJobLog(ev, line) {
+			var msg = String(line || "").trim();
+			if (msg) {
+				verboseLog(msg.replace(/^LOG:\s*/i, ""));
+			}
+		}
+		function onResult(ev, result) {
+			ipc.removeListener("updateLoad", onProgress);
+			ipc.removeListener("cziJobLog", onJobLog);
+			ipc.removeListener("cziImportResult", onResult);
+			previewRepairRunning = false;
+			if (repairBtn) {
+				repairBtn.disabled = false;
+			}
+			if (!result || result.ok === false) {
+				var errMsg = (result && result.error) || "Preview repair failed";
+				setActivity(errMsg, 0);
+				reject(new Error(errMsg));
+				return;
+			}
+			if (result.preview_format_version) {
+				orientState.cziImport.preview_format_version = result.preview_format_version;
+			}
+			persistGeometryToProject();
+			updateOrientPreviewBanner();
+			renderOrientationGrid();
+			setActivity("Preview repair complete.", 100);
+			resolve(result);
+		}
+		ipc.on("updateLoad", onProgress);
+		ipc.on("cziJobLog", onJobLog);
+		ipc.once("cziImportResult", onResult);
+		ipc.send("runCziImport", [
+			String(orientState.bundleRoot || "").trim(),
+			String(cfgPath || "").trim(),
+		]);
+	});
 }
 
 function renderOrientationGrid() {
@@ -380,17 +476,28 @@ function init() {
 	if (!ids.length) {
 		qs("orientMissing").classList.remove("d-none");
 		qs("orientMissing").textContent =
-			"No DAPI slice IDs found in the project index. Import CZI data or add PNG previews under 00_dapi first.";
+			"No DAPI slice IDs found. Import CZI data or add orient PNGs under _previews (*_dapi.png), or run repair.";
 		return;
 	}
 	qs("orientPanel").classList.remove("d-none");
 	populateOrientDisplayChannelSelect();
+	updateOrientPreviewBanner();
 	renderOrientationGrid();
+
+	var repairBtn = qs("orientRepairPreviews");
+	if (repairBtn) {
+		repairBtn.addEventListener("click", function () {
+			runPreviewRepair().catch(function (err) {
+				alert(String(err.message || err));
+			});
+		});
+	}
 
 	var displaySelect = qs("orientDisplayChannel");
 	if (displaySelect) {
 		displaySelect.addEventListener("change", function (ev) {
 			orientState.displayChannel = ev.target.value;
+			updateOrientPreviewBanner();
 			renderOrientationGrid();
 		});
 	}
