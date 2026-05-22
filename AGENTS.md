@@ -1,6 +1,8 @@
 # AGENTS.md — working on Mason Jar
 
-Mason Jar is an Electron desktop app for mouse brain neurohistology (alignment, projections, intensity, detection, counting, collation). It is a fork of Bell Jar with dual compatibility for legacy Bell Jar paths. This file orients contributors and coding agents.
+Mason Jar is an Electron desktop app for mouse brain neurohistology (alignment, projections, intensity, detection, counting, collation). It is a fork of Bell Jar with dual compatibility for legacy Bell Jar paths.
+
+**Session handoff** (current version, recent releases, open follow-ups): [`docs/AGENT_HANDOFF.md`](docs/AGENT_HANDOFF.md). Bump that file when cutting a release or ending a long agent session. This file orients contributors and coding agents.
 
 ## Branding and dual compatibility
 
@@ -157,6 +159,10 @@ Shared contract: [`js/pipeline_runs.js`](js/pipeline_runs.js), [`py/run_manifest
 | Align | `slices` | `align` | `01_slices/align/<slug>/` | [`py/map.py`](py/map.py) |
 | Isolate regions | `pkls` | `intensity` | `07_pkls/intensity/<slug>/` | [`py/region.py`](py/region.py) |
 | Cell detection | `predictions` | model branch | `05_predictions/somata/<slug>/` | [`py/find_neurons.py`](py/find_neurons.py) |
+
+## Cell detection (SAHI)
+
+[`py/find_neurons.py`](py/find_neurons.py) uses `sahi~=0.11.0` ([`py/requirements.txt`](py/requirements.txt)). `_call_get_sliced_prediction()` passes `progress_bar` / `progress_callback` only if `inspect.signature(get_sliced_prediction)` includes those parameters (0.11.x on PyPI does not; newer SAHI main will). Tile progress in the Mason Jar log uses `make_tile_progress_printer` when supported; otherwise rely on `verbose=1` and the pre-detection stdout line. Tests: [`python/tests/test_find_neurons_sahi.py`](python/tests/test_find_neurons_sahi.py).
 | Count | `quantification` | `count` | `06_quantification/count/<slug>/` | [`py/count.py`](py/count.py) |
 | Collate | `quantification` | `collate` | `06_quantification/collate/<slug>/` | [`py/collate.py`](py/collate.py) |
 | Dual export | `dual` | `dual` | `08_dual/dual/<slug>/` | [`py/export_roi_dual_tif.py`](py/export_roi_dual_tif.py) |
@@ -317,7 +323,7 @@ Bump `version` in `package.json` before a release when appropriate. Commit `main
 - **Electron app**: install Node/Yarn per `README.md`, then `yarn install`. Prefer `./node_modules/.bin/electron-forge start` if `yarn start` exits immediately (some environments shim `yarn` without running scripts).
 - **Compile main process TS**: `yarn compile` (runs `tsc`). **Commit updated `main.js` when you change `src/main.ts`**, unless your team standardizes otherwise.
 - **Python package**: from `python/`, install in editable mode (`pip install -e .` / Hatch) and run `belljar --help` or pytest.
-- **Dev tests** (not shipped in the app): `yarn test:js` (file index + pipeline plan), `yarn test:smoke` (Electron page load + key DOM ids). Python slice-index tests: `cd python && pip install -e . && pytest tests/test_slice_index_py.py tests/test_project.py`.
+- **Dev tests** (not shipped in the app): `yarn test:js` (file index, pipeline, CZI, structure catalog, atlas region style, …), `yarn test:smoke` (Electron page load + key DOM ids). Python: `cd python && pytest tests/test_region_config.py tests/test_find_neurons_sahi.py tests/test_region_whole_flag.py` (and other `tests/test_*.py` as needed).
 
 ## Packaging
 
