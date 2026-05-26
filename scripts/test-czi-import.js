@@ -114,6 +114,96 @@ function testNaturalCompareSectionOrder() {
 	assert.deepStrictEqual(ids, ["M528_s9", "M528_s20", "M528_s100", "M528_s112"]);
 }
 
+function testNaturalCompareParenSuffix() {
+	var ids = ["M467(100)", "M467(101)", "M467(57)", "M467(58)", "M467(99)", "M467(108)"];
+	ids.sort(function (a, b) {
+		return cziImport.naturalCompare({ sliceId: a }, { sliceId: b });
+	});
+	assert.deepStrictEqual(ids, [
+		"M467(57)",
+		"M467(58)",
+		"M467(99)",
+		"M467(100)",
+		"M467(101)",
+		"M467(108)",
+	]);
+}
+
+function testNaturalCompareMixedWidths() {
+	var ids = ["M528_100", "M528_10", "M528_1", "M528_2"];
+	ids.sort(function (a, b) {
+		return cziImport.naturalCompare({ sliceId: a }, { sliceId: b });
+	});
+	assert.deepStrictEqual(ids, ["M528_1", "M528_2", "M528_10", "M528_100"]);
+}
+
+function testNaturalCompareNoTrailingDigit() {
+	var ids = ["M467(57)", "M467(58)", "Brain (1)", "Brain (10)", "Brain (2)"];
+	ids.sort(function (a, b) {
+		return cziImport.naturalCompare({ sliceId: a }, { sliceId: b });
+	});
+	assert.deepStrictEqual(ids, ["Brain (1)", "Brain (2)", "Brain (10)", "M467(57)", "M467(58)"]);
+}
+
+function testDetectIdentifierM467() {
+	var files = [
+		{ basename: "M467(57).czi" },
+		{ basename: "M467(100).czi" },
+		{ basename: "M467(9).czi" },
+	];
+	var candidates = cziImport.detectSectionIdentifierCandidates(files);
+	var prefixed = candidates.filter(function (c) {
+		return c.prefix;
+	});
+	assert.ok(prefixed.length >= 1);
+	assert.strictEqual(prefixed[0].prefix, "M467(");
+	assert.strictEqual(prefixed[0].matchCount, 3);
+}
+
+function testDetectIdentifierScanFile() {
+	var files = [{ basename: "scan1.file.001.czi" }, { basename: "scan2.file.010.czi" }];
+	var candidates = cziImport.detectSectionIdentifierCandidates(files);
+	var prefixes = candidates.map(function (c) {
+		return c.prefix;
+	});
+	assert.ok(prefixes.indexOf("file.") >= 0);
+	var fileDot = candidates.find(function (c) {
+		return c.prefix === "file.";
+	});
+	assert.ok(fileDot);
+	assert.strictEqual(fileDot.matchCount, 2);
+}
+
+function testSortWithIdentifier() {
+	var imp = cziImport.buildDefaultCziImport("");
+	imp.section_identifier = "M467(";
+	imp.files = [
+		{
+			path: "/a/M467(57).czi",
+			basename: "M467(57).czi",
+			scene_count: 1,
+			scenes: [{ index: 0, sliceId: "M467(57)", originalSliceId: "M467(57)" }],
+		},
+		{
+			path: "/b/M467(100).czi",
+			basename: "M467(100).czi",
+			scene_count: 1,
+			scenes: [{ index: 0, sliceId: "M467(100)", originalSliceId: "M467(100)" }],
+		},
+		{
+			path: "/c/M467(9).czi",
+			basename: "M467(9).czi",
+			scene_count: 1,
+			scenes: [{ index: 0, sliceId: "M467(9)", originalSliceId: "M467(9)" }],
+		},
+	];
+	cziImport.buildSliceOrder(imp, "M467");
+	var order = imp.slice_order.map(function (e) {
+		return e.originalSliceId;
+	});
+	assert.deepStrictEqual(order, ["M467(9)", "M467(57)", "M467(100)"]);
+}
+
 function testBuildSliceOrderRenameMultiDir() {
 	var imp = cziImport.buildDefaultCziImport("");
 	cziImport.mergeProbeDirIntoImport(
@@ -289,6 +379,12 @@ testCollectChannelIndices();
 testMaxRunRel();
 testCollectSliceIds();
 testNaturalCompareSectionOrder();
+testNaturalCompareParenSuffix();
+testNaturalCompareMixedWidths();
+testNaturalCompareNoTrailingDigit();
+testDetectIdentifierM467();
+testDetectIdentifierScanFile();
+testSortWithIdentifier();
 testBuildSliceOrderRenameMultiDir();
 testValidateSliceOrderDuplicate();
 testCollectKeptSignalRoleKeys();

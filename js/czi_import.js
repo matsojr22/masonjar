@@ -139,47 +139,327 @@ function sanitizeSliceStem(stem) {
 	return s || "slice";
 }
 
-function parseSectionSuffix(sliceIdOrStem) {
-	var text = String(sliceIdOrStem || "");
-	var m = text.match(/_s(\d+)/i);
-	if (m) {
-		return Number(m[1]);
+function naturalSortTokens(input) {
+	var s = String(input || "");
+	var out = [];
+	var i = 0;
+	while (i < s.length) {
+		var c = s.charCodeAt(i);
+		if (c >= 48 && c <= 57) {
+			var j = i;
+			while (j < s.length && s.charCodeAt(j) >= 48 && s.charCodeAt(j) <= 57) {
+				j++;
+			}
+			out.push([0, Number(s.slice(i, j))]);
+			i = j;
+		} else {
+			var k = i;
+			while (k < s.length) {
+				var cc = s.charCodeAt(k);
+				if (cc >= 48 && cc <= 57) {
+					break;
+				}
+				k++;
+			}
+			out.push([1, s.slice(i, k).toLowerCase()]);
+			i = k;
+		}
 	}
-	var trail = text.match(/(\d+)\s*$/);
-	return trail ? Number(trail[1]) : null;
+	return out;
 }
 
-function naturalSortKey(entry) {
+function compareTokens(a, b) {
+	var n = Math.min(a.length, b.length);
+	for (var i = 0; i < n; i++) {
+		var ta = a[i];
+		var tb = b[i];
+		if (ta[0] !== tb[0]) {
+			return ta[0] - tb[0];
+		}
+		if (ta[0] === 0) {
+			if (ta[1] !== tb[1]) {
+				return ta[1] - tb[1];
+			}
+		} else {
+			if (ta[1] < tb[1]) {
+				return -1;
+			}
+			if (ta[1] > tb[1]) {
+				return 1;
+			}
+		}
+	}
+	return a.length - b.length;
+}
+
+function stemFromBasename(basename) {
+	return String(basename || "")
+		.replace(/\.czi$/i, "")
+		.trim();
+}
+
+function parseSectionWithIdentifier(stem, prefix) {
+	if (!prefix) {
+		return null;
+	}
+	var s = String(stem || "");
+	var p = String(prefix || "");
+	var idx = s.indexOf(p);
+	if (idx < 0) {
+		return null;
+	}
+	var rest = s.slice(idx + p.length);
+	var m = rest.match(/^(\d+)/);
+	return m ? Number(m[1]) : null;
+}
+
+function remainderAfterSectionIdentifier(stem, prefix) {
+	if (!prefix) {
+		return String(stem || "");
+	}
+	var s = String(stem || "");
+	var p = String(prefix || "");
+	var idx = s.indexOf(p);
+	if (idx < 0) {
+		return s;
+	}
+	var rest = s.slice(idx + p.length);
+	var m = rest.match(/^(\d+)/);
+	if (!m) {
+		return rest;
+	}
+	return rest.slice(m[1].length);
+}
+
+var SECTION_ID_DELIMITERS = [".", "(", "_", "-", " "];
+
+function delimiterTerminatedSuffixes(greedyPrefix) {
+	var candidates = [];
+	var seen = {};
+	function add(suffix) {
+		if (suffix && !seen[suffix]) {
+			seen[suffix] = true;
+			candidates.push(suffix);
+		}
+	}
+	add(greedyPrefix);
+	for (var d = 0; d < SECTION_ID_DELIMITERS.length; d++) {
+		var delim = SECTION_ID_DELIMITERS[d];
+		var idx = greedyPrefix.indexOf(delim);
+		while (idx >= 0) {
+			add(greedyPrefix.slice(idx));
+			if (idx + 1 < greedyPrefix.length) {
+				add(greedyPrefix.slice(idx + 1));
+			}
+			idx = greedyPrefix.indexOf(delim, idx + 1);
+		}
+	}
+	return candidates;
+}
+
+function greedySectionAnchor(stem) {
+	var s = String(stem || "");
+	var tail = s.match(/(\d+)(\D*)$/);
+	if (!tail) {
+		return null;
+	}
+	return {
+		prefix: s.slice(0, s.length - tail[0].length),
+		section: Number(tail[1]),
+	};
+}
+
+function detectSectionIdentifierCandidates(files) {
+	var fileList = files || [];
+	var totalFiles = fileList.length;
+	var autoOption = {
+		id: "",
+		label: "Automatic (natural sort)",
+		prefix: null,
+		matchCount: totalFiles,
+		totalFiles: totalFiles,
+		score: 0,
+	};
+	if (!totalFiles) {
+		return [autoOption];
+	}
+	var prefixMap = {};
+	for (var f = 0; f < fileList.length; f++) {
+		var file = fileList[f];
+		if (file.error) {
+			continue;
+		}
+		var stem = stemFromBasename(file.basename || path.basename(file.path || ""));
+		if (!stem) {
+			continue;
+		}
+		var greedy = greedySectionAnchor(stem);
+		if (!greedy) {
+			continue;
+		}
+		var anchors = delimiterTerminatedSuffixes(greedy.prefix);
+		for (var a = 0; a < anchors.length; a++) {
+			var prefix = anchors[a];
+			if (!prefixMap[prefix]) {
+				prefixMap[prefix] = { prefix: prefix, matchCount: 0, sections: [] };
+			}
+			var section = parseSectionWithIdentifier(stem, prefix);
+			if (section != null) {
+				prefixMap[prefix].matchCount++;
+				prefixMap[prefix].sections.push(section);
+			}
+		}
+	}
+	var scored = [];
+	var keys = Object.keys(prefixMap);
+	for (var k = 0; k < keys.length; k++) {
+		var entry = prefixMap[keys[k]];
+		if (!entry.matchCount) {
+			continue;
+		}
+		var score = entry.matchCount / totalFiles;
+		if (entry.matchCount === totalFiles) {
+			score += 0.5;
+		}
+		var pfx = entry.prefix;
+		if (/[(. _-]$/.test(pfx)) {
+			score += 0.1;
+		}
+		var uniqueSections = {};
+		for (var u = 0; u < entry.sections.length; u++) {
+			uniqueSections[entry.sections[u]] = true;
+		}
+		if (Object.keys(uniqueSections).length >= Math.min(entry.matchCount, 2)) {
+			score += 0.1;
+		}
+		var exampleStem = stemFromBasename(
+			(fileList[0] && (fileList[0].basename || path.basename(fileList[0].path || ""))) || "",
+		);
+		scored.push({
+			id: pfx,
+			label: pfx + " — " + entry.matchCount + " file(s)",
+			prefix: pfx,
+			matchCount: entry.matchCount,
+			totalFiles: totalFiles,
+			example: exampleStem,
+			score: score,
+		});
+	}
+	scored.sort(function (a, b) {
+		if (b.score !== a.score) {
+			return b.score - a.score;
+		}
+		if (b.prefix.length !== a.prefix.length) {
+			return b.prefix.length - a.prefix.length;
+		}
+		return a.prefix.localeCompare(b.prefix);
+	});
+	var top = scored.slice(0, 5);
+	top.push(autoOption);
+	return top;
+}
+
+function defaultSectionIdentifier(candidates, totalFiles) {
+	var best = null;
+	var list = candidates || [];
+	for (var i = 0; i < list.length; i++) {
+		var c = list[i];
+		if (!c.prefix) {
+			continue;
+		}
+		var ratio = totalFiles ? c.matchCount / totalFiles : 0;
+		if (c.matchCount === totalFiles || ratio >= 0.95) {
+			if (
+				!best ||
+				c.score > best.score ||
+				(c.score === best.score && c.prefix.length > best.prefix.length)
+			) {
+				best = c;
+			}
+		}
+	}
+	return best ? best.prefix : "";
+}
+
+function parseSectionSuffix(sliceIdOrStem) {
+	var tokens = naturalSortTokens(sliceIdOrStem);
+	for (var i = 0; i < tokens.length; i++) {
+		if (tokens[i][0] === 0) {
+			return tokens[i][1];
+		}
+	}
+	return null;
+}
+
+function entrySortStem(entry) {
+	if (entry.basename) {
+		return stemFromBasename(entry.basename);
+	}
+	var key = entry.originalSliceId || entry.sliceId || entry.path || "";
+	return String(key).replace(/\.czi$/i, "").trim();
+}
+
+function entrySceneIndex(entry) {
+	return entry.scene_index != null
+		? Number(entry.scene_index)
+		: entry.index != null
+			? Number(entry.index)
+			: 0;
+}
+
+function naturalSortKey(entry, cziImport) {
 	var sliceId = entry.sliceId || entry.originalSliceId || "";
 	var basename = entry.basename || "";
-	var sceneIndex =
-		entry.scene_index != null
-			? Number(entry.scene_index)
-			: entry.index != null
-				? Number(entry.index)
-				: 0;
-	var section = parseSectionSuffix(sliceId || basename);
-	var sectionKey = section != null ? section : 1e9;
-	return [
-		sectionKey,
-		String(basename || path.basename(entry.path || sliceId || "")).toLowerCase(),
-		sceneIndex,
-		String(entry.path || "").toLowerCase(),
-	];
+	var sceneIndex = entrySceneIndex(entry);
+	var sectionId =
+		cziImport && cziImport.section_identifier ? String(cziImport.section_identifier) : "";
+	if (sectionId) {
+		var stem = entrySortStem(entry);
+		var section = parseSectionWithIdentifier(stem, sectionId);
+		var sectionKey = section != null ? section : 1e9;
+		var remainder = remainderAfterSectionIdentifier(stem, sectionId);
+		return [sectionKey, naturalSortTokens(remainder), sceneIndex, String(entry.path || "").toLowerCase()];
+	}
+	var primary = sliceId || basename || entry.path || "";
+	return [naturalSortTokens(primary), sceneIndex, String(entry.path || "").toLowerCase()];
 }
 
-function naturalCompare(a, b) {
-	var ka = naturalSortKey(a);
-	var kb = naturalSortKey(b);
-	for (var i = 0; i < ka.length; i++) {
-		if (ka[i] < kb[i]) {
-			return -1;
+function naturalCompare(a, b, cziImport) {
+	var sectionId =
+		cziImport && cziImport.section_identifier ? String(cziImport.section_identifier) : "";
+	if (sectionId) {
+		var stemA = entrySortStem(a);
+		var stemB = entrySortStem(b);
+		var secA = parseSectionWithIdentifier(stemA, sectionId);
+		var secB = parseSectionWithIdentifier(stemB, sectionId);
+		var keyA = secA != null ? secA : 1e9;
+		var keyB = secB != null ? secB : 1e9;
+		if (keyA !== keyB) {
+			return keyA - keyB;
 		}
-		if (ka[i] > kb[i]) {
-			return 1;
+		var remCmp = compareTokens(
+			naturalSortTokens(remainderAfterSectionIdentifier(stemA, sectionId)),
+			naturalSortTokens(remainderAfterSectionIdentifier(stemB, sectionId)),
+		);
+		if (remCmp !== 0) {
+			return remCmp;
+		}
+	} else {
+		var keyA = a.sliceId || a.originalSliceId || a.basename || a.path || "";
+		var keyB = b.sliceId || b.originalSliceId || b.basename || b.path || "";
+		var tokCmp = compareTokens(naturalSortTokens(keyA), naturalSortTokens(keyB));
+		if (tokCmp !== 0) {
+			return tokCmp;
 		}
 	}
-	return 0;
+	var sa = entrySceneIndex(a);
+	var sb = entrySceneIndex(b);
+	if (sa !== sb) {
+		return sa - sb;
+	}
+	return String(a.path || "")
+		.toLowerCase()
+		.localeCompare(String(b.path || "").toLowerCase());
 }
 
 function formatOrdinalSuffix(ordinal) {
@@ -418,7 +698,9 @@ function buildSliceOrder(cziImport, projectStem) {
 			});
 		}
 	}
-	entries.sort(naturalCompare);
+	entries.sort(function (a, b) {
+		return naturalCompare(a, b, cziImport);
+	});
 	var numbering = cziImport.slice_numbering || SLICE_NUMBERING_PRESERVE;
 	var stem = sanitizeSliceStem(projectStem || "project");
 	for (var i = 0; i < entries.length; i++) {
@@ -517,6 +799,7 @@ function buildDefaultCziImport(sourceDir) {
 		source_dir: sourceDir || "",
 		source_dirs: sourceDir ? [sourceDir] : [],
 		slice_numbering: SLICE_NUMBERING_PRESERVE,
+		section_identifier: null,
 		slice_order: [],
 		files: [],
 		channels: [],
@@ -599,7 +882,7 @@ function collectSliceIds(cziImport) {
 		}
 	}
 	ids.sort(function (a, b) {
-		return naturalCompare({ sliceId: a }, { sliceId: b });
+		return naturalCompare({ sliceId: a }, { sliceId: b }, cziImport);
 	});
 	return ids;
 }
@@ -1424,7 +1707,14 @@ module.exports = {
 	sanitizeOtherName: sanitizeOtherName,
 	sanitizeSliceStem: sanitizeSliceStem,
 	parseSectionSuffix: parseSectionSuffix,
+	naturalSortTokens: naturalSortTokens,
+	compareTokens: compareTokens,
+	naturalSortKey: naturalSortKey,
 	naturalCompare: naturalCompare,
+	stemFromBasename: stemFromBasename,
+	parseSectionWithIdentifier: parseSectionWithIdentifier,
+	detectSectionIdentifierCandidates: detectSectionIdentifierCandidates,
+	defaultSectionIdentifier: defaultSectionIdentifier,
 	branchForChannel: branchForChannel,
 	roleKeyForChannel: roleKeyForChannel,
 	isSignalChannel: isSignalChannel,

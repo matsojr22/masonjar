@@ -83,15 +83,62 @@ def default_slice_id(czi_basename: str, scene_index: int, scene_count: int) -> s
     return stem
 
 
+def _natural_sort_tokens(text: str) -> tuple[tuple[int, int | str], ...]:
+    s = str(text or "")
+    out: list[tuple[int, int | str]] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        if s[i].isdigit():
+            j = i
+            while j < n and s[j].isdigit():
+                j += 1
+            out.append((0, int(s[i:j])))
+            i = j
+        else:
+            k = i
+            while k < n and not s[k].isdigit():
+                k += 1
+            out.append((1, s[i:k].lower()))
+            i = k
+    return tuple(out)
+
+
 def parse_section_suffix(slice_id_or_stem: str) -> int | None:
-    text = str(slice_id_or_stem or "")
-    match = re.search(r"_s(\d+)", text, re.I)
-    if match:
-        return int(match.group(1))
-    trail = re.search(r"(\d+)\s*$", text)
-    if trail:
-        return int(trail.group(1))
+    for kind, value in _natural_sort_tokens(slice_id_or_stem):
+        if kind == 0:
+            return int(value)
     return None
+
+
+def parse_section_with_identifier(stem: str, prefix: str | None) -> int | None:
+    if not prefix:
+        return None
+    s = str(stem or "")
+    p = str(prefix or "")
+    idx = s.find(p)
+    if idx < 0:
+        return None
+    rest = s[idx + len(p) :]
+    match = re.match(r"^(\d+)", rest)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _remainder_after_section_identifier(stem: str, prefix: str | None) -> str:
+    if not prefix:
+        return str(stem or "")
+    s = str(stem or "")
+    p = str(prefix or "")
+    idx = s.find(p)
+    if idx < 0:
+        return s
+    rest = s[idx + len(p) :]
+    match = re.match(r"^(\d+)", rest)
+    if not match:
+        return rest
+    return rest[len(match.group(1)) :]
 
 
 def natural_sort_key(
@@ -100,11 +147,33 @@ def natural_sort_key(
     basename: str = "",
     scene_index: int = 0,
     path: str = "",
+    section_identifier: str | None = None,
 ) -> tuple:
-    section = parse_section_suffix(slice_id or basename)
-    section_key = section if section is not None else 10**9
-    base = Path(basename or path or slice_id).name.lower()
-    return (section_key, base, int(scene_index), str(path).lower())
+    primary = slice_id or basename or path or ""
+    stem = Path(basename).stem if basename else str(primary).replace(".czi", "").strip()
+    if not stem and path:
+        stem = Path(path).stem
+    if section_identifier:
+        section = parse_section_with_identifier(stem, section_identifier)
+        if section is not None:
+            remainder = _remainder_after_section_identifier(stem, section_identifier)
+            return (
+                section,
+                _natural_sort_tokens(remainder),
+                int(scene_index or 0),
+                str(path).lower(),
+            )
+        return (
+            10**9,
+            _natural_sort_tokens(primary),
+            int(scene_index or 0),
+            str(path).lower(),
+        )
+    return (
+        _natural_sort_tokens(primary),
+        int(scene_index or 0),
+        str(path).lower(),
+    )
 
 
 def natural_sort_czi_paths(paths: list[Path]) -> list[Path]:

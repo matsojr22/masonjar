@@ -254,6 +254,7 @@ def build_work_items(cfg: dict) -> list[dict]:
                 basename=item["czi_path"].name,
                 scene_index=item["scene_index"],
                 path=str(item["czi_path"]),
+                section_identifier=cfg.get("section_identifier"),
             )
         )
     return items

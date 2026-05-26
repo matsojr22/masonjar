@@ -1,14 +1,16 @@
 # Agent session handoff
 
-Last updated: 2026-05-26 (batch wizard rework). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-05-26 (CZI true natural sort v2.4.1). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 ## Current release
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **2.4.0** |
-| Latest tag | `v2.4.0` on `main` |
+| `package.json` version | **2.4.1** |
+| Latest tag | `v2.4.1` on `main` |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v2.4.1** — CZI import slice ordering fix. Chunked natural sort (digit-run token compare) fixes `M467(57)..M467(108)` and similar ZEN exports; probe-time **Slice number follows** dropdown detects filename prefixes (`M467(`, `file.`, etc.) so users pick which numeric group is the slice index. JS/Python parity in `js/czi_import.js` + `py/czi_common.py`; wizard step 2/3 dropdown refreshes `slice_order` and renaming table on change. Config key `section_identifier` (excluded from resume fingerprint).
 
 **v2.4.0** — Batch wizard rework. Replaces the three-page `batch_select` → `batch_params` → `batch_run` flow with a single 3-step wizard (`pages/batch_wizard.html` + `js/batch_wizard.js`) mirroring the CZI / Intensity wizards. Adds DAPI cleanup, Apply geometry, and Collate (one-shot end-of-batch) to the batch tool set. `src/batch_queue.ts` now matches single-tool handlers: `pythonShellEnv()` everywhere (Windows UTF-8), `--slice-list` on detect/count/intensity, intensity `--config` + `NO_PKLS_WRITTEN` failure path, `applyPostStepSideEffects` (active_runs sync + index refresh), dependency graph with per-project skip-downstream, and lightweight `preflightJob` auto-repair (structure_map copy, slice-list rebuild, geometry no-op detection, DAPI empty check, collate min-projects check). New IPC channels: `batchJobLog`, `batchJobEnd`; extended `batchJobStart` (`projectIndex` / `stepIndex`) and `batchComplete` (`{ summary, errors, cancelled }`). Per-batch summary persists to `<bundleRoot>/.masonjar/last_batch_summary.json`. Small UI tweak: rename "Parent directory" / "Parent folder" labels to "Location to store all Mason Jar Projects" in project_start, project_wizard, czi_wizard. New JS dev tests: `scripts/test-batch-plan.js`, `scripts/test-batch-paths.js` (added to `yarn test:js`).
 

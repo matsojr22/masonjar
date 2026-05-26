@@ -381,6 +381,96 @@ function refreshSliceOrder() {
 	cziImport.buildSliceOrder(wizardState.cziImport, projectStemForImport());
 }
 
+function sortedCziFilesForDisplay() {
+	var files = (wizardState.cziImport.files || []).slice();
+	var imp = wizardState.cziImport;
+	files.sort(function (a, b) {
+		return cziImport.naturalCompare(
+			{ basename: a.basename, path: a.path, scene_index: 0 },
+			{ basename: b.basename, path: b.path, scene_index: 0 },
+			imp,
+		);
+	});
+	return files;
+}
+
+function onSectionIdentifierChange(value) {
+	wizardState.cziImport.section_identifier = value || null;
+	refreshSliceOrder();
+	renderSectionIdentifierSelect();
+	if (wizardState.step === 3) {
+		renderRenamingTable();
+	}
+	renderCziFileTable(sortedCziFilesForDisplay());
+}
+
+function renderSectionIdentifierSelect() {
+	var selects = document.querySelectorAll(".section-identifier-select");
+	if (!selects.length) {
+		return;
+	}
+	var files = wizardState.cziImport.files || [];
+	var candidates = wizardState.sectionIdentifierCandidates || [];
+	var current =
+		wizardState.cziImport.section_identifier != null
+			? String(wizardState.cziImport.section_identifier)
+			: "";
+	for (var s = 0; s < selects.length; s++) {
+		var sel = selects[s];
+		sel.innerHTML = "";
+		for (var c = 0; c < candidates.length; c++) {
+			var cand = candidates[c];
+			var opt = document.createElement("option");
+			opt.value = cand.prefix != null ? String(cand.prefix) : "";
+			opt.textContent = cand.label;
+			sel.appendChild(opt);
+		}
+		if (
+			current &&
+			!candidates.some(function (cand) {
+				return String(cand.prefix || "") === current;
+			})
+		) {
+			var custom = document.createElement("option");
+			custom.value = current;
+			custom.textContent = current + " (saved)";
+			sel.appendChild(custom);
+		}
+		sel.value = current;
+		sel.disabled = !files.length;
+	}
+}
+
+function refreshSectionIdentifierAfterProbe(resetDefault) {
+	var files = wizardState.cziImport.files || [];
+	var candidates = cziImport.detectSectionIdentifierCandidates(files);
+	wizardState.sectionIdentifierCandidates = candidates;
+	if (
+		resetDefault ||
+		wizardState.cziImport.section_identifier == null ||
+		wizardState.cziImport.section_identifier === undefined
+	) {
+		wizardState.cziImport.section_identifier = cziImport.defaultSectionIdentifier(
+			candidates,
+			files.length,
+		);
+	}
+	renderSectionIdentifierSelect();
+}
+
+function bindSectionIdentifierSelects() {
+	var selects = document.querySelectorAll(".section-identifier-select");
+	for (var i = 0; i < selects.length; i++) {
+		if (selects[i].getAttribute("data-bound") === "1") {
+			continue;
+		}
+		selects[i].setAttribute("data-bound", "1");
+		selects[i].addEventListener("change", function (ev) {
+			onSectionIdentifierChange(ev.target.value);
+		});
+	}
+}
+
 function syncSliceNumberingRadios() {
 	var numbering = wizardState.cziImport.slice_numbering || cziImport.SLICE_NUMBERING_PRESERVE;
 	var preserve = qs("sliceNumberingPreserve");
@@ -440,6 +530,9 @@ function renderSourceDirList() {
 					alert(String(err.message || err));
 				});
 			} else {
+				wizardState.cziImport.section_identifier = null;
+				wizardState.sectionIdentifierCandidates = [];
+				renderSectionIdentifierSelect();
 				renderCziFileTable([]);
 				renderMosaicWarnings([]);
 				var nextBtn = qs("step2Next");
@@ -926,6 +1019,7 @@ function renderChannelTable() {
 }
 
 function renderStep3Panel() {
+	renderSectionIdentifierSelect();
 	refreshSliceOrder();
 	renderRenamingTable();
 	renderChannelTable();
@@ -1337,6 +1431,9 @@ async function runProbeAll() {
 			if (status) {
 				status.textContent = "";
 			}
+			wizardState.cziImport.section_identifier = null;
+			wizardState.sectionIdentifierCandidates = [];
+			renderSectionIdentifierSelect();
 			renderCziFileTable([]);
 			return;
 		}
@@ -1354,9 +1451,10 @@ async function runProbeAll() {
 			await probeSingleDir(dirs[i], i);
 		}
 		applySliceNumberingDefault();
+		refreshSectionIdentifierAfterProbe(true);
 		refreshSliceOrder();
 		renderSourceDirList();
-		renderCziFileTable(wizardState.cziImport.files || []);
+		renderCziFileTable(sortedCziFilesForDisplay());
 		if (status) {
 			status.textContent =
 				(wizardState.cziImport.files || []).length +
@@ -1384,6 +1482,11 @@ function hydrateWizardFromSavedCziImport(saved) {
 		primary_signal_role: saved.primary_signal_role,
 		preview_format_version: saved.preview_format_version,
 	};
+	if (saved.files && saved.files.length) {
+		wizardState.sectionIdentifierCandidates = cziImport.detectSectionIdentifierCandidates(
+			saved.files,
+		);
+	}
 }
 
 async function tryResumeCziImportAfterStep1() {
@@ -1800,6 +1903,7 @@ function bindStep1() {
 }
 
 function bindStep2() {
+	bindSectionIdentifierSelects();
 	qs("addCziDir").addEventListener("click", function () {
 		ipc.once("returnPath", function (event, response) {
 			if (!response[0]) {
@@ -1837,6 +1941,7 @@ function bindStep2() {
 }
 
 function bindStep3() {
+	bindSectionIdentifierSelects();
 	var preserveRadio = qs("sliceNumberingPreserve");
 	var renameRadio = qs("sliceNumberingRename");
 	function onSliceNumberingChange() {

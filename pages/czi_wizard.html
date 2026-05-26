@@ -111,6 +111,20 @@
           class="alert alert-warning d-none text-start small"
           role="alert"
         ></div>
+        <div class="mb-3 section-identifier-row text-start">
+          <label class="form-label">Slice number follows</label>
+          <select
+            id="sectionIdentifierSelect"
+            class="form-select form-select-sm section-identifier-select"
+            disabled
+          >
+            <option value="">Automatic (natural sort)</option>
+          </select>
+          <p class="form-text small mb-0">
+            Detected from probed filenames. Change this if slices sort wrong before continuing.
+            Existing imports may need re-probe to rebuild order.
+          </p>
+        </div>
         <div class="table-responsive">
           <table class="table table-sm" id="cziFileTable">
             <thead>
@@ -163,6 +177,16 @@
                   />
                   <label class="form-check-label" for="sliceNumberingRename">Rename on import</label>
                 </div>
+              </div>
+              <div class="mb-3 section-identifier-row text-start">
+                <label class="form-label">Slice number follows</label>
+                <select class="form-select form-select-sm section-identifier-select" disabled>
+                  <option value="">Automatic (natural sort)</option>
+                </select>
+                <p class="form-text small mb-0">
+                  Chooses which number in each filename is the slice index. Changing this refreshes
+                  the table order below.
+                </p>
               </div>
               <div class="table-responsive">
                 <table class="table table-sm" id="renamingTable">

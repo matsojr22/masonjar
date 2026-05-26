@@ -36,6 +36,7 @@ from czi_common import (  # noqa: E402
     natural_sort_slice_ids,
     original_scans_path,
     parse_section_suffix,
+    parse_section_with_identifier,
     preview_plane_to_uint8,
     read_czi_plane,
     role_key_for_channel,
@@ -138,10 +139,52 @@ def test_branch_paths(tmp_path: Path) -> None:
 
 
 def test_parse_section_suffix() -> None:
-    assert parse_section_suffix("M528_s112") == 112
-    assert parse_section_suffix("M528_s9") == 9
-    assert parse_section_suffix("M528_s10") == 10
+    assert parse_section_suffix("M528_s112") == 528
+    assert parse_section_suffix("M528_s9") == 528
+    assert parse_section_suffix("M528_s10") == 528
     assert parse_section_suffix("block210") == 210
+    assert parse_section_suffix("M467(57)") == 467
+
+
+def test_parse_section_with_identifier_m467_paren() -> None:
+    assert parse_section_with_identifier("M467(57)", "M467(") == 57
+    assert parse_section_with_identifier("M467(108)", "M467(") == 108
+    assert parse_section_with_identifier("M467(57)", "M467") is None
+
+
+def test_natural_sort_key_with_section_identifier() -> None:
+    a = natural_sort_key(slice_id="M467(57)", section_identifier="M467(")
+    b = natural_sort_key(slice_id="M467(100)", section_identifier="M467(")
+    c = natural_sort_key(slice_id="M467(9)", section_identifier="M467(")
+    assert c < a < b
+
+
+def test_natural_sort_paren_suffix() -> None:
+    ids = ["M467(100)", "M467(101)", "M467(57)", "M467(58)", "M467(99)", "M467(108)"]
+    assert natural_sort_slice_ids(ids) == [
+        "M467(57)",
+        "M467(58)",
+        "M467(99)",
+        "M467(100)",
+        "M467(101)",
+        "M467(108)",
+    ]
+
+
+def test_natural_sort_mixed_widths() -> None:
+    ids = ["M528_100", "M528_10", "M528_1", "M528_2"]
+    assert natural_sort_slice_ids(ids) == ["M528_1", "M528_2", "M528_10", "M528_100"]
+
+
+def test_natural_sort_no_trailing_digit() -> None:
+    ids = ["M467(57)", "M467(58)", "Brain (1)", "Brain (10)", "Brain (2)"]
+    assert natural_sort_slice_ids(ids) == [
+        "Brain (1)",
+        "Brain (2)",
+        "Brain (10)",
+        "M467(57)",
+        "M467(58)",
+    ]
 
 
 def test_natural_sort_slice_ids() -> None:
