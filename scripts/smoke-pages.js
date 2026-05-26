@@ -21,7 +21,7 @@ const PAGES = [
 	"menu_category.html",
 	"dapi_cleanup.html",
 	"credits.html",
-	"batch_select.html",
+	"batch_wizard.html",
 	"align.html",
 	"adjust.html",
 ];
