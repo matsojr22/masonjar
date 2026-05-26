@@ -42,6 +42,7 @@ from czi_common import (  # noqa: E402
     role_key_for_channel,
     sanitize_other_name,
     select_largest_plane,
+    scene_indices_from_czi,
     signal_preview_path,
     suggest_role_from_label,
     unpack_read_image,
@@ -682,3 +683,46 @@ def test_read_czi_plane_mosaic_single_scene_no_region() -> None:
     plane = read_czi_plane(czi, scene=0, z=0, channel=0)
     assert plane.shape == (12, 24)
     assert czi.calls == [{"scale_factor": 1.0, "Z": 0, "C": 0}]
+
+
+def _fake_czi(dims_shape, *, is_mosaic=False, shape_is_consistent=True):
+    class FakeCzi:
+        def __init__(self):
+            self.shape_is_consistent = shape_is_consistent
+
+        def get_dims_shape(self):
+            return dims_shape
+
+        def is_mosaic(self):
+            return is_mosaic
+
+    return FakeCzi()
+
+
+def test_scene_indices_single_scene_multi_z() -> None:
+    czi = _fake_czi([{"S": (0, 1), "Z": (0, 60), "C": (0, 4)}])
+    assert scene_indices_from_czi(czi) == [0]
+
+
+def test_scene_indices_multi_scene_consistent() -> None:
+    czi = _fake_czi([{"S": (0, 3), "Z": (0, 10), "C": (0, 2)}])
+    assert scene_indices_from_czi(czi) == [0, 1, 2]
+
+
+def test_scene_indices_multi_scene_inconsistent() -> None:
+    dims = [{"S": (0, 1), "Z": (0, 5)}, {"S": (1, 2), "Z": (0, 5)}, {"S": (2, 3), "Z": (0, 5)}]
+    czi = _fake_czi(dims, shape_is_consistent=False)
+    assert scene_indices_from_czi(czi) == [0, 1, 2]
+
+
+def test_scene_indices_many_z_blocks_no_s() -> None:
+    dims = [{"Z": (i, i + 1)} for i in range(57)]
+    czi = _fake_czi(dims, shape_is_consistent=False)
+    assert scene_indices_from_czi(czi) == [0]
+    assert scene_indices_from_czi(czi) != list(range(57))
+
+
+def test_scene_indices_mosaic_multi_block() -> None:
+    dims = [{"Z": (i, i + 1), "M": (0, 4)} for i in range(10)]
+    czi = _fake_czi(dims, is_mosaic=True, shape_is_consistent=False)
+    assert scene_indices_from_czi(czi) == [0]

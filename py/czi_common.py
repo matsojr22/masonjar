@@ -409,12 +409,32 @@ def normalized_dim_blocks(czi) -> list[dict[str, Any]]:
     return [{}]
 
 
+def _s_range_start(block: Mapping[str, Any]) -> int | None:
+    val = block.get("S")
+    if val is None:
+        val = block.get("s")
+    if isinstance(val, tuple) and len(val) >= 1:
+        return int(val[0])
+    return None
+
+
 def scene_indices_from_czi(czi) -> list[int]:
+    """Scene (S) indices for probe/extract. len(blocks) != scene count unless S-indexed."""
     blocks = normalized_dim_blocks(czi)
-    if len(blocks) > 1:
-        return list(range(len(blocks)))
-    s_count = dim_size(blocks[0], "S")
-    return list(range(s_count))
+    if bool(getattr(czi, "is_mosaic", lambda: False)()):
+        return [0]
+    if len(blocks) <= 1 or bool(getattr(czi, "shape_is_consistent", True)):
+        return list(range(dim_size(blocks[0], "S")))
+    s_starts: list[int] = []
+    for block in blocks:
+        start = _s_range_start(block)
+        if start is None:
+            s_starts = []
+            break
+        s_starts.append(start)
+    if s_starts:
+        return sorted(set(s_starts))
+    return list(range(dim_size(blocks[0], "S")))
 
 
 def channel_indices_from_czi(czi) -> list[int]:
@@ -861,8 +881,9 @@ def read_czi_plane(
             "Z": z,
             "C": channel,
         }
-        scene_indices = scene_indices_from_czi(czi)
-        if len(scene_indices) > 1:
+        blocks = normalized_dim_blocks(czi)
+        s_count = dim_size(blocks[0], "S") if blocks else 1
+        if s_count > 1:
             region = mosaic_region_for_scene(czi, scene)
             if region is not None:
                 kwargs["region"] = region

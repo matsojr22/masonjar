@@ -1,14 +1,16 @@
 # Agent session handoff
 
-Last updated: 2026-05-26 (CZI true natural sort v2.4.1). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-05-26 (CZI scene vs Z fix v2.4.2). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 ## Current release
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **2.4.1** |
-| Latest tag | `v2.4.1` on `main` |
+| `package.json` version | **2.4.2** |
+| Latest tag | `v2.4.1` on `main` (v2.4.2 pending tag) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v2.4.2** — CZI scene counting fix. `scene_indices_from_czi` no longer treats Z-only dim blocks as scenes (`M467(57).czi` with 57 Z planes → 1 scene, not 57 renaming rows). Mosaic files stay single-scene; inconsistent multi-block shapes use S range starts per aicspylibczi. Wizard step 3 help clarifies one row per tissue section. Regression tests in `python/tests/test_czi_common.py` + `scripts/test-czi-import.js`.
 
 **v2.4.1** — CZI import slice ordering fix. Chunked natural sort (digit-run token compare) fixes `M467(57)..M467(108)` and similar ZEN exports; probe-time **Slice number follows** dropdown detects filename prefixes (`M467(`, `file.`, etc.) so users pick which numeric group is the slice index. JS/Python parity in `js/czi_import.js` + `py/czi_common.py`; wizard step 2/3 dropdown refreshes `slice_order` and renaming table on change. Config key `section_identifier` (excluded from resume fingerprint).
 

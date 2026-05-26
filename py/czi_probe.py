@@ -11,6 +11,7 @@ from czi_common import (
     channel_indices_from_czi,
     default_slice_id,
     dim_size,
+    emit_log,
     emit_progress,
     emit_result,
     natural_sort_czi_paths,
@@ -37,6 +38,11 @@ def probe_file(path: Path) -> dict:
     is_mosaic = bool(mosaic_info.get("is_mosaic"))
     has_m_dim = bool(mosaic_info.get("has_m_dim"))
     scene_indices = scene_indices_from_czi(czi)
+    if len(blocks) > 1 and len(scene_indices) == 1:
+        emit_log(
+            f"  {path.name}: {len(blocks)} dim blocks collapsed to 1 scene "
+            f"(S={scene_indices[0]})",
+        )
     channel_indices = channel_indices_from_czi(czi)
     z_count = len(z_indices_from_czi(czi))
 

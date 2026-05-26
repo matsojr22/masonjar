@@ -204,6 +204,24 @@ function testSortWithIdentifier() {
 	assert.deepStrictEqual(order, ["M467(9)", "M467(57)", "M467(100)"]);
 }
 
+function testBuildSliceOrderSingleSceneMultiZ() {
+	var imp = cziImport.buildDefaultCziImport("");
+	imp.slice_numbering = cziImport.SLICE_NUMBERING_RENAME;
+	imp.files = [
+		{
+			path: "/a/M467(57).czi",
+			basename: "M467(57).czi",
+			scene_count: 1,
+			z_count: 57,
+			channel_count: 4,
+			scenes: [{ index: 0, sliceId: "M467(57)", originalSliceId: "M467(57)" }],
+		},
+	];
+	cziImport.buildSliceOrder(imp, "M467");
+	assert.strictEqual(imp.slice_order.length, 1);
+	assert.strictEqual(imp.slice_order[0].sliceId, "M467_s001");
+}
+
 function testBuildSliceOrderRenameMultiDir() {
 	var imp = cziImport.buildDefaultCziImport("");
 	cziImport.mergeProbeDirIntoImport(
@@ -385,6 +403,7 @@ testNaturalCompareNoTrailingDigit();
 testDetectIdentifierM467();
 testDetectIdentifierScanFile();
 testSortWithIdentifier();
+testBuildSliceOrderSingleSceneMultiZ();
 testBuildSliceOrderRenameMultiDir();
 testValidateSliceOrderDuplicate();
 testCollectKeptSignalRoleKeys();
