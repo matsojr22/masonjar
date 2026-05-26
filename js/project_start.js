@@ -75,7 +75,7 @@ function handleAction(action, target) {
 			return;
 		}
 		if (!parentDir) {
-			alert("Choose a parent directory.");
+			alert("Choose a location to store your Mason Jar projects.");
 			return;
 		}
 		var resolved = project.resolveNewBundlePath(parentDir, name);

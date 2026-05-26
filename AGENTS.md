@@ -101,6 +101,8 @@ Renderer scripts use `require("electron").ipcRenderer`. Main handlers are `ipcMa
 | `toggleLogWindow` | `toggleLogWindow` | — | Show/focus or hide (does not destroy); replies `logWindowState`. |
 | `getLogWindowState` | `getLogWindowState` | — | Reply: `logWindowState` `{ visible, dismissed }`. |
 | `reportRendererError` | `reportRendererError` | — | Force log visible; queue error line ([`js/page_init.js`](js/page_init.js)). |
+| `runBatch` | `runBatch` | (queue) | Drives [`src/batch_queue.ts`](src/batch_queue.ts); per-job pushes (`batchJobStart`/`batchJobLog`/`batchJobEnd`) + overall (`batchProgress`/`batchComplete`). |
+| `killBatch` | `killBatch` | — | Cancels the running batch; remaining jobs marked `cancelled`. |
 
 ### Channels the main process pushes (selection)
 
@@ -112,6 +114,11 @@ Renderer scripts use `require("electron").ipcRenderer`. Main handlers are `ipcMa
 | `log` | Log window stream |
 | `version` | Reply to `getVersion` |
 | `returnPath` | Directory or file picker result |
+| `batchJobStart` | `{ project, step, projectIndex, stepIndex }` — batch wizard step 2 grid + status block |
+| `batchJobLog` | `[project, step, line]` — verbose Python output for the wizard `pre.wizard-log` |
+| `batchJobEnd` | `{ project, step, status, reason?, elapsedMs, tail?, outputAbs? }` — flips matrix cells, captures error tails |
+| `batchProgress` | `[overallPct, message, detail?]` — striped overall bar |
+| `batchComplete` | `{ summary, errors, cancelled }` — Step 3 summary; `summary.byProject[<path>][<step>]` carries per-job result |
 
 Some renderer files register `*Error` listeners (e.g. `alignError`, `detectError`). The main process logs Python non-zero exits to the Log (forcing the log window visible) and avoids throwing; **Isolate Regions** also emits `intensityError` with a short message after `intensityResult` when Python fails or writes zero PKLs.
 
@@ -192,6 +199,51 @@ When the user starts Alignment or Viewer/Editor from Mason Jar, the Electron mai
 ### Legacy workspace scan ([`js/workspace.js`](js/workspace.js))
 
 When resolving `05_predictions`, if there are no top-level `Predictions_*.pkl` files but nested folders contain them, the workspace picks the **most recently modified** leaf and may set a short warning for ambiguous multi-run trees (also surfaced in the import wizard review when a predictions source path is set).
+
+## Batch wizard ([`pages/batch_wizard.html`](pages/batch_wizard.html) + [`js/batch_wizard.js`](js/batch_wizard.js))
+
+Three-step wizard (Setup → Run → Summary) mirroring the CZI / Isolate Regions pattern (`body.wizard-page`, `#wizardSteps` pills, `setStep()`, sticky cancel hidden while running, dual logging to wizard `pre.wizard-log` + the global Application log). The hub Batch card links here ([`pages/menu.html`](pages/menu.html)).
+
+**Step 1 (Setup)**: Projects (add / scan / remove via [`project.isBundleRoot`](js/project.js), `readProjectJson`, `listBundlesInDirectory`) · Tools (checkbox list ordered by dependency, with one-line description and `deps:` hint) · Parameters (Bootstrap accordion per selected step, including the Intensity tier/CCFv3-advanced picker reused from `js/structure_catalog.js` + `js/atlas_region_style.js`) · live **Preflight matrix** (projects × steps; green/amber/red). Defaults persist to `localStorage["masonjar.batchDefaults"]`; the resolved plan is stashed in `sessionStorage["masonjar.batchPlan"]`. The Next/Start button is disabled while any cell is red, when Intensity has no regions selected, or when Collate is selected with fewer than two projects.
+
+**Step 2 (Run)**: striped overall progress bar driven by `batchProgress`, a per-project status grid that flips `pending → running → done/failed/skipped/cancelled`, `pre.wizard-log` consuming `batchJobLog`, and a Cancel button wired to `killBatch` (remaining jobs marked `cancelled`).
+
+**Step 3 (Summary)**: headline counts (ok / failed / skipped / cancelled) and a full matrix table; clicking a failed cell expands the captured Python tail (~50 lines per job). Each touched project's `processing.active_runs` snapshot is shown. A run summary is persisted to `<bundleRoot>/.masonjar/last_batch_summary.json` for one-project diagnostics.
+
+### Dependency graph (skip-downstream propagation)
+
+| Step | Downstream steps marked `skipped: prerequisite_failed` on per-project failure |
+|------|-------------------------------------------------------------------------------|
+| `apply_geometry` | dapi_cleanup, max, sharpen, detect, count, intensity, dual, collate |
+| `dapi_cleanup` | intensity, dual |
+| `max` | sharpen, detect, intensity, count, collate, dual |
+| `sharpen` | detect, intensity, count, collate, dual |
+| `detect` | count, collate |
+| `count` | collate |
+| `intensity` | dual |
+| `dual` | (none) |
+| `collate` | (none — runs once at end across selected projects) |
+
+Failures in one project never short-circuit other projects; only that project's downstream cells flip to `skipped`.
+
+### Per-job repair policy ([`preflightJob`](src/batch_queue.ts))
+
+Auto-repairs run immediately before launching Python and log each action via `batchJobLog`:
+
+- **Count missing `structure_map.pkl`** — copy from `~/.masonjar/nrrd/` if available (in the Python venv's working tree).
+- **Detect / Count / Intensity missing slice list** — build on the fly from the active `slices` leaf intersected with `00_dapi` (signal branch where applicable) and pass `--slice-list`.
+- **Apply geometry** — skip with reason `no pending geometry` when `settings.czi_import.geometry` is identity or `geometry_applied_at` is already set with no pending changes.
+- **DAPI cleanup** — skip with reason `no DAPI input` when `00_dapi` has zero images.
+- **Collate** — skip with reason `collate needs >= 2 counted projects` when fewer than two selected projects have a count leaf.
+- **Intensity** — write `intensity_run_config.json` from the Step 1 plan and pass `--config` as separate argv tokens; treat `NO_PKLS_WRITTEN` on stderr as failure with a descriptive error.
+
+After every successful job, [`applyPostStepSideEffects`](src/batch_queue.ts) updates `processing.active_runs[<role>]`, saves the project JSON, and refreshes the file index so the next step reads the leaf that was just produced.
+
+### New tools wired into batch
+
+- **DAPI cleanup** (`py/dapi_cleanup.py`) — Step 1 params: isolate, CLAHE, saturation %, backup dir, optional bg value. In-place mode backs up originals to `data/counting/00_dapi_backup/`.
+- **Apply geometry** (`py/apply_geometry.py`) — reads `settings.czi_import.geometry`; resets to identity + sets `geometry_applied_at` on success (mirrors `js/orient.js`).
+- **Collate** (`py/collate.py`) — **runs once at end of the batch** across the selected projects that have a quantification leaf. Step 1 picker chooses the output destination project and a slug; the grid renders collate as a single bottom row spanning all project columns.
 
 ## RSAT submodule
 
