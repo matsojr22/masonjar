@@ -139,26 +139,28 @@ a:active {
 	box-shadow: 0 0 0 0.2rem rgba(184, 115, 51, 0.25);
 }
 
-/* Main menu hub */
-body.menu-page #parent {
+/* Main menu hub, wizards, and pipeline tool pages */
+body.menu-page,
+body.wizard-page,
+body.tool-page {
+	min-height: 100vh;
+	overflow-x: hidden;
+	overflow-y: auto;
+}
+
+body.menu-page #parent,
+body.wizard-page #parent,
+body.tool-page #parent {
 	justify-content: flex-start;
+}
+
+body.menu-page #parent {
 	min-height: auto;
 }
 
-body.menu-page {
-	min-height: 100vh;
-	overflow-x: hidden;
-	overflow-y: auto;
-}
-
-body.wizard-page {
-	overflow-x: hidden;
-	overflow-y: auto;
-	min-height: 100vh;
-}
-
-body.wizard-page #parent {
-	justify-content: flex-start;
+body.tool-page #parent.h-100 {
+	height: auto !important;
+	min-height: 0;
 }
 
 /* CZI / standalone orient grid (scrollable page uses body.wizard-page) */

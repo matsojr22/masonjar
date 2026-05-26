@@ -874,9 +874,17 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1250,
     height: 750,
+    show: false,
     resizable: true,
     autoHideMenuBar: true,
     webPreferences: { nodeIntegration: true, contextIsolation: false },
+  });
+
+  win.once("ready-to-show", () => {
+    if (process.platform === "darwin" || process.platform === "win32") {
+      win.maximize();
+    }
+    win.show();
   });
 
   // Start with the load screen

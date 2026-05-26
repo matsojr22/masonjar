@@ -16,6 +16,20 @@
 		return;
 	}
 
+	if (document.body) {
+		var body = document.body;
+		var pageBase = path.basename(
+			decodeURIComponent(window.location.pathname || ""),
+		);
+		if (
+			!body.classList.contains("menu-page") &&
+			!body.classList.contains("wizard-page") &&
+			pageBase !== "loading.html"
+		) {
+			body.classList.add("tool-page");
+		}
+	}
+
 	function getAppRoot() {
 		var p = decodeURIComponent(window.location.pathname || "");
 		p = p.replace(/\\/g, "/");
