@@ -1840,14 +1840,29 @@ function getBatchQueueDeps() {
         appDir,
         describePythonShellFailure,
         queueLogLineForUi,
+        pythonShellEnv,
     };
 }
 ipcMain.on("runBatch", function (event, plan) {
     const { runBatchQueue } = require("./batch_queue");
-    void runBatchQueue(getBatchQueueDeps(), plan, (overallPct, message, detail) => {
-        event.sender.send("batchProgress", [overallPct, message, detail || ""]);
-    }, (projectName, step) => {
-        event.sender.send("batchJobStart", { project: projectName, step });
+    void runBatchQueue(getBatchQueueDeps(), plan, {
+        onProgress: (overallPct, message, detail) => {
+            event.sender.send("batchProgress", [overallPct, message, detail || ""]);
+        },
+        onJobStart: (projectName, step, projectIndex, stepIndex) => {
+            event.sender.send("batchJobStart", {
+                project: projectName,
+                step,
+                projectIndex,
+                stepIndex,
+            });
+        },
+        onJobLog: (projectName, step, line) => {
+            event.sender.send("batchJobLog", [projectName, step, line]);
+        },
+        onJobEnd: (result) => {
+            event.sender.send("batchJobEnd", result);
+        },
     }).then((result) => {
         event.sender.send("batchComplete", result);
     });

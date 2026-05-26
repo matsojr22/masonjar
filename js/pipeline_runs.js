@@ -21,54 +21,96 @@ var OUTPUT_ROLES = [
 
 var INPUT_ROLES = ["original_scans", "dapi"];
 
+var CANONICAL_ROLES = {
+	original_scans: "data/original_scans",
+	dapi: "data/counting/00_dapi",
+	slices: "data/counting/01_slices",
+	max: "data/counting/03_max",
+	predictions: "data/counting/05_predictions",
+	quantification: "data/counting/06_quantification",
+	pkls: "data/counting/07_pkls",
+	dual: "data/counting/08_dual",
+};
+
 var RUN_STEP_CONFIG = {
 	max: {
 		stepId: "max",
 		outputRole: "max",
 		branch: "max",
 		inputRoles: ["original_scans"],
+		scriptRoles: { indir: "original_scans", outdir: "max" },
 	},
 	sharpen: {
 		stepId: "sharpen",
 		outputRole: "max",
 		branch: "sharpen",
 		inputRoles: ["max"],
+		scriptRoles: { indir: "max", outdir: "max" },
 	},
 	align: {
 		stepId: "align",
 		outputRole: "slices",
 		branch: "align",
 		inputRoles: ["dapi"],
+		scriptRoles: { indir: "dapi", outdir: "slices" },
 	},
 	intensity: {
 		stepId: "intensity",
 		outputRole: "pkls",
 		branch: "intensity",
 		inputRoles: ["max", "slices"],
+		scriptRoles: {
+			indir: "max",
+			annodir: "slices",
+			outdir: "pkls",
+			dapi: "dapi",
+		},
 	},
 	detect: {
 		stepId: "detect",
 		outputRole: "predictions",
 		branch: null,
 		inputRoles: ["max"],
+		scriptRoles: { indir: "max", outdir: "predictions" },
 	},
 	count: {
 		stepId: "count",
 		outputRole: "quantification",
 		branch: "count",
 		inputRoles: ["predictions", "slices"],
+		scriptRoles: {
+			preddir: "predictions",
+			annodir: "slices",
+			outdir: "quantification",
+		},
 	},
 	collate: {
 		stepId: "collate",
 		outputRole: "quantification",
 		branch: "collate",
 		inputRoles: ["quantification"],
+		scriptRoles: { indir: "quantification", outdir: "quantification" },
 	},
 	dual: {
 		stepId: "dual",
 		outputRole: "dual",
 		branch: "dual",
 		inputRoles: ["pkls"],
+		scriptRoles: { indir: "pkls", outdir: "dual" },
+	},
+	dapi_cleanup: {
+		stepId: "dapi_cleanup",
+		outputRole: null,
+		branch: null,
+		inputRoles: ["dapi"],
+		scriptRoles: { indir: "dapi", outdir: "dapi" },
+	},
+	apply_geometry: {
+		stepId: "apply_geometry",
+		outputRole: null,
+		branch: null,
+		inputRoles: [],
+		scriptRoles: {},
 	},
 };
 
@@ -436,11 +478,79 @@ function resolveInputLeafAbs(role) {
 }
 
 function resolveActiveBranchLeafAbs(role, branch) {
-	var base = resolveRoleBaseAbs(role);
+	if (!projectModule().isActive()) {
+		return "";
+	}
+	var proj = projectModule().getProject();
+	var bundleRoot = projectModule().getBundleRoot();
+	var roles = (proj && proj.roles) || CANONICAL_ROLES;
+	var processing = proj ? proj.processing : null;
+	return resolveActiveBranchLeafAbsForBundle(
+		bundleRoot,
+		roles,
+		processing,
+		role,
+		branch,
+	);
+}
+
+function resolveInputLeafAbsForStep(stepId, inputRole) {
+	if (!projectModule().isActive()) {
+		return "";
+	}
+	var proj = projectModule().getProject();
+	var bundleRoot = projectModule().getBundleRoot();
+	var roles = (proj && proj.roles) || CANONICAL_ROLES;
+	var processing = proj ? proj.processing : null;
+	return resolveInputLeafAbsForStepBundle(
+		bundleRoot,
+		roles,
+		processing,
+		stepId,
+		inputRole,
+	);
+}
+
+/** Bundle-aware role base directory (does not require an active project). */
+function resolveRoleBaseAbsForBundle(bundleRoot, roles, role) {
+	if (!bundleRoot || !role) {
+		return "";
+	}
+	var rel = (roles && roles[role]) || CANONICAL_ROLES[role];
+	if (!rel) {
+		return "";
+	}
+	return path.isAbsolute(rel) ? rel : path.join(bundleRoot, rel);
+}
+
+/** Bundle-aware active run leaf (no `projectModule()`); used by main process. */
+function resolveActiveRunLeafAbsForBundle(bundleRoot, roles, processing, role) {
+	var base = resolveRoleBaseAbsForBundle(bundleRoot, roles, role);
+	if (!base || !isOutputRole(role)) {
+		return base;
+	}
+	var active = migrateActiveRuns(processing || null);
+	var rel = (active && active[role]) || "";
+	if (!rel) {
+		return base;
+	}
+	return path.join(base, rel.split("/").join(path.sep));
+}
+
+/** Bundle-aware branch-preferring leaf (sharpen sees max branch, collate sees count branch). */
+function resolveActiveBranchLeafAbsForBundle(
+	bundleRoot,
+	roles,
+	processing,
+	role,
+	branch,
+) {
+	var base = resolveRoleBaseAbsForBundle(bundleRoot, roles, role);
 	if (!base || !branch) {
 		return base;
 	}
-	var activeRel = getActiveRunRelForRole(role);
+	var active = migrateActiveRuns(processing || null);
+	var activeRel = (active && active[role]) || "";
 	if (activeRel) {
 		var parts = activeRel.split("/");
 		if (parts[0] === branch) {
@@ -465,17 +575,75 @@ function resolveActiveBranchLeafAbs(role, branch) {
 	return base;
 }
 
-function resolveInputLeafAbsForStep(stepId, inputRole) {
+/** Bundle-aware input leaf for a given step; mirrors single-tool runtime. */
+function resolveInputLeafAbsForStepBundle(
+	bundleRoot,
+	roles,
+	processing,
+	stepId,
+	inputRole,
+) {
 	if (INPUT_ROLES.indexOf(inputRole) >= 0) {
-		return resolveRoleBaseAbs(inputRole);
+		return resolveRoleBaseAbsForBundle(bundleRoot, roles, inputRole);
 	}
 	if (stepId === "sharpen" && inputRole === "max") {
-		return resolveActiveBranchLeafAbs("max", "max");
+		return resolveActiveBranchLeafAbsForBundle(
+			bundleRoot,
+			roles,
+			processing,
+			"max",
+			"max",
+		);
 	}
 	if (stepId === "collate" && inputRole === "quantification") {
-		return resolveActiveBranchLeafAbs("quantification", "count");
+		return resolveActiveBranchLeafAbsForBundle(
+			bundleRoot,
+			roles,
+			processing,
+			"quantification",
+			"count",
+		);
 	}
-	return resolveActiveRunLeafAbs(inputRole);
+	return resolveActiveRunLeafAbsForBundle(
+		bundleRoot,
+		roles,
+		processing,
+		inputRole,
+	);
+}
+
+/**
+ * Resolve every script-arg path for a step (e.g. `{indir, outdir, ...}`) given a bundle.
+ * Output role keys map to active-run leaf; input roles map via `resolveInputLeafAbsForStepBundle`.
+ */
+function resolvePathsForBundleStep(bundleRoot, roles, processing, stepId) {
+	var cfg = RUN_STEP_CONFIG[stepId];
+	if (!cfg || !cfg.scriptRoles) {
+		return {};
+	}
+	var out = {};
+	var keys = Object.keys(cfg.scriptRoles);
+	for (var i = 0; i < keys.length; i++) {
+		var key = keys[i];
+		var role = cfg.scriptRoles[key];
+		if (key === "outdir") {
+			out[key] = resolveActiveRunLeafAbsForBundle(
+				bundleRoot,
+				roles,
+				processing,
+				role,
+			);
+		} else {
+			out[key] = resolveInputLeafAbsForStepBundle(
+				bundleRoot,
+				roles,
+				processing,
+				stepId,
+				role,
+			);
+		}
+	}
+	return out;
 }
 
 function hasRunMarkers(dirPath, stepId) {
@@ -616,7 +784,7 @@ function buildRunsCatalog(bundleRoot, roles) {
 	for (var i = 0; i < OUTPUT_ROLES.length; i++) {
 		var role = OUTPUT_ROLES[i];
 		var stepId = STEP_BY_OUTPUT_ROLE[role];
-		var rel = roles[role] || projectModule().CANONICAL_ROLES[role];
+		var rel = roles[role] || CANONICAL_ROLES[role];
 		var dir = path.isAbsolute(rel) ? rel : path.join(bundleRoot, rel);
 		catalog.roles[role] = discoverOutputRuns(dir, stepId, 2);
 	}
@@ -628,17 +796,6 @@ function writeRunsCatalog(bundleRoot, metaDirPath, roles) {
 	var outPath = path.join(metaDirPath, "runs_catalog.json");
 	fs.writeFileSync(outPath, JSON.stringify(catalog, null, 2), "utf8");
 	return outPath;
-}
-
-function resolveRoleBaseAbsForBundle(bundleRoot, roles, role) {
-	if (!bundleRoot || !role) {
-		return "";
-	}
-	var rel = (roles && roles[role]) || projectModule().CANONICAL_ROLES[role];
-	if (!rel) {
-		return "";
-	}
-	return path.isAbsolute(rel) ? rel : path.join(bundleRoot, rel);
 }
 
 function runRelVariants(role, rel) {
@@ -799,7 +956,7 @@ function removeRunForRole(role, rel, options) {
 	}
 	var bundleRoot = options.bundleRoot || projectModule().getBundleRoot();
 	var proj = projectModule().getProject();
-	var roles = (proj && proj.roles) || projectModule().CANONICAL_ROLES;
+	var roles = (proj && proj.roles) || CANONICAL_ROLES;
 	var targets = collectRunDeleteTargets(bundleRoot, roles, role, rel);
 	if (!targets.length) {
 		return { ok: false, error: "no deletable run folder found for " + rel };
@@ -866,8 +1023,10 @@ function relFromRoleBase(stepId, finalOutAbs) {
 
 module.exports = {
 	RUN_STEP_CONFIG: RUN_STEP_CONFIG,
+	CANONICAL_ROLES: CANONICAL_ROLES,
 	OUTPUT_ROLES: OUTPUT_ROLES,
 	INPUT_ROLES: INPUT_ROLES,
+	STEP_BY_OUTPUT_ROLE: STEP_BY_OUTPUT_ROLE,
 	isOutputRole: isOutputRole,
 	sanitizeSlugPart: sanitizeSlugPart,
 	sliceSpanToken: sliceSpanToken,
@@ -888,6 +1047,11 @@ module.exports = {
 	resolveInputLeafAbs: resolveInputLeafAbs,
 	resolveInputLeafAbsForStep: resolveInputLeafAbsForStep,
 	resolveActiveBranchLeafAbs: resolveActiveBranchLeafAbs,
+	resolveRoleBaseAbsForBundle: resolveRoleBaseAbsForBundle,
+	resolveActiveRunLeafAbsForBundle: resolveActiveRunLeafAbsForBundle,
+	resolveActiveBranchLeafAbsForBundle: resolveActiveBranchLeafAbsForBundle,
+	resolveInputLeafAbsForStepBundle: resolveInputLeafAbsForStepBundle,
+	resolvePathsForBundleStep: resolvePathsForBundleStep,
 	listRunChoicesForRole: listRunChoicesForRole,
 	listImageSliceStems: listImageSliceStems,
 	ensureDefaultActiveRunForRole: ensureDefaultActiveRunForRole,

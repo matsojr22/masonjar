@@ -1,18 +1,67 @@
 import * as fs from "fs";
 import * as path from "path";
 
-const PROJECT_FILENAMES = ["project.masonjar", "project.belljar"];
-
-const CANONICAL_ROLES: Record<string, string> = {
-  original_scans: "data/original_scans",
-  dapi: "data/counting/00_dapi",
-  slices: "data/counting/01_slices",
-  max: "data/counting/03_max",
-  predictions: "data/counting/05_predictions",
-  quantification: "data/counting/06_quantification",
-  pkls: "data/counting/07_pkls",
-  dual: "data/counting/08_dual",
+/**
+ * Path helpers for the batch queue (main process). Path-resolution logic
+ * (active-run leaves, sharpen → max-branch fallback, etc.) lives in
+ * `js/pipeline_runs.js` so the renderer preflight matrix and the main
+ * runtime stay in lockstep. We require the shared module at runtime to
+ * avoid TS module-resolution against `src/js/...`.
+ */
+type PipelineRunsModule = {
+  CANONICAL_ROLES: Record<string, string>;
+  RUN_STEP_CONFIG: Record<
+    string,
+    {
+      stepId: string;
+      outputRole: string | null;
+      branch: string | null;
+      inputRoles: string[];
+      scriptRoles?: Record<string, string>;
+    }
+  >;
+  resolvePathsForBundleStep: (
+    bundleRoot: string,
+    roles: Record<string, string>,
+    processing: unknown,
+    stepId: string,
+  ) => Record<string, string>;
+  resolveActiveRunLeafAbsForBundle: (
+    bundleRoot: string,
+    roles: Record<string, string>,
+    processing: unknown,
+    role: string,
+  ) => string;
+  resolveInputLeafAbsForStepBundle: (
+    bundleRoot: string,
+    roles: Record<string, string>,
+    processing: unknown,
+    stepId: string,
+    inputRole: string,
+  ) => string;
+  resolveRoleBaseAbsForBundle: (
+    bundleRoot: string,
+    roles: Record<string, string>,
+    role: string,
+  ) => string;
+  migrateActiveRuns: (processing: unknown) => Record<string, string>;
+  listImageSliceStems: (dir: string) => string[];
 };
+
+let cachedPipelineRuns: PipelineRunsModule | null = null;
+function pipelineRunsLib(): PipelineRunsModule {
+  if (cachedPipelineRuns) {
+    return cachedPipelineRuns;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const mod = (require as (id: string) => unknown)(
+    "./js/pipeline_runs",
+  ) as PipelineRunsModule;
+  cachedPipelineRuns = mod;
+  return mod;
+}
+
+const PROJECT_FILENAMES = ["project.masonjar", "project.belljar"];
 
 const IMAGE_EXT_RE = /\.(tif|tiff|png|jpe?g)$/i;
 
@@ -22,6 +71,24 @@ export interface ProjectRoles {
 
 export interface ResolvedStepPaths {
   [key: string]: string;
+}
+
+export interface ProjectProcessing {
+  active_runs?: Record<string, string>;
+  active_prediction_run?: string;
+  [key: string]: unknown;
+}
+
+export interface ProjectJsonShape {
+  name?: string;
+  roles?: ProjectRoles;
+  processing?: ProjectProcessing;
+  settings?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+function canonicalRoles(): Record<string, string> {
+  return pipelineRunsLib().CANONICAL_ROLES;
 }
 
 function findProjectFilename(bundleRoot: string): string {
@@ -90,17 +157,22 @@ export function isBundleRoot(dir: string): boolean {
   return false;
 }
 
-export function loadProjectJson(bundleRoot: string): {
-  name?: string;
-  roles?: ProjectRoles;
-  processing?: {
-    active_runs?: Record<string, string>;
-    active_prediction_run?: string;
-  };
-} {
+export function loadProjectJson(bundleRoot: string): ProjectJsonShape {
   const filePath = path.join(bundleRoot, findProjectFilename(bundleRoot));
   const raw = fs.readFileSync(filePath, "utf8");
-  return JSON.parse(raw);
+  return JSON.parse(raw) as ProjectJsonShape;
+}
+
+export function saveProjectJson(
+  bundleRoot: string,
+  data: ProjectJsonShape,
+): void {
+  const filePath = path.join(bundleRoot, findProjectFilename(bundleRoot));
+  data.modified = new Date().toISOString();
+  if (!data.created) {
+    data.created = data.modified as string;
+  }
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
 }
 
 export function resolveRolePath(
@@ -108,153 +180,67 @@ export function resolveRolePath(
   roles: ProjectRoles,
   role: string,
 ): string {
-  const rel = roles[role] || CANONICAL_ROLES[role];
-  if (!rel) {
-    return "";
-  }
-  if (path.isAbsolute(rel)) {
-    return rel;
-  }
-  return path.join(bundleRoot, rel);
+  return pipelineRunsLib().resolveRoleBaseAbsForBundle(bundleRoot, roles, role);
 }
 
-const STEP_ROLE_MAP: Record<string, Record<string, string>> = {
-  max: { indir: "original_scans", outdir: "max" },
-  sharpen: { indir: "max", outdir: "max" },
-  detect: { indir: "max", outdir: "predictions" },
-  count: {
-    preddir: "predictions",
-    annodir: "slices",
-    outdir: "quantification",
-  },
-  intensity: {
-    indir: "max",
-    annodir: "slices",
-    outdir: "pkls",
-    dapi: "dapi",
-  },
-  dual: { indir: "pkls", outdir: "dual" },
-};
-
-const OUTPUT_ROLES = new Set([
-  "max",
-  "slices",
-  "predictions",
-  "quantification",
-  "pkls",
-  "dual",
-]);
-
-function normalizeRel(rel: string): string {
-  return String(rel || "")
-    .split(/[/\\]+/)
-    .filter(Boolean)
-    .join("/");
-}
-
-function migrateActiveRuns(processing?: {
-  active_runs?: Record<string, string>;
-  active_prediction_run?: string;
-}): Record<string, string> {
-  const runs: Record<string, string> = {};
-  for (const role of OUTPUT_ROLES) {
-    runs[role] = "";
-  }
-  if (processing?.active_runs) {
-    for (const [role, rel] of Object.entries(processing.active_runs)) {
-      runs[role] = normalizeRel(rel);
-    }
-  }
-  if (!runs.predictions && processing?.active_prediction_run) {
-    runs.predictions = normalizeRel(processing.active_prediction_run);
-  }
-  return runs;
-}
-
-function resolveActiveRunLeaf(
+export function resolveActiveRunLeafForBundle(
   bundleRoot: string,
   roles: ProjectRoles,
+  processing: ProjectProcessing | undefined,
   role: string,
-  processing?: {
-    active_runs?: Record<string, string>;
-    active_prediction_run?: string;
-  },
 ): string {
-  const base = resolveRolePath(bundleRoot, roles, role);
-  if (!base || !OUTPUT_ROLES.has(role)) {
-    return base;
-  }
-  const activeRuns = migrateActiveRuns(processing);
-  const rel = activeRuns[role] || "";
-  if (!rel) {
-    return base;
-  }
-  return path.join(base, rel.split("/").join(path.sep));
+  return pipelineRunsLib().resolveActiveRunLeafAbsForBundle(
+    bundleRoot,
+    roles,
+    processing,
+    role,
+  );
 }
 
-function resolveInputLeafForStep(
+export function resolveInputLeafForStep(
   bundleRoot: string,
   stepId: string,
   role: string,
   roles: ProjectRoles,
-  processing?: {
-    active_runs?: Record<string, string>;
-    active_prediction_run?: string;
-  },
+  processing: ProjectProcessing | undefined,
 ): string {
-  if (role === "dapi" || role === "original_scans") {
-    return resolveRolePath(bundleRoot, roles, role);
-  }
-  if (stepId === "sharpen" && role === "max") {
-    const base = resolveRolePath(bundleRoot, roles, "max");
-    const activeRuns = migrateActiveRuns(processing);
-    const rel = activeRuns.max || "";
-    if (rel && rel.split("/")[0] === "max") {
-      return path.join(base, rel.split("/").join(path.sep));
-    }
-    const branchDir = path.join(base, "max");
-    return fs.existsSync(branchDir) ? branchDir : base;
-  }
-  return resolveActiveRunLeaf(bundleRoot, roles, role, processing);
+  return pipelineRunsLib().resolveInputLeafAbsForStepBundle(
+    bundleRoot,
+    roles,
+    processing,
+    stepId,
+    role,
+  );
 }
 
 export function resolvePathsForStep(
   bundleRoot: string,
   stepId: string,
 ): ResolvedStepPaths {
-  const project = loadProjectJson(bundleRoot);
-  const roles = project.roles || CANONICAL_ROLES;
-  const mapping = STEP_ROLE_MAP[stepId];
-  if (!mapping) {
-    return {};
+  let project: ProjectJsonShape;
+  try {
+    project = loadProjectJson(bundleRoot);
+  } catch {
+    project = {};
   }
-  const out: ResolvedStepPaths = {};
-  for (const [key, role] of Object.entries(mapping)) {
-    if (key === "outdir") {
-      out[key] = resolveActiveRunLeaf(
-        bundleRoot,
-        roles,
-        role,
-        project.processing,
-      );
-    } else {
-      out[key] = resolveInputLeafForStep(
-        bundleRoot,
-        stepId,
-        role,
-        roles,
-        project.processing,
-      );
-    }
-  }
-  return out;
+  const roles = project.roles || canonicalRoles();
+  return pipelineRunsLib().resolvePathsForBundleStep(
+    bundleRoot,
+    roles,
+    project.processing,
+    stepId,
+  );
 }
 
-export function countImageFiles(dir: string): number {
+export function listImageSliceStems(dir: string): string[] {
+  return pipelineRunsLib().listImageSliceStems(dir);
+}
+
+export function listImageFiles(dir: string): string[] {
   if (!dir || !fs.existsSync(dir)) {
-    return 0;
+    return [];
   }
-  let count = 0;
+  const out: string[] = [];
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
@@ -265,37 +251,62 @@ export function countImageFiles(dir: string): number {
         IMAGE_EXT_RE.test(entry.name) ||
         entry.name.toLowerCase().includes(".ome.")
       ) {
-        count++;
+        out.push(path.join(dir, entry.name));
       }
     }
   } catch (_err) {
-    return 0;
+    return [];
   }
-  return count;
+  return out;
+}
+
+export function countImageFiles(dir: string): number {
+  return listImageFiles(dir).length;
 }
 
 const ANNOTATION_RE = /^Annotation_.*\.pkl$/i;
-const LEGACY_PKL_RE = /\.pkl$/i;
 
-export function countAnnotationPkls(dir: string): number {
+export function listAnnotationPkls(dir: string): string[] {
   if (!dir || !fs.existsSync(dir)) {
-    return 0;
+    return [];
   }
-  let count = 0;
+  const out: string[] = [];
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isFile()) {
         continue;
       }
-      if (ANNOTATION_RE.test(entry.name) || LEGACY_PKL_RE.test(entry.name)) {
-        count++;
+      if (ANNOTATION_RE.test(entry.name) || /\.pkl$/i.test(entry.name)) {
+        out.push(entry.name);
       }
     }
   } catch (_err) {
-    return 0;
+    return [];
   }
-  return count;
+  return out;
+}
+
+export function countAnnotationPkls(dir: string): number {
+  return listAnnotationPkls(dir).length;
+}
+
+export function listPredictionPkls(dir: string): string[] {
+  if (!dir || !fs.existsSync(dir)) {
+    return [];
+  }
+  const out: string[] = [];
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && /^Predictions_.*\.pkl$/i.test(entry.name)) {
+        out.push(entry.name);
+      }
+    }
+  } catch (_err) {
+    return [];
+  }
+  return out;
 }
 
 export function listBundlesInDirectory(parentDir: string): string[] {
@@ -318,4 +329,59 @@ export function listBundlesInDirectory(parentDir: string): string[] {
     return [];
   }
   return out.sort();
+}
+
+export function sliceIdFromFilename(filename: string): string {
+  let stem = path.parse(filename).name;
+  if (/\.ome$/i.test(stem)) {
+    stem = path.parse(stem).name;
+  }
+  const dot = stem.indexOf(".");
+  return dot >= 0 ? stem.slice(0, dot) : stem;
+}
+
+export function metaDir(bundleRoot: string): string {
+  const masonMeta = path.join(bundleRoot, ".masonjar");
+  if (fs.existsSync(masonMeta)) {
+    return masonMeta;
+  }
+  const legacyMeta = path.join(bundleRoot, ".belljar");
+  if (fs.existsSync(legacyMeta)) {
+    return legacyMeta;
+  }
+  return masonMeta;
+}
+
+export function ensureMetaDir(bundleRoot: string): string {
+  const dir = metaDir(bundleRoot);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+export function getStepScriptRoles(
+  stepId: string,
+): Record<string, string> | null {
+  const cfg = pipelineRunsLib().RUN_STEP_CONFIG[stepId];
+  if (!cfg || !cfg.scriptRoles) {
+    return null;
+  }
+  return cfg.scriptRoles;
+}
+
+export function getStepConfig(
+  stepId: string,
+): {
+  outputRole: string | null;
+  branch: string | null;
+  scriptRoles: Record<string, string>;
+} | null {
+  const cfg = pipelineRunsLib().RUN_STEP_CONFIG[stepId];
+  if (!cfg) {
+    return null;
+  }
+  return {
+    outputRole: cfg.outputRole,
+    branch: cfg.branch,
+    scriptRoles: cfg.scriptRoles || {},
+  };
 }

@@ -23,21 +23,24 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.listBundlesInDirectory = exports.countAnnotationPkls = exports.countImageFiles = exports.resolvePathsForStep = exports.resolveRolePath = exports.loadProjectJson = exports.isBundleRoot = void 0;
+exports.getStepConfig = exports.getStepScriptRoles = exports.ensureMetaDir = exports.metaDir = exports.sliceIdFromFilename = exports.listBundlesInDirectory = exports.listPredictionPkls = exports.countAnnotationPkls = exports.listAnnotationPkls = exports.countImageFiles = exports.listImageFiles = exports.listImageSliceStems = exports.resolvePathsForStep = exports.resolveInputLeafForStep = exports.resolveActiveRunLeafForBundle = exports.resolveRolePath = exports.saveProjectJson = exports.loadProjectJson = exports.isBundleRoot = void 0;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+let cachedPipelineRuns = null;
+function pipelineRunsLib() {
+    if (cachedPipelineRuns) {
+        return cachedPipelineRuns;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require("./js/pipeline_runs");
+    cachedPipelineRuns = mod;
+    return mod;
+}
 const PROJECT_FILENAMES = ["project.masonjar", "project.belljar"];
-const CANONICAL_ROLES = {
-    original_scans: "data/original_scans",
-    dapi: "data/counting/00_dapi",
-    slices: "data/counting/01_slices",
-    max: "data/counting/03_max",
-    predictions: "data/counting/05_predictions",
-    quantification: "data/counting/06_quantification",
-    pkls: "data/counting/07_pkls",
-    dual: "data/counting/08_dual",
-};
 const IMAGE_EXT_RE = /\.(tif|tiff|png|jpe?g)$/i;
+function canonicalRoles() {
+    return pipelineRunsLib().CANONICAL_ROLES;
+}
 function findProjectFilename(bundleRoot) {
     if (!bundleRoot || !fs.existsSync(bundleRoot)) {
         return PROJECT_FILENAMES[0];
@@ -111,115 +114,48 @@ function loadProjectJson(bundleRoot) {
     return JSON.parse(raw);
 }
 exports.loadProjectJson = loadProjectJson;
+function saveProjectJson(bundleRoot, data) {
+    const filePath = path.join(bundleRoot, findProjectFilename(bundleRoot));
+    data.modified = new Date().toISOString();
+    if (!data.created) {
+        data.created = data.modified;
+    }
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+}
+exports.saveProjectJson = saveProjectJson;
 function resolveRolePath(bundleRoot, roles, role) {
-    const rel = roles[role] || CANONICAL_ROLES[role];
-    if (!rel) {
-        return "";
-    }
-    if (path.isAbsolute(rel)) {
-        return rel;
-    }
-    return path.join(bundleRoot, rel);
+    return pipelineRunsLib().resolveRoleBaseAbsForBundle(bundleRoot, roles, role);
 }
 exports.resolveRolePath = resolveRolePath;
-const STEP_ROLE_MAP = {
-    max: { indir: "original_scans", outdir: "max" },
-    sharpen: { indir: "max", outdir: "max" },
-    detect: { indir: "max", outdir: "predictions" },
-    count: {
-        preddir: "predictions",
-        annodir: "slices",
-        outdir: "quantification",
-    },
-    intensity: {
-        indir: "max",
-        annodir: "slices",
-        outdir: "pkls",
-        dapi: "dapi",
-    },
-    dual: { indir: "pkls", outdir: "dual" },
-};
-const OUTPUT_ROLES = new Set([
-    "max",
-    "slices",
-    "predictions",
-    "quantification",
-    "pkls",
-    "dual",
-]);
-function normalizeRel(rel) {
-    return String(rel || "")
-        .split(/[/\\]+/)
-        .filter(Boolean)
-        .join("/");
+function resolveActiveRunLeafForBundle(bundleRoot, roles, processing, role) {
+    return pipelineRunsLib().resolveActiveRunLeafAbsForBundle(bundleRoot, roles, processing, role);
 }
-function migrateActiveRuns(processing) {
-    const runs = {};
-    for (const role of OUTPUT_ROLES) {
-        runs[role] = "";
-    }
-    if (processing === null || processing === void 0 ? void 0 : processing.active_runs) {
-        for (const [role, rel] of Object.entries(processing.active_runs)) {
-            runs[role] = normalizeRel(rel);
-        }
-    }
-    if (!runs.predictions && (processing === null || processing === void 0 ? void 0 : processing.active_prediction_run)) {
-        runs.predictions = normalizeRel(processing.active_prediction_run);
-    }
-    return runs;
-}
-function resolveActiveRunLeaf(bundleRoot, roles, role, processing) {
-    const base = resolveRolePath(bundleRoot, roles, role);
-    if (!base || !OUTPUT_ROLES.has(role)) {
-        return base;
-    }
-    const activeRuns = migrateActiveRuns(processing);
-    const rel = activeRuns[role] || "";
-    if (!rel) {
-        return base;
-    }
-    return path.join(base, rel.split("/").join(path.sep));
-}
+exports.resolveActiveRunLeafForBundle = resolveActiveRunLeafForBundle;
 function resolveInputLeafForStep(bundleRoot, stepId, role, roles, processing) {
-    if (role === "dapi" || role === "original_scans") {
-        return resolveRolePath(bundleRoot, roles, role);
-    }
-    if (stepId === "sharpen" && role === "max") {
-        const base = resolveRolePath(bundleRoot, roles, "max");
-        const activeRuns = migrateActiveRuns(processing);
-        const rel = activeRuns.max || "";
-        if (rel && rel.split("/")[0] === "max") {
-            return path.join(base, rel.split("/").join(path.sep));
-        }
-        const branchDir = path.join(base, "max");
-        return fs.existsSync(branchDir) ? branchDir : base;
-    }
-    return resolveActiveRunLeaf(bundleRoot, roles, role, processing);
+    return pipelineRunsLib().resolveInputLeafAbsForStepBundle(bundleRoot, roles, processing, stepId, role);
 }
+exports.resolveInputLeafForStep = resolveInputLeafForStep;
 function resolvePathsForStep(bundleRoot, stepId) {
-    const project = loadProjectJson(bundleRoot);
-    const roles = project.roles || CANONICAL_ROLES;
-    const mapping = STEP_ROLE_MAP[stepId];
-    if (!mapping) {
-        return {};
+    let project;
+    try {
+        project = loadProjectJson(bundleRoot);
     }
-    const out = {};
-    for (const [key, role] of Object.entries(mapping)) {
-        if (key === "outdir") {
-            out[key] = resolveActiveRunLeaf(bundleRoot, roles, role, project.processing);
-        }
-        else {
-            out[key] = resolveInputLeafForStep(bundleRoot, stepId, role, roles, project.processing);
-        }
+    catch (_a) {
+        project = {};
     }
-    return out;
+    const roles = project.roles || canonicalRoles();
+    return pipelineRunsLib().resolvePathsForBundleStep(bundleRoot, roles, project.processing, stepId);
 }
 exports.resolvePathsForStep = resolvePathsForStep;
-function countImageFiles(dir) {
+function listImageSliceStems(dir) {
+    return pipelineRunsLib().listImageSliceStems(dir);
+}
+exports.listImageSliceStems = listImageSliceStems;
+function listImageFiles(dir) {
     if (!dir || !fs.existsSync(dir)) {
-        return 0;
+        return [];
     }
-    let count = 0;
+    const out = [];
     try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
@@ -228,40 +164,66 @@ function countImageFiles(dir) {
             }
             if (IMAGE_EXT_RE.test(entry.name) ||
                 entry.name.toLowerCase().includes(".ome.")) {
-                count++;
+                out.push(path.join(dir, entry.name));
             }
         }
     }
     catch (_err) {
-        return 0;
+        return [];
     }
-    return count;
+    return out;
+}
+exports.listImageFiles = listImageFiles;
+function countImageFiles(dir) {
+    return listImageFiles(dir).length;
 }
 exports.countImageFiles = countImageFiles;
 const ANNOTATION_RE = /^Annotation_.*\.pkl$/i;
-const LEGACY_PKL_RE = /\.pkl$/i;
-function countAnnotationPkls(dir) {
+function listAnnotationPkls(dir) {
     if (!dir || !fs.existsSync(dir)) {
-        return 0;
+        return [];
     }
-    let count = 0;
+    const out = [];
     try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
             if (!entry.isFile()) {
                 continue;
             }
-            if (ANNOTATION_RE.test(entry.name) || LEGACY_PKL_RE.test(entry.name)) {
-                count++;
+            if (ANNOTATION_RE.test(entry.name) || /\.pkl$/i.test(entry.name)) {
+                out.push(entry.name);
             }
         }
     }
     catch (_err) {
-        return 0;
+        return [];
     }
-    return count;
+    return out;
+}
+exports.listAnnotationPkls = listAnnotationPkls;
+function countAnnotationPkls(dir) {
+    return listAnnotationPkls(dir).length;
 }
 exports.countAnnotationPkls = countAnnotationPkls;
+function listPredictionPkls(dir) {
+    if (!dir || !fs.existsSync(dir)) {
+        return [];
+    }
+    const out = [];
+    try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.isFile() && /^Predictions_.*\.pkl$/i.test(entry.name)) {
+                out.push(entry.name);
+            }
+        }
+    }
+    catch (_err) {
+        return [];
+    }
+    return out;
+}
+exports.listPredictionPkls = listPredictionPkls;
 function listBundlesInDirectory(parentDir) {
     if (!parentDir || !fs.existsSync(parentDir)) {
         return [];
@@ -285,3 +247,50 @@ function listBundlesInDirectory(parentDir) {
     return out.sort();
 }
 exports.listBundlesInDirectory = listBundlesInDirectory;
+function sliceIdFromFilename(filename) {
+    let stem = path.parse(filename).name;
+    if (/\.ome$/i.test(stem)) {
+        stem = path.parse(stem).name;
+    }
+    const dot = stem.indexOf(".");
+    return dot >= 0 ? stem.slice(0, dot) : stem;
+}
+exports.sliceIdFromFilename = sliceIdFromFilename;
+function metaDir(bundleRoot) {
+    const masonMeta = path.join(bundleRoot, ".masonjar");
+    if (fs.existsSync(masonMeta)) {
+        return masonMeta;
+    }
+    const legacyMeta = path.join(bundleRoot, ".belljar");
+    if (fs.existsSync(legacyMeta)) {
+        return legacyMeta;
+    }
+    return masonMeta;
+}
+exports.metaDir = metaDir;
+function ensureMetaDir(bundleRoot) {
+    const dir = metaDir(bundleRoot);
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+}
+exports.ensureMetaDir = ensureMetaDir;
+function getStepScriptRoles(stepId) {
+    const cfg = pipelineRunsLib().RUN_STEP_CONFIG[stepId];
+    if (!cfg || !cfg.scriptRoles) {
+        return null;
+    }
+    return cfg.scriptRoles;
+}
+exports.getStepScriptRoles = getStepScriptRoles;
+function getStepConfig(stepId) {
+    const cfg = pipelineRunsLib().RUN_STEP_CONFIG[stepId];
+    if (!cfg) {
+        return null;
+    }
+    return {
+        outputRole: cfg.outputRole,
+        branch: cfg.branch,
+        scriptRoles: cfg.scriptRoles || {},
+    };
+}
+exports.getStepConfig = getStepConfig;

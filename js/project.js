@@ -1106,24 +1106,6 @@ function listBundlesInDirectory(parentDir) {
 	return out.sort();
 }
 
-var BATCH_STEP_ROLES = {
-	max: { indir: "original_scans", outdir: "max" },
-	sharpen: { indir: "max", outdir: "max" },
-	detect: { indir: "max", outdir: "predictions" },
-	count: {
-		preddir: "predictions",
-		annodir: "slices",
-		outdir: "quantification",
-	},
-	intensity: {
-		indir: "max",
-		annodir: "slices",
-		outdir: "pkls",
-		dapi: "dapi",
-	},
-	dual: { indir: "pkls", outdir: "dual" },
-};
-
 var ANNOTATION_PKL_RE = /^Annotation_.*\.pkl$/i;
 
 function countAnnotationPkls(dir) {
@@ -1150,28 +1132,20 @@ function countAnnotationPkls(dir) {
 
 function resolvePathsForBundle(bundleRoot, stepId) {
 	bundleRoot = path.resolve(bundleRoot);
-	var roles;
+	var proj;
 	try {
-		roles = readProjectJson(bundleRoot).roles || CANONICAL_ROLES;
+		proj = readProjectJson(bundleRoot);
 	} catch (err) {
-		roles = CANONICAL_ROLES;
+		proj = null;
 	}
-	var mapping = BATCH_STEP_ROLES[stepId];
-	if (!mapping) {
-		return {};
-	}
-	var out = {};
-	var keys = Object.keys(mapping);
-	for (var i = 0; i < keys.length; i++) {
-		var key = keys[i];
-		var mappedRole = mapping[key];
-		if (pipelineRuns.isOutputRole(mappedRole)) {
-			out[key] = resolveRoleLeafAbsForBundle(bundleRoot, roles, mappedRole);
-		} else {
-			out[key] = resolveRolePathForBundle(bundleRoot, roles, mappedRole);
-		}
-	}
-	return out;
+	var roles = (proj && proj.roles) || CANONICAL_ROLES;
+	var processing = proj ? proj.processing : null;
+	return pipelineRuns.resolvePathsForBundleStep(
+		bundleRoot,
+		roles,
+		processing,
+		stepId,
+	);
 }
 
 function preflightBatchPlan(plan) {
@@ -1224,25 +1198,19 @@ function preflightBatchPlan(plan) {
 }
 
 function resolveRoleLeafAbsForBundle(bundleRoot, roles, role) {
-	var rel = roles[role] || CANONICAL_ROLES[role];
-	var base = path.isAbsolute(rel) ? rel : path.join(bundleRoot, rel);
-	if (!pipelineRuns.isOutputRole(role)) {
-		return base;
-	}
 	var proj;
 	try {
 		proj = readProjectJson(bundleRoot);
 	} catch (err) {
 		proj = null;
 	}
-	var activeRuns = pipelineRuns.migrateActiveRuns(
-		proj && proj.processing ? proj.processing : null,
+	var processing = proj ? proj.processing : null;
+	return pipelineRuns.resolveActiveRunLeafAbsForBundle(
+		bundleRoot,
+		roles,
+		processing,
+		role,
 	);
-	var activeRel = activeRuns[role] || "";
-	if (!activeRel) {
-		return base;
-	}
-	return path.join(base, activeRel.split("/").join(path.sep));
 }
 
 function resolvePredictionsRoleBase() {
