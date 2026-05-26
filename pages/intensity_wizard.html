@@ -82,8 +82,9 @@
       <section id="step2" class="wizard-panel">
         <div class="row g-2 mb-2">
           <div class="col-md-4">
-            <label class="form-label" for="levelSelect">Hierarchy depth</label>
-            <select id="levelSelect" class="form-select"></select>
+            <label class="form-label" for="tierSelect">Hierarchy</label>
+            <select id="tierSelect" class="form-select"></select>
+            <select id="levelSelect" class="form-select d-none" aria-label="CCFv3 raw depth"></select>
           </div>
           <div class="col-md-4">
             <label class="form-label" for="regionSearch">Search available</label>
@@ -95,6 +96,13 @@
             </button>
           </div>
         </div>
+        <div class="form-check mb-1">
+          <input class="form-check-input" type="checkbox" id="ccfAdvancedToggle" />
+          <label class="form-check-label" for="ccfAdvancedToggle"
+            >Advanced — show CCFv3 raw depths</label
+          >
+        </div>
+        <p id="ccfAdvancedHelp" class="small fst-italic text-muted d-none mb-2"></p>
         <div class="form-check mb-2">
           <input class="form-check-input" type="checkbox" id="includeLayers" />
           <label class="form-check-label" for="includeLayers"

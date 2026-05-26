@@ -20,6 +20,43 @@ var VIS_RSP_PRESET_ACRONYMS = [
 	"RSPv",
 ];
 
+// Semantic tier order shown in the default Hierarchy dropdown. Rules are
+// applied data-driven (st_level + layer-name heuristic) so a future CCF
+// update keeps working without hardcoded acronym lists.
+var TIER_DEFS = [
+	{
+		id: "major",
+		label: "Major divisions",
+		description: "Cerebrum, brain stem, cerebellum",
+	},
+	{
+		id: "regions",
+		label: "Classic regions",
+		description: "Isocortex, thalamus, hypothalamus, midbrain, …",
+	},
+	{
+		id: "areas",
+		label: "Functional areas",
+		description: "Sensory, motor, association (VIS, AUD, SSp, MO, RSP, …)",
+	},
+	{
+		id: "subareas",
+		label: "Sub-areas",
+		description: "VISp, VISal, SSp-bfd, ACAd, individual nuclei",
+	},
+	{
+		id: "layers",
+		label: "Cortical layers",
+		description: "VISp1, VISp2/3, ACA6a, …",
+	},
+];
+
+var CCF_ADVANCED_HELP =
+	"Allen Institute CCFv3 ontology depths (st_level 0–11). Some depths group " +
+	"structures that are not anatomically meaningful (e.g. Level 4 contains " +
+	"only Cortical plate). Use the standard tiers above for everyday region " +
+	"picking.";
+
 var _catalog = null;
 
 function graphPath(appRoot) {
@@ -84,6 +121,202 @@ function loadCatalog(appRoot) {
 
 function resetCatalogForTests() {
 	_catalog = null;
+}
+
+function isLayerName(node) {
+	return String((node && node.name) || "").toLowerCase().indexOf("layer") >= 0;
+}
+
+function tierRegionIds(tierId, catalog) {
+	catalog = catalog || loadCatalog();
+	var nodes = catalog.nodes;
+	var i;
+	var out = [];
+	if (tierId === "major") {
+		for (i = 0; i < nodes.length; i++) {
+			if (nodes[i].st_level === 2) {
+				out.push(nodes[i].id);
+			}
+		}
+		return out;
+	}
+	if (tierId === "regions") {
+		for (i = 0; i < nodes.length; i++) {
+			if (nodes[i].st_level === 5) {
+				out.push(nodes[i].id);
+			}
+		}
+		return out;
+	}
+	if (tierId === "areas") {
+		for (i = 0; i < nodes.length; i++) {
+			if (nodes[i].st_level === 6) {
+				out.push(nodes[i].id);
+			}
+		}
+		return out;
+	}
+	if (tierId === "subareas") {
+		for (i = 0; i < nodes.length; i++) {
+			if (nodes[i].st_level === 8 && !isLayerName(nodes[i])) {
+				out.push(nodes[i].id);
+			}
+		}
+		return out;
+	}
+	if (tierId === "layers") {
+		for (i = 0; i < nodes.length; i++) {
+			if (nodes[i].st_level === 11 || isLayerName(nodes[i])) {
+				out.push(nodes[i].id);
+			}
+		}
+		return out;
+	}
+	return out;
+}
+
+function uniqueSortedNumbers(arr) {
+	var seen = {};
+	var out = [];
+	for (var i = 0; i < arr.length; i++) {
+		var v = arr[i];
+		if (!seen[v]) {
+			seen[v] = true;
+			out.push(v);
+		}
+	}
+	out.sort(function (a, b) {
+		return a - b;
+	});
+	return out;
+}
+
+function listTiers(catalog) {
+	catalog = catalog || loadCatalog();
+	var out = [];
+	for (var i = 0; i < TIER_DEFS.length; i++) {
+		var tier = TIER_DEFS[i];
+		var ids = uniqueSortedNumbers(tierRegionIds(tier.id, catalog));
+		out.push({
+			id: tier.id,
+			label: tier.label,
+			description: tier.description,
+			region_ids: ids,
+		});
+	}
+	return out;
+}
+
+function listRegionsForTier(tierId, searchQuery, catalog) {
+	catalog = catalog || loadCatalog();
+	var idsArr = tierRegionIds(tierId, catalog);
+	var ids = {};
+	for (var k = 0; k < idsArr.length; k++) {
+		ids[idsArr[k]] = true;
+	}
+	var q = (searchQuery || "").trim().toLowerCase();
+	var out = [];
+	for (var i = 0; i < catalog.nodes.length; i++) {
+		var n = catalog.nodes[i];
+		if (!ids[n.id]) {
+			continue;
+		}
+		if (q) {
+			var hay =
+				(n.acronym + " " + n.name + " " + n.groupParentAcronym).toLowerCase();
+			if (hay.indexOf(q) < 0) {
+				continue;
+			}
+		}
+		out.push(n);
+	}
+	out.sort(function (a, b) {
+		return a.acronym.localeCompare(b.acronym);
+	});
+	return out;
+}
+
+function levelKind(level, count, layerShare) {
+	if (layerShare >= 0.25) {
+		return "layers";
+	}
+	if (count === 1) {
+		return "single structure";
+	}
+	if (level <= 3) {
+		return "major divisions";
+	}
+	if (count <= 20) {
+		return "divisions";
+	}
+	return "regions";
+}
+
+function ccfLevelInfo(level, catalog, maxSamples) {
+	catalog = catalog || loadCatalog();
+	if (typeof maxSamples !== "number") {
+		maxSamples = 5;
+	}
+	var seen = {};
+	var acronyms = [];
+	var layerCount = 0;
+	for (var i = 0; i < catalog.nodes.length; i++) {
+		var n = catalog.nodes[i];
+		if (n.st_level !== level) {
+			continue;
+		}
+		if (!seen[n.acronym]) {
+			seen[n.acronym] = true;
+			acronyms.push(n.acronym);
+		}
+		if (isLayerName(n)) {
+			layerCount++;
+		}
+	}
+	acronyms.sort(function (a, b) {
+		return a.localeCompare(b);
+	});
+	var count = acronyms.length;
+	var share = count ? layerCount / count : 0;
+	var samples = acronyms.slice(0, maxSamples);
+	return {
+		level: level,
+		count: count,
+		kind: levelKind(level, count, share),
+		sampleAcronyms: samples,
+		hasMore: count > samples.length,
+	};
+}
+
+function listCcfLevels(catalog) {
+	catalog = catalog || loadCatalog();
+	var levels = {};
+	for (var i = 0; i < catalog.nodes.length; i++) {
+		levels[catalog.nodes[i].st_level] = true;
+	}
+	var ordered = Object.keys(levels)
+		.map(Number)
+		.sort(function (a, b) {
+			return a - b;
+		});
+	var out = [];
+	for (var k = 0; k < ordered.length; k++) {
+		out.push(ccfLevelInfo(ordered[k], catalog));
+	}
+	return out;
+}
+
+function formatCcfLevelLabel(info) {
+	var samples = (info && info.sampleAcronyms) || [];
+	var suffix = "";
+	if (samples.length) {
+		var joined = samples.join(", ");
+		if (info.hasMore) {
+			joined += ", …";
+		}
+		suffix = " (" + joined + ")";
+	}
+	return "Level " + info.level + " — " + info.count + " " + info.kind + suffix;
 }
 
 function listLevels(catalog) {
@@ -181,6 +414,10 @@ module.exports = {
 	loadCatalog: loadCatalog,
 	resetCatalogForTests: resetCatalogForTests,
 	listLevels: listLevels,
+	listCcfLevels: listCcfLevels,
+	formatCcfLevelLabel: formatCcfLevelLabel,
+	listTiers: listTiers,
+	listRegionsForTier: listRegionsForTier,
 	listRegionsAtLevel: listRegionsAtLevel,
 	isLayerStructure: isLayerStructure,
 	presetVisRspIds: presetVisRspIds,
@@ -188,5 +425,7 @@ module.exports = {
 	colorForRegion: colorForRegion,
 	getRegion: getRegion,
 	VIS_RSP_PRESET_ACRONYMS: VIS_RSP_PRESET_ACRONYMS,
+	TIER_DEFS: TIER_DEFS,
+	CCF_ADVANCED_HELP: CCF_ADVANCED_HELP,
 	graphPath: graphPath,
 };

@@ -31,8 +31,18 @@ from adjust_channels import (
     resolve_previews_dir,
 )
 from slice_index import build_adjust_pairs
-from structure_catalog import get_region, list_levels, list_regions_at_level, load_catalog
+from structure_catalog import (
+    CCF_ADVANCED_HELP,
+    format_ccf_level_label,
+    get_region,
+    list_ccf_levels,
+    list_regions_at_level,
+    list_regions_for_tier,
+    list_tiers,
+    load_catalog,
+)
 from qt_image_utils import numpy_array_to_qimage
+from qt_window_utils import raise_and_activate
 
 
 def qimage_to_numpy_array(qimage):
@@ -109,6 +119,8 @@ class AnnotationViewer(QMainWindow):
         self.structure_map = structure_map
         self.catalog = catalog
         self._area_combo_updating = False
+        self.ccf_advanced = False
+        self.current_tier_id = "areas"
         self.images_dir = (
             Path(images_dir) if images_dir else Path(pairs[0][0]).parent
         )
@@ -158,9 +170,13 @@ class AnnotationViewer(QMainWindow):
         ui_layout.addLayout(channel_row)
 
         paint_row = QHBoxLayout()
-        paint_row.addWidget(QLabel("Hierarchy depth:", self))
+        paint_row.addWidget(QLabel("Hierarchy:", self))
+        self.tier_combo = QComboBox(self)
+        self.tier_combo.currentIndexChanged.connect(self._on_tier_changed)
+        paint_row.addWidget(self.tier_combo)
         self.level_combo = QComboBox(self)
         self.level_combo.currentIndexChanged.connect(self._on_level_changed)
+        self.level_combo.setVisible(False)
         paint_row.addWidget(self.level_combo)
         paint_row.addWidget(QLabel("Area:", self))
         self.area_combo = QComboBox(self)
@@ -175,6 +191,22 @@ class AnnotationViewer(QMainWindow):
         paint_row.addWidget(self.area_combo)
         paint_row.addStretch()
         ui_layout.addLayout(paint_row)
+        toggle_row = QHBoxLayout()
+        self.ccf_advanced_toggle = QCheckBox(
+            "Advanced — show CCFv3 raw depths", self
+        )
+        self.ccf_advanced_toggle.setChecked(False)
+        self.ccf_advanced_toggle.toggled.connect(self._on_ccf_advanced_toggled)
+        toggle_row.addWidget(self.ccf_advanced_toggle)
+        toggle_row.addStretch()
+        ui_layout.addLayout(toggle_row)
+        self.ccf_advanced_help = QLabel(CCF_ADVANCED_HELP, self)
+        self.ccf_advanced_help.setWordWrap(True)
+        font = self.ccf_advanced_help.font()
+        font.setItalic(True)
+        self.ccf_advanced_help.setFont(font)
+        self.ccf_advanced_help.setVisible(False)
+        ui_layout.addWidget(self.ccf_advanced_help)
         self.paint_hint_label = QLabel(
             "Select area for brush; right-click slice still picks existing labels.",
             self,
@@ -355,23 +387,38 @@ class AnnotationViewer(QMainWindow):
     def _init_paint_region_controls(self):
         """Populate hierarchy/area combos from the CCF catalog."""
         if not self.catalog:
+            self.tier_combo.setEnabled(False)
             self.level_combo.setEnabled(False)
             self.area_combo.setEnabled(False)
+            self.ccf_advanced_toggle.setEnabled(False)
             return
+
+        self.tier_combo.blockSignals(True)
+        self.tier_combo.clear()
+        tiers = list_tiers(self.catalog)
+        default_tier_index = 0
+        for i, tier in enumerate(tiers):
+            label = tier["label"]
+            self.tier_combo.addItem(label, tier["id"])
+            self.tier_combo.setItemData(
+                i, tier.get("description", ""), Qt.ItemDataRole.ToolTipRole
+            )
+            if tier["id"] == self.current_tier_id:
+                default_tier_index = i
+        self.tier_combo.setCurrentIndex(default_tier_index)
+        self.tier_combo.blockSignals(False)
+        self.current_tier_id = self.tier_combo.currentData() or "areas"
 
         self.level_combo.blockSignals(True)
         self.level_combo.clear()
-        levels = list_levels(self.catalog)
-        default_index = 0
-        for i, lv in enumerate(levels):
-            label = (
-                f"Level {lv['level']} — {lv['exampleAcronym']} "
-                f"({lv['exampleName']})"
-            )
-            self.level_combo.addItem(label, lv["level"])
-            if lv["level"] == 6:
-                default_index = i
-        self.level_combo.setCurrentIndex(default_index)
+        levels = list_ccf_levels(self.catalog)
+        default_level_index = 0
+        for i, info in enumerate(levels):
+            label = format_ccf_level_label(info)
+            self.level_combo.addItem(label, info["level"])
+            if info["level"] == 6:
+                default_level_index = i
+        self.level_combo.setCurrentIndex(default_level_index)
         self.level_combo.blockSignals(False)
         self._rebuild_area_combo()
 
@@ -380,6 +427,12 @@ class AnnotationViewer(QMainWindow):
             return None
         level = self.level_combo.currentData()
         return int(level) if level is not None else None
+
+    def _current_tier_id(self) -> str | None:
+        if self.tier_combo.count() == 0:
+            return None
+        data = self.tier_combo.currentData()
+        return str(data) if data is not None else None
 
     def _region_display_text(self, node: dict) -> str:
         return f"{node['acronym']} — {node['name']}"
@@ -391,14 +444,29 @@ class AnnotationViewer(QMainWindow):
             return f"RGB{color}"
         return ""
 
+    def _current_regions(self, search_query: str = "") -> list[dict]:
+        """Resolve current region list from either advanced level or semantic tier."""
+        if not self.catalog:
+            return []
+        if self.ccf_advanced:
+            level = self._current_catalog_level()
+            if level is None:
+                return []
+            return list_regions_at_level(level, search_query, self.catalog)
+        tier_id = self._current_tier_id()
+        if not tier_id:
+            return []
+        return list_regions_for_tier(tier_id, self.catalog, search_query)
+
     def _rebuild_area_combo(self, search_query: str = "", select_id: int | None = None):
         if not self.catalog:
             return
-        level = self._current_catalog_level()
-        if level is None:
-            return
 
-        regions = list_regions_at_level(level, search_query, self.catalog)
+        # Preserve previously selected paint region across tier/mode swaps.
+        if select_id is None and self.selected_region_id is not None:
+            select_id = int(self.selected_region_id)
+
+        regions = self._current_regions(search_query)
         self._area_combo_updating = True
         self.area_combo.blockSignals(True)
         line_edit = self.area_combo.lineEdit()
@@ -434,6 +502,21 @@ class AnnotationViewer(QMainWindow):
         self._area_combo_updating = False
 
     def _on_level_changed(self, _index: int):
+        if self.ccf_advanced:
+            self._rebuild_area_combo()
+
+    def _on_tier_changed(self, _index: int):
+        tier_id = self._current_tier_id()
+        if tier_id:
+            self.current_tier_id = tier_id
+        if not self.ccf_advanced:
+            self._rebuild_area_combo()
+
+    def _on_ccf_advanced_toggled(self, checked: bool):
+        self.ccf_advanced = bool(checked)
+        self.tier_combo.setVisible(not self.ccf_advanced)
+        self.level_combo.setVisible(self.ccf_advanced)
+        self.ccf_advanced_help.setVisible(self.ccf_advanced)
         self._rebuild_area_combo()
 
     def _on_area_search_changed(self, text: str):
@@ -472,13 +555,14 @@ class AnnotationViewer(QMainWindow):
         node = get_region(int(region_id), self.catalog)
         if not node:
             return
-        level = node["st_level"]
-        for i in range(self.level_combo.count()):
-            if self.level_combo.itemData(i) == level:
-                self.level_combo.blockSignals(True)
-                self.level_combo.setCurrentIndex(i)
-                self.level_combo.blockSignals(False)
-                break
+        if self.ccf_advanced:
+            level = node["st_level"]
+            for i in range(self.level_combo.count()):
+                if self.level_combo.itemData(i) == level:
+                    self.level_combo.blockSignals(True)
+                    self.level_combo.setCurrentIndex(i)
+                    self.level_combo.blockSignals(False)
+                    break
         self._rebuild_area_combo(select_id=node["id"])
 
     def _on_channel_selected(self, button_id: int):
@@ -995,5 +1079,6 @@ if __name__ == "__main__":
             "Paint-region selection is disabled; right-click on existing labels still works.",
         )
     window.show()
+    raise_and_activate(window)
 
     sys.exit(app.exec_())

@@ -8,6 +8,44 @@ from typing import Any
 
 GROUP_STYLE_LEVEL = 6
 
+# Semantic tier definitions. Order is the order shown in the Hierarchy dropdown.
+# Rules are derived from CCFv3 ``st_level`` plus simple name heuristics so a
+# future ontology update keeps working without hardcoded acronym lists.
+TIER_DEFS: list[dict[str, Any]] = [
+    {
+        "id": "major",
+        "label": "Major divisions",
+        "description": "Cerebrum, brain stem, cerebellum",
+    },
+    {
+        "id": "regions",
+        "label": "Classic regions",
+        "description": "Isocortex, thalamus, hypothalamus, midbrain, …",
+    },
+    {
+        "id": "areas",
+        "label": "Functional areas",
+        "description": "Sensory, motor, association (VIS, AUD, SSp, MO, RSP, …)",
+    },
+    {
+        "id": "subareas",
+        "label": "Sub-areas",
+        "description": "VISp, VISal, SSp-bfd, ACAd, individual nuclei",
+    },
+    {
+        "id": "layers",
+        "label": "Cortical layers",
+        "description": "VISp1, VISp2/3, ACA6a, …",
+    },
+]
+
+CCF_ADVANCED_HELP = (
+    "Allen Institute CCFv3 ontology depths (st_level 0–11). Some depths group "
+    "structures that are not anatomically meaningful (e.g. Level 4 contains "
+    "only Cortical plate). Use the standard tiers above for everyday region "
+    "picking."
+)
+
 
 def _parse_id_path(id_path: str | list[int] | None) -> list[int]:
     if not id_path:
@@ -97,8 +135,150 @@ def load_catalog(graph_path: str | Path) -> dict[str, Any]:
     }
 
 
+def _is_layer_name(node: dict[str, Any]) -> bool:
+    return "layer" in str(node.get("name", "")).lower()
+
+
+def _tier_region_ids(tier_id: str, catalog: dict[str, Any]) -> list[int]:
+    """Apply the tier rule from the plan (data-driven, no acronym hardcoding)."""
+    nodes = catalog["nodes"]
+    if tier_id == "major":
+        return [n["id"] for n in nodes if n["st_level"] == 2]
+    if tier_id == "regions":
+        return [n["id"] for n in nodes if n["st_level"] == 5]
+    if tier_id == "areas":
+        return [n["id"] for n in nodes if n["st_level"] == 6]
+    if tier_id == "subareas":
+        return [
+            n["id"]
+            for n in nodes
+            if n["st_level"] == 8 and not _is_layer_name(n)
+        ]
+    if tier_id == "layers":
+        return [
+            n["id"]
+            for n in nodes
+            if n["st_level"] == 11 or _is_layer_name(n)
+        ]
+    return []
+
+
+def list_tiers(catalog: dict[str, Any]) -> list[dict[str, Any]]:
+    """Curated semantic tiers (default Hierarchy picker for both toolsets)."""
+    out: list[dict[str, Any]] = []
+    for tier in TIER_DEFS:
+        region_ids = _tier_region_ids(tier["id"], catalog)
+        region_ids = sorted(set(region_ids))
+        out.append(
+            {
+                "id": tier["id"],
+                "label": tier["label"],
+                "description": tier["description"],
+                "region_ids": region_ids,
+            }
+        )
+    return out
+
+
+def list_regions_for_tier(
+    tier_id: str,
+    catalog: dict[str, Any],
+    search_query: str = "",
+) -> list[dict[str, Any]]:
+    """Region rows for a semantic tier, sorted by acronym; supports search."""
+    ids = set(_tier_region_ids(tier_id, catalog))
+    q = (search_query or "").strip().lower()
+    out: list[dict[str, Any]] = []
+    for node in catalog["nodes"]:
+        if node["id"] not in ids:
+            continue
+        if q:
+            hay = (
+                f"{node['acronym']} {node['name']} {node['groupParentAcronym']}"
+            ).lower()
+            if q not in hay:
+                continue
+        out.append(node)
+    out.sort(key=lambda item: item["acronym"])
+    return out
+
+
+def _level_kind(level: int, count: int, layer_share: float) -> str:
+    if layer_share >= 0.25:
+        return "layers"
+    if count == 1:
+        return "single structure"
+    if level <= 3:
+        return "major divisions"
+    if count <= 20:
+        return "divisions"
+    return "regions"
+
+
+def _level_info_for_st(
+    level: int,
+    catalog: dict[str, Any],
+    *,
+    max_samples: int = 5,
+) -> dict[str, Any]:
+    acronyms: list[str] = []
+    layer_count = 0
+    seen: set[str] = set()
+    for node in catalog["nodes"]:
+        if node["st_level"] != level:
+            continue
+        ac = node["acronym"]
+        if ac not in seen:
+            seen.add(ac)
+            acronyms.append(ac)
+        if _is_layer_name(node):
+            layer_count += 1
+    acronyms.sort()
+    count = len(acronyms)
+    layer_share = (layer_count / count) if count else 0.0
+    kind = _level_kind(level, count, layer_share)
+    samples = acronyms[:max_samples]
+    has_more = count > len(samples)
+    return {
+        "level": level,
+        "count": count,
+        "kind": kind,
+        "sampleAcronyms": samples,
+        "hasMore": has_more,
+    }
+
+
+def list_ccf_levels(catalog: dict[str, Any]) -> list[dict[str, Any]]:
+    """Enriched CCFv3 raw depths (used by Advanced toggle).
+
+    Each entry: ``level, count, kind, sampleAcronyms, hasMore``.
+    """
+    levels: list[int] = sorted({n["st_level"] for n in catalog["nodes"]})
+    return [_level_info_for_st(lvl, catalog) for lvl in levels]
+
+
+def format_ccf_level_label(info: dict[str, Any]) -> str:
+    """E.g. ``Level 6 — 34 regions (AUD, DORpm, GU, MO, SS, …)``.
+
+    Same template as the JS sibling so PyQt and Electron labels match.
+    """
+    samples = list(info.get("sampleAcronyms") or [])
+    suffix = ""
+    if samples:
+        joined = ", ".join(samples)
+        if info.get("hasMore"):
+            joined += ", …"
+        suffix = f" ({joined})"
+    return f"Level {info['level']} — {info['count']} {info['kind']}{suffix}"
+
+
 def list_levels(catalog: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return sorted CCF levels with one example acronym/name each."""
+    """Backward-compatible sorted CCF levels.
+
+    Kept for tests and existing callers; new UIs should use
+    :func:`list_ccf_levels` + :func:`format_ccf_level_label` for the Advanced
+    mode, or :func:`list_tiers` for the default semantic picker.
+    """
     seen: set[int] = set()
     out: list[dict[str, Any]] = []
     for node in catalog["nodes"]:

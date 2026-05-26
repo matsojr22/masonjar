@@ -14,6 +14,9 @@ var atlasStyle = require("./atlas_region_style");
 var SETUP_KEY = "masonjar.intensity.setup";
 var CONFIG_FILENAME = "intensity_run_config.json";
 var LOG_MAX = 1500;
+var PICKER_MODE_KEY = "masonjar.ccfPickerMode";
+var DEFAULT_TIER_ID = "areas";
+var DEFAULT_CCF_LEVEL = 6;
 
 var setup = null;
 var catalog = null;
@@ -24,6 +27,7 @@ var selectedHighlight = null;
 var extractRunning = false;
 var lastRunRel = "";
 var lastResult = { slices: 0, pkls: 0, outputDir: "" };
+var pickerMode = "tiers"; // "tiers" | "advanced"
 
 function qs(id) {
 	return document.getElementById(id);
@@ -96,10 +100,18 @@ function applyRowStyle(el, node) {
 	el.setAttribute("data-id", String(node.id));
 }
 
+function currentRegions(search) {
+	if (pickerMode === "advanced") {
+		var level = Number(qs("levelSelect").value);
+		return structureCatalog.listRegionsAtLevel(level, search, catalog);
+	}
+	var tierId = qs("tierSelect") ? qs("tierSelect").value : DEFAULT_TIER_ID;
+	return structureCatalog.listRegionsForTier(tierId, search, catalog);
+}
+
 function visibleRegionsForLegend() {
-	var level = Number(qs("levelSelect").value);
 	var search = qs("regionSearch") ? qs("regionSearch").value : "";
-	var available = structureCatalog.listRegionsAtLevel(level, search, catalog);
+	var available = currentRegions(search);
 	var seen = {};
 	var out = [];
 	function addNode(n) {
@@ -154,9 +166,8 @@ function renderAvailableList() {
 		return;
 	}
 	box.innerHTML = "";
-	var level = Number(qs("levelSelect").value);
 	var search = qs("regionSearch") ? qs("regionSearch").value : "";
-	var rows = structureCatalog.listRegionsAtLevel(level, search, catalog);
+	var rows = currentRegions(search);
 	var selectedSet = {};
 	for (var s = 0; s < selectedIds.length; s++) {
 		selectedSet[selectedIds[s]] = true;
@@ -230,7 +241,7 @@ function updateRegionHint() {
 	}
 	hint.textContent =
 		selectedIds.length +
-		" region(s) selected. Change depth to add regions from another level without clearing the selection.";
+		" region(s) selected. Change Hierarchy or toggle Advanced to add regions from other tiers/depths without clearing the selection.";
 }
 
 function addSelectedId(id) {
@@ -250,27 +261,83 @@ function removeSelectedId(id) {
 	renderSelectedList();
 }
 
+function fillTierSelect() {
+	var sel = qs("tierSelect");
+	if (!sel) {
+		return;
+	}
+	var tiers = structureCatalog.listTiers(catalog);
+	sel.innerHTML = "";
+	for (var i = 0; i < tiers.length; i++) {
+		var tier = tiers[i];
+		var opt = document.createElement("option");
+		opt.value = tier.id;
+		opt.textContent = tier.label;
+		opt.title = tier.description || "";
+		sel.appendChild(opt);
+	}
+	sel.value = DEFAULT_TIER_ID;
+}
+
 function fillLevelSelect() {
 	var sel = qs("levelSelect");
 	if (!sel) {
 		return;
 	}
-	var levels = structureCatalog.listLevels(catalog);
+	var infos = structureCatalog.listCcfLevels(catalog);
 	sel.innerHTML = "";
-	for (var i = 0; i < levels.length; i++) {
-		var lv = levels[i];
+	for (var i = 0; i < infos.length; i++) {
+		var info = infos[i];
 		var opt = document.createElement("option");
-		opt.value = String(lv.level);
-		opt.textContent =
-			"Level " + lv.level + " — " + lv.exampleAcronym + " (" + lv.exampleName + ")";
+		opt.value = String(info.level);
+		opt.textContent = structureCatalog.formatCcfLevelLabel(info);
 		sel.appendChild(opt);
 	}
-	// Default near area level (6) if present
-	var defaultLevel = 6;
-	var has = levels.some(function (l) {
-		return l.level === defaultLevel;
+	var has = infos.some(function (info) {
+		return info.level === DEFAULT_CCF_LEVEL;
 	});
-	sel.value = String(has ? defaultLevel : levels[0].level);
+	sel.value = String(has && infos.length ? DEFAULT_CCF_LEVEL : (infos[0] && infos[0].level) || 0);
+}
+
+function applyPickerMode(mode) {
+	pickerMode = mode === "advanced" ? "advanced" : "tiers";
+	try {
+		sessionStorage.setItem(PICKER_MODE_KEY, pickerMode);
+	} catch (_e) {
+		// sessionStorage may be unavailable in some test contexts
+	}
+	var tierSel = qs("tierSelect");
+	var levelSel = qs("levelSelect");
+	var help = qs("ccfAdvancedHelp");
+	var toggle = qs("ccfAdvancedToggle");
+	if (tierSel) {
+		tierSel.classList.toggle("d-none", pickerMode === "advanced");
+	}
+	if (levelSel) {
+		levelSel.classList.toggle("d-none", pickerMode !== "advanced");
+	}
+	if (help) {
+		help.classList.toggle("d-none", pickerMode !== "advanced");
+		if (pickerMode === "advanced") {
+			help.textContent = structureCatalog.CCF_ADVANCED_HELP;
+		}
+	}
+	if (toggle) {
+		toggle.checked = pickerMode === "advanced";
+	}
+	availableHighlight = null;
+	renderAvailableList();
+	renderSelectedList();
+}
+
+function restorePickerMode() {
+	var stored = null;
+	try {
+		stored = sessionStorage.getItem(PICKER_MODE_KEY);
+	} catch (_e) {
+		stored = null;
+	}
+	applyPickerMode(stored === "advanced" ? "advanced" : "tiers");
 }
 
 function appendLog(line) {
@@ -430,14 +497,27 @@ if (!setup || !setup.indir || !setup.annodir) {
 	window.location.href = "./intensity.html";
 } else {
 	catalog = structureCatalog.loadCatalog(getAppRoot());
+	fillTierSelect();
 	fillLevelSelect();
-	renderAvailableList();
-	renderSelectedList();
+	restorePickerMode();
 
-	qs("levelSelect").addEventListener("change", function () {
-		availableHighlight = null;
-		renderAvailableList();
-	});
+	if (qs("tierSelect")) {
+		qs("tierSelect").addEventListener("change", function () {
+			availableHighlight = null;
+			renderAvailableList();
+		});
+	}
+	if (qs("levelSelect")) {
+		qs("levelSelect").addEventListener("change", function () {
+			availableHighlight = null;
+			renderAvailableList();
+		});
+	}
+	if (qs("ccfAdvancedToggle")) {
+		qs("ccfAdvancedToggle").addEventListener("change", function (ev) {
+			applyPickerMode(ev.target.checked ? "advanced" : "tiers");
+		});
+	}
 	if (qs("regionSearch")) {
 		qs("regionSearch").addEventListener("input", function () {
 			renderAvailableList();

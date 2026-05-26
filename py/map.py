@@ -34,6 +34,7 @@ from segment_anything import SamPredictor, sam_model_registry
 from qtpy import QtCore, QtGui
 from qtpy.QtCore import QTimer
 from qt_image_utils import numpy_array_to_qimage
+from qt_window_utils import raise_and_activate_napari
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline
@@ -1091,6 +1092,7 @@ class AlignmentController:
         # enable grid
         self.viewer.show()
         self.update_display()
+        raise_and_activate_napari(self.viewer)
         napari.run()
 
 

@@ -1341,6 +1341,14 @@ ipcMain.on("runAdjust", function (event: any, data: any[]) {
   };
   let pyshell = new PythonShell("adjust.py", options);
   attachPythonShellKillCleanup(pyshell, "killAdjust");
+  try {
+    const parent = dialogParentWindow(event);
+    if (parent && !parent.isDestroyed()) {
+      parent.blur();
+    }
+  } catch (_e) {
+    // best effort: blur should never block tool launch
+  }
   var total: number = 0;
   var current: number = 0;
   pyshell.on("stderr", function (stderr: string) {
@@ -1398,6 +1406,14 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
   };
   let pyshell = new PythonShell("map.py", options);
   attachPythonShellKillCleanup(pyshell, "killAlign");
+  try {
+    const parent = dialogParentWindow(event);
+    if (parent && !parent.isDestroyed()) {
+      parent.blur();
+    }
+  } catch (_e) {
+    // best effort: blur should never block tool launch
+  }
   var total: number = 0;
   var current: number = 0;
 

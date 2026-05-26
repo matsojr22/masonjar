@@ -1,14 +1,16 @@
 # Agent session handoff
 
-Last updated: 2026-05-26. Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-05-26 (window focus + CCF tier picker). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 ## Current release
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **2.2.0** |
-| Latest tag | `v2.2.0` on `main` |
+| `package.json` version | **2.3.0** |
+| Latest tag | `v2.3.0` on `main` |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v2.3.0** — Align/Viewer windows raise and focus on launch (Electron blurs parent; `py/qt_window_utils.py`); CCF picker gets semantic tiers (Major / Classic regions / Functional areas / Sub-areas / Cortical layers) with **Advanced — show CCFv3 raw depths** toggle in both Viewer/Editor and Isolate Regions wizard.
 
 **v2.2.0** — Viewer/Editor CCF hierarchy + searchable area picker; fix align/adjust launch (overlay init, `qt_image_utils`, IPC argv tokens). Includes Isolate Regions wizard and SAHI cell-detector fix from v2.1.0+.
 
@@ -28,6 +30,8 @@ Last updated: 2026-05-26. Use this file to resume work; long-term architecture s
 |------|--------|
 | Isolate wizard UI | `pages/intensity_wizard.html`, `js/intensity_wizard.js`, `js/intensity.js` |
 | CCF catalog / colors | `js/structure_catalog.js`, `py/structure_catalog.py`, `js/atlas_region_style.js`, `csv/structure_graph.json` |
+| CCF tier / Advanced picker | `listTiers` / `list_tiers`, `listCcfLevels` / `list_ccf_levels`, `formatCcfLevelLabel` / `format_ccf_level_label`, `CCF_ADVANCED_HELP` (shared py/js). Wizard: `#tierSelect`, `#levelSelect`, `#ccfAdvancedToggle`, `#ccfAdvancedHelp`; sessionStorage `masonjar.ccfPickerMode`. Viewer: `tier_combo`, `level_combo`, `ccf_advanced_toggle`, `ccf_advanced_help` in `py/adjust.py`. Style guide: `docs/isolate_regions_style.md` (Hierarchy picker section). |
+| Window focus on launch | `py/qt_window_utils.py` (`raise_and_activate`, `raise_and_activate_napari`); wired in `py/adjust.py` (after `window.show()`) and `py/map.py` (`AlignmentController.start_viewer`). `src/main.ts` `runAlign` / `runAdjust` blur parent BrowserWindow after `PythonShell` spawn (compile `main.js`). |
 | Isolate Python | `py/region.py`, `py/region_config.py`, `py/intensity_flags.py` |
 | Detection Python | `py/find_neurons.py` (SAHI compat wrapper) |
 | IPC | `src/main.ts` → compile `main.js`; `runIntensity` arg[6] = config path |
@@ -39,7 +43,7 @@ Last updated: 2026-05-26. Use this file to resume work; long-term architecture s
 ./node_modules/.bin/tsc
 node scripts/test-structure-catalog.js
 node scripts/test-atlas-region-style.js
-cd python && pytest tests/test_region_config.py tests/test_structure_catalog.py tests/test_find_neurons_sahi.py tests/test_region_whole_flag.py -q
+cd python && pytest tests/test_structure_catalog.py tests/test_qt_window_utils.py tests/test_adjust_overlay_init.py tests/test_region_config.py tests/test_region_whole_flag.py tests/test_find_neurons_sahi.py -q
 ```
 
 Full JS suite: `yarn test:js` (or individual `node scripts/test-*.js`).
