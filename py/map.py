@@ -33,7 +33,7 @@ from qtpy.QtWidgets import (
 from segment_anything import SamPredictor, sam_model_registry
 from qtpy import QtCore, QtGui
 from qtpy.QtCore import QTimer
-from adjust import numpy_array_to_qimage
+from qt_image_utils import numpy_array_to_qimage
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline

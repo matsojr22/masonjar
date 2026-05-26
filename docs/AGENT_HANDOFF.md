@@ -6,9 +6,11 @@ Last updated: 2026-05-26. Use this file to resume work; long-term architecture s
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **2.1.2** |
-| Latest tag | `v2.1.2` on `main` |
+| `package.json` version | **2.2.0** |
+| Latest tag | `v2.2.0` on `main` |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v2.2.0** — Viewer/Editor CCF hierarchy + searchable area picker; fix align/adjust launch (overlay init, `qt_image_utils`, IPC argv tokens). Includes Isolate Regions wizard and SAHI cell-detector fix from v2.1.0+.
 
 **v2.1.2** — main window starts maximized on macOS/Windows; pipeline tool pages scroll when content exceeds the viewport (`tool-page` via `js/run.js`).
 

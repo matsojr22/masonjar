@@ -1328,13 +1328,17 @@ ipcMain.on("runMax", function (event: any, data: any[]) {
 ipcMain.on("runAdjust", function (event: any, data: any[]) {
   var structPath = path.join(appDir, "csv/structure_map.pkl");
 
+  const adjustArgs: string[] = [];
+  appendFlagPathArg(adjustArgs, "-i", data[0]);
+  appendFlagPathArg(adjustArgs, "-s", structPath);
+  appendFlagPathArg(adjustArgs, "-a", data[1]);
+  appendSliceListArg(adjustArgs, data, 2);
   let options = {
     mode: "text",
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
-    args: [`-i ${data[0]}`, `-s ${structPath}`, `-a ${data[1]}`],
+    args: adjustArgs,
   };
-  appendSliceListArg(options.args, data, 2);
   let pyshell = new PythonShell("adjust.py", options);
   attachPythonShellKillCleanup(pyshell, "killAdjust");
   var total: number = 0;
@@ -1376,22 +1380,22 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
   const nrrdPath = path.join(homeDir, "nrrd");
   const mapPath = path.join(appDir, "csv/structure_map.pkl");
 
+  const alignArgs: string[] = [];
+  appendFlagPathArg(alignArgs, "-o", data[1]);
+  appendFlagPathArg(alignArgs, "-i", data[0]);
+  alignArgs.push("-w", String(data[2] ?? "").trim());
+  appendFlagPathArg(alignArgs, "-a", data[3]);
+  appendFlagPathArg(alignArgs, "-m", modelPath);
+  appendFlagPathArg(alignArgs, "-n", nrrdPath);
+  appendFlagPathArg(alignArgs, "-c", mapPath);
+  alignArgs.push("-l", String(data[4] ?? "").trim());
+  appendSliceListArg(alignArgs, data, 5);
   let options = {
     mode: "text",
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
-    args: [
-      `-o ${data[1]}`,
-      `-i ${data[0]}`,
-      `-w ${data[2]}`,
-      `-a ${data[3]}`,
-      `-m ${modelPath}`,
-      `-n ${nrrdPath}`,
-      `-c ${mapPath}`,
-      `-l ${data[4]}`,
-    ],
+    args: alignArgs,
   };
-  appendSliceListArg(options.args, data, 5);
   let pyshell = new PythonShell("map.py", options);
   attachPythonShellKillCleanup(pyshell, "killAlign");
   var total: number = 0;

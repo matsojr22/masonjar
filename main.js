@@ -1130,13 +1130,17 @@ ipcMain.on("runMax", function (event, data) {
 // Adjust
 ipcMain.on("runAdjust", function (event, data) {
     var structPath = path.join(appDir, "csv/structure_map.pkl");
+    const adjustArgs = [];
+    appendFlagPathArg(adjustArgs, "-i", data[0]);
+    appendFlagPathArg(adjustArgs, "-s", structPath);
+    appendFlagPathArg(adjustArgs, "-a", data[1]);
+    appendSliceListArg(adjustArgs, data, 2);
     let options = {
         mode: "text",
         pythonPath: path.join(envPythonPath, pyCommand),
         scriptPath: pyScriptsPath,
-        args: [`-i ${data[0]}`, `-s ${structPath}`, `-a ${data[1]}`],
+        args: adjustArgs,
     };
-    appendSliceListArg(options.args, data, 2);
     let pyshell = new PythonShell("adjust.py", options);
     attachPythonShellKillCleanup(pyshell, "killAdjust");
     var total = 0;
@@ -1176,25 +1180,26 @@ ipcMain.on("runAdjust", function (event, data) {
 });
 // Alignment
 ipcMain.on("runAlign", function (event, data) {
+    var _a, _b;
     const modelPath = path.join(homeDir, "models/predictor.pt");
     const nrrdPath = path.join(homeDir, "nrrd");
     const mapPath = path.join(appDir, "csv/structure_map.pkl");
+    const alignArgs = [];
+    appendFlagPathArg(alignArgs, "-o", data[1]);
+    appendFlagPathArg(alignArgs, "-i", data[0]);
+    alignArgs.push("-w", String((_a = data[2]) !== null && _a !== void 0 ? _a : "").trim());
+    appendFlagPathArg(alignArgs, "-a", data[3]);
+    appendFlagPathArg(alignArgs, "-m", modelPath);
+    appendFlagPathArg(alignArgs, "-n", nrrdPath);
+    appendFlagPathArg(alignArgs, "-c", mapPath);
+    alignArgs.push("-l", String((_b = data[4]) !== null && _b !== void 0 ? _b : "").trim());
+    appendSliceListArg(alignArgs, data, 5);
     let options = {
         mode: "text",
         pythonPath: path.join(envPythonPath, pyCommand),
         scriptPath: pyScriptsPath,
-        args: [
-            `-o ${data[1]}`,
-            `-i ${data[0]}`,
-            `-w ${data[2]}`,
-            `-a ${data[3]}`,
-            `-m ${modelPath}`,
-            `-n ${nrrdPath}`,
-            `-c ${mapPath}`,
-            `-l ${data[4]}`,
-        ],
+        args: alignArgs,
     };
-    appendSliceListArg(options.args, data, 5);
     let pyshell = new PythonShell("map.py", options);
     attachPythonShellKillCleanup(pyshell, "killAlign");
     var total = 0;

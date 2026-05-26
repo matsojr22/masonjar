@@ -20,6 +20,8 @@ from qtpy.QtWidgets import (
     QLineEdit,
     QListWidget,
     QButtonGroup,
+    QComboBox,
+    QCompleter,
 )
 from qtpy.QtGui import QImage, QPixmap, QPainter, QColor
 from qtpy.QtCore import Qt, QPoint, QEvent
@@ -29,34 +31,8 @@ from adjust_channels import (
     resolve_previews_dir,
 )
 from slice_index import build_adjust_pairs
-
-
-def numpy_array_to_qimage(array):
-    """Convert a numpy array to a QImage."""
-    if np.ndim(array) == 3:
-        h, w, ch = array.shape
-        # Ensure array is contiguous in memory
-        if array.flags["C_CONTIGUOUS"]:
-            array = array.copy(order="C")
-        if ch == 3:
-            format = QImage.Format.Format_RGB888
-        elif ch == 4:
-            format = QImage.Format.Format_ARGB32
-        else:
-            raise ValueError("Unsupported channel number: {}".format(ch))
-    elif np.ndim(array) == 2:
-        h, w = array.shape
-        format = QImage.Format.Format_Grayscale8
-    else:
-        raise ValueError("Unsupported numpy array shape: {}".format(array.shape))
-
-    # Create a QImage from the data
-    qimage = QImage(array.data, w, h, array.strides[0], format)
-
-    # Make sure to keep a reference to the array during the lifetime of the QImage
-    qimage.ndarray = array
-
-    return qimage
+from structure_catalog import get_region, list_levels, list_regions_at_level, load_catalog
+from qt_image_utils import numpy_array_to_qimage
 
 
 def qimage_to_numpy_array(qimage):
@@ -119,11 +95,20 @@ class FileSelector(QMainWindow):
 
 
 class AnnotationViewer(QMainWindow):
-    def __init__(self, pairs, structure_map, images_dir=None, previews_dir=None):
+    def __init__(
+        self,
+        pairs,
+        structure_map,
+        images_dir=None,
+        previews_dir=None,
+        catalog=None,
+    ):
         super().__init__()
 
         self.pairs = pairs
         self.structure_map = structure_map
+        self.catalog = catalog
+        self._area_combo_updating = False
         self.images_dir = (
             Path(images_dir) if images_dir else Path(pairs[0][0]).parent
         )
@@ -146,6 +131,7 @@ class AnnotationViewer(QMainWindow):
         self.zoom_level = 100
         self.selected_region_id = None
         self.selected_region_name = "None"
+        self._overlay_ready = False
 
         self.current_label = None
         with open(self.pairs[self.current_index][1], "rb") as f:
@@ -170,6 +156,32 @@ class AnnotationViewer(QMainWindow):
         self.channel_button_group.setExclusive(True)
         self.channel_button_group.idClicked.connect(self._on_channel_selected)
         ui_layout.addLayout(channel_row)
+
+        paint_row = QHBoxLayout()
+        paint_row.addWidget(QLabel("Hierarchy depth:", self))
+        self.level_combo = QComboBox(self)
+        self.level_combo.currentIndexChanged.connect(self._on_level_changed)
+        paint_row.addWidget(self.level_combo)
+        paint_row.addWidget(QLabel("Area:", self))
+        self.area_combo = QComboBox(self)
+        self.area_combo.setEditable(True)
+        self.area_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.area_combo.setMinimumWidth(280)
+        area_completer = self.area_combo.completer()
+        area_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        area_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.area_combo.lineEdit().textChanged.connect(self._on_area_search_changed)
+        self.area_combo.activated.connect(self._on_area_activated)
+        paint_row.addWidget(self.area_combo)
+        paint_row.addStretch()
+        ui_layout.addLayout(paint_row)
+        self.paint_hint_label = QLabel(
+            "Select area for brush; right-click slice still picks existing labels.",
+            self,
+        )
+        self.paint_hint_label.setWordWrap(True)
+        ui_layout.addWidget(self.paint_hint_label)
+        self._init_paint_region_controls()
 
         # images
         image_layout = QHBoxLayout()
@@ -340,6 +352,135 @@ class AnnotationViewer(QMainWindow):
         name, path = self.channel_sources[default_id]
         self.switch_channel(path, name)
 
+    def _init_paint_region_controls(self):
+        """Populate hierarchy/area combos from the CCF catalog."""
+        if not self.catalog:
+            self.level_combo.setEnabled(False)
+            self.area_combo.setEnabled(False)
+            return
+
+        self.level_combo.blockSignals(True)
+        self.level_combo.clear()
+        levels = list_levels(self.catalog)
+        default_index = 0
+        for i, lv in enumerate(levels):
+            label = (
+                f"Level {lv['level']} — {lv['exampleAcronym']} "
+                f"({lv['exampleName']})"
+            )
+            self.level_combo.addItem(label, lv["level"])
+            if lv["level"] == 6:
+                default_index = i
+        self.level_combo.setCurrentIndex(default_index)
+        self.level_combo.blockSignals(False)
+        self._rebuild_area_combo()
+
+    def _current_catalog_level(self) -> int | None:
+        if self.level_combo.count() == 0:
+            return None
+        level = self.level_combo.currentData()
+        return int(level) if level is not None else None
+
+    def _region_display_text(self, node: dict) -> str:
+        return f"{node['acronym']} — {node['name']}"
+
+    def _region_tooltip(self, region_id: int) -> str:
+        info = self.structure_map.get(np.uint32(region_id), {})
+        color = info.get("color")
+        if color:
+            return f"RGB{color}"
+        return ""
+
+    def _rebuild_area_combo(self, search_query: str = "", select_id: int | None = None):
+        if not self.catalog:
+            return
+        level = self._current_catalog_level()
+        if level is None:
+            return
+
+        regions = list_regions_at_level(level, search_query, self.catalog)
+        self._area_combo_updating = True
+        self.area_combo.blockSignals(True)
+        line_edit = self.area_combo.lineEdit()
+        if line_edit is not None:
+            line_edit.blockSignals(True)
+
+        self.area_combo.clear()
+        select_index = -1
+        for i, node in enumerate(regions):
+            display = self._region_display_text(node)
+            self.area_combo.addItem(display, node["id"])
+            self.area_combo.setItemData(
+                i,
+                self._region_tooltip(node["id"]),
+                Qt.ItemDataRole.ToolTipRole,
+            )
+            if select_id is not None and node["id"] == select_id:
+                select_index = i
+
+        if select_index >= 0:
+            self.area_combo.setCurrentIndex(select_index)
+            if line_edit is not None:
+                line_edit.setText(self.area_combo.currentText())
+        elif regions and not search_query.strip():
+            self.area_combo.setCurrentIndex(0)
+            if line_edit is not None:
+                line_edit.setText(self.area_combo.currentText())
+            self.set_paint_region(regions[0]["id"])
+
+        if line_edit is not None:
+            line_edit.blockSignals(False)
+        self.area_combo.blockSignals(False)
+        self._area_combo_updating = False
+
+    def _on_level_changed(self, _index: int):
+        self._rebuild_area_combo()
+
+    def _on_area_search_changed(self, text: str):
+        if self._area_combo_updating or not self.catalog:
+            return
+        self._rebuild_area_combo(text)
+
+    def _on_area_activated(self, index: int):
+        if index < 0 or not self.catalog:
+            return
+        region_id = self.area_combo.itemData(index)
+        if region_id is None:
+            return
+        self.set_paint_region(int(region_id))
+
+    def set_paint_region(self, region_id, acronym=None, name=None):
+        """Set the brush target region from catalog id."""
+        region_id = int(region_id)
+        self.selected_region_id = np.uint32(region_id)
+        if acronym and name:
+            self.selected_region_name = f"{acronym} — {name}"
+        else:
+            node = get_region(region_id, self.catalog) if self.catalog else None
+            if node:
+                self.selected_region_name = self._region_display_text(node)
+            else:
+                info = self.structure_map.get(self.selected_region_id, {})
+                self.selected_region_name = info.get("name", "Unknown region")
+        if self._overlay_ready:
+            self.repaint_selected_only()
+
+    def _sync_area_combo_to_region(self, region_id):
+        """After right-click pick, align hierarchy/area combos with the slice label."""
+        if not self.catalog:
+            return
+        node = get_region(int(region_id), self.catalog)
+        if not node:
+            return
+        level = node["st_level"]
+        for i in range(self.level_combo.count()):
+            if self.level_combo.itemData(i) == level:
+                self.level_combo.blockSignals(True)
+                self.level_combo.setCurrentIndex(i)
+                self.level_combo.blockSignals(False)
+                break
+        self._rebuild_area_combo(select_id=node["id"])
+
     def _on_channel_selected(self, button_id: int):
         if button_id < 0 or button_id >= len(self.channel_sources):
             return
@@ -460,6 +601,7 @@ class AnnotationViewer(QMainWindow):
             self.img_scene.removeItem(self.img_scene.items()[0])
             self.img_scene.addPixmap(overlayed)
 
+        self._overlay_ready = True
         self.repaint_selected_only()
 
     def paint_deltas(self, points):
@@ -653,6 +795,13 @@ class AnnotationViewer(QMainWindow):
 
     def repaint_selected_only(self):
         """Repaint the selected region only"""
+        if (
+            not self._overlay_ready
+            or not hasattr(self, "anno_pixmap")
+            or self.anno_pixmap is None
+            or self.anno_pixmap.isNull()
+        ):
+            return
 
         # make a copy of the annotation pixmap
         anno_pixmap = self.anno_pixmap.copy()
@@ -704,9 +853,18 @@ class AnnotationViewer(QMainWindow):
                     image_point = self.view_to_image_coordinates(source.parent(), point)
                     label_value = self.current_label[image_point.y(), image_point.x()]
                     self.selected_region_id = label_value
-                    self.selected_region_name = self.structure_map.get(
-                        label_value, {}
-                    ).get("name", "Unknown region")
+                    node = (
+                        get_region(int(label_value), self.catalog)
+                        if self.catalog
+                        else None
+                    )
+                    if node:
+                        self.selected_region_name = self._region_display_text(node)
+                        self._sync_area_combo_to_region(label_value)
+                    else:
+                        self.selected_region_name = self.structure_map.get(
+                            label_value, {}
+                        ).get("name", "Unknown region")
                     self.repaint_selected_only()
 
         elif event.type() == QEvent.MouseMove:
@@ -777,6 +935,17 @@ if __name__ == "__main__":
     structure_map_path = Path(args.structures.strip())
     structure_map = pickle.load(open(structure_map_path, "rb"))
 
+    graph_path = structure_map_path.parent / "structure_graph.json"
+    catalog = None
+    if graph_path.is_file():
+        catalog = load_catalog(graph_path)
+    else:
+        print(
+            f"WARNING: structure graph not found at {graph_path}",
+            file=sys.stderr,
+            flush=True,
+        )
+
     pairs, orphan_images, orphan_annos = build_adjust_pairs(
         images_path, annotations_path, args.slice_list.strip() or None
     )
@@ -816,8 +985,15 @@ if __name__ == "__main__":
         previews_dir = Path(args.previews_dir.strip())
 
     window = AnnotationViewer(
-        pairs, structure_map, images_path, previews_dir
+        pairs, structure_map, images_path, previews_dir, catalog
     )
+    if catalog is None:
+        QMessageBox.critical(
+            window,
+            "Atlas catalog missing",
+            f"Could not load CCF ontology:\n{graph_path}\n\n"
+            "Paint-region selection is disabled; right-click on existing labels still works.",
+        )
     window.show()
 
     sys.exit(app.exec_())

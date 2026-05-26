@@ -22,6 +22,8 @@ const PAGES = [
 	"dapi_cleanup.html",
 	"credits.html",
 	"batch_select.html",
+	"align.html",
+	"adjust.html",
 ];
 
 /** page → required element ids (executeJavaScript in renderer). */
@@ -54,6 +56,8 @@ const DOM_ASSERTIONS = {
 		"saturation",
 		"run",
 	],
+	"align.html": ["indir", "outdir", "run", "spacing", "whole", "half"],
+	"adjust.html": ["imdir", "annodir", "run"],
 };
 
 const repoRoot = path.join(__dirname, "..");
