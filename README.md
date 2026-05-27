@@ -4,7 +4,7 @@
 
 # Introduction
 
-Mason Jar is a fork of [Bell Jar](https://github.com/asoronow/belljar) for neurohistology analysis of the mouse brain. It supports new `.masonjar` project bundles while remaining compatible with legacy `.belljar` project files inside bundles.
+Mason Jar is a fork of [Bell Jar](https://github.com/asoronow/belljar) for neurohistology analysis of the mouse brain. It supports new `.masonjar` project bundles designed to import data directly from CZI image files, while remaining compatible with legacy `.belljar` files inside bundles and the flat directory styles from the original publication.
 
 # Compatibility
 
@@ -62,4 +62,4 @@ with open("Annotation_MyBrain_s001.pkl", "rb") as file:
 
 # Attribution
 
-Mason Jar is maintained by [matsojr22](https://github.com/matsojr22). It is derived from Bell Jar by Alec Soronow and the Euiseok Kim Lab, used under the MIT License. See `pages/credits.html` for full attribution.
+Mason Jar is maintained by [matsojr22](https://github.com/matsojr22). It is derived from Bell Jar by Alec Soronow and Matt Jacobs at the Euiseok Kim Lab, used under the MIT License. See `pages/credits.html` for full attribution.
