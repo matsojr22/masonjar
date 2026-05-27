@@ -7,7 +7,7 @@ Last updated: 2026-05-27 (CZI multi-folder ordering v2.4.4). Use this file to re
 | Item | Value |
 |------|--------|
 | `package.json` version | **2.4.4** |
-| Latest tag | `v2.4.4` (pending push) |
+| Latest tag | `v2.4.4` |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
 
 **v2.4.4** — CZI multi-folder import ordering. Step 2 probes **incrementally** (new folder only on add; **Re-probe all** for full refresh); live `probeStatus` from `updateLoad`. Folder list order drives batch concatenation via `scan_index` in `naturalCompare` / `buildSliceOrder` (e.g. two M514 day folders → `M514_s001`… contiguous, not interleaved by section number). Channels keyed by `file.path` for duplicate basenames across folders. Step 2 UI: numbered folders, per-folder file counts, ↑↓ reorder without re-probe, mosaic info capped in DOM. Tests: `testBuildSliceOrderTwoDirsDuplicateNames` in `scripts/test-czi-import.js`.
