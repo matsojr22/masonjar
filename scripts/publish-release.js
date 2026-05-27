@@ -210,17 +210,86 @@ function findArtifacts(version, allPlatforms) {
 	return [...new Set(found)].sort();
 }
 
-function releaseNotes(version) {
-	return (
-		"## Mason Jar v" +
-		version +
-		"\n\n" +
-		"**Windows (x64):** download `masonjar-win32-x64-" +
-		version +
-		".zip`, unzip, and run the app inside.\n\n" +
-		"_macOS builds are omitted from this release upload while Windows is stabilized. " +
-		"Build locally with `node scripts/build-release.js --all-platforms` if needed._\n"
+function readHandoffSummary(version) {
+	const handoffPath = path.join(REPO_ROOT, "docs", "AGENT_HANDOFF.md");
+	try {
+		const text = fs.readFileSync(handoffPath, "utf8");
+		const escaped = version.replace(/\./g, "\\.");
+		const re = new RegExp(
+			"\\*\\*v" + escaped + "\\*\\* — ([^\n]+)",
+			"i",
+		);
+		const match = text.match(re);
+		if (!match) {
+			return "";
+		}
+		let summary = match[1].trim();
+		// First sentence is enough for GitHub release blurbs.
+		const dot = summary.indexOf(". ");
+		if (dot > 0) {
+			summary = summary.slice(0, dot + 1);
+		}
+		// Flatten inline markdown links [`file`](path) → file
+		summary = summary.replace(/\[(`[^`]+`)\]\([^)]+\)/g, "$1");
+		return summary;
+	} catch (_e) {
+		return "";
+	}
+}
+
+function releaseNotes(version, opts) {
+	opts = opts || {};
+	const allPlatforms = !!opts.allPlatforms;
+	const summary = readHandoffSummary(version);
+	const lines = ["## Mason Jar v" + version, ""];
+
+	if (summary) {
+		lines.push("### What's new", "", summary, "");
+	}
+
+	lines.push("### Downloads", "");
+
+	if (allPlatforms) {
+		lines.push(
+			"| Platform | File |",
+			"|----------|------|",
+			"| **Windows (x64)** | `masonjar-win32-x64-" +
+				version +
+				".zip` — unzip and run the app inside the folder |",
+			"| **macOS (Apple Silicon)** | `masonjar-" +
+				version +
+				"-arm64.dmg` |",
+			"| **macOS (Intel)** | `masonjar-" + version + "-x64.dmg` |",
+			"",
+			"On macOS, if Gatekeeper blocks the app, use **right-click → Open** on first launch.",
+			"",
+		);
+	} else {
+		lines.push(
+			"- **Windows (x64):** `masonjar-win32-x64-" +
+				version +
+				".zip` — unzip and run the app inside the folder.",
+			"",
+			"_This upload includes the Windows build only. macOS DMGs are published separately with `--all-platforms`._",
+			"",
+		);
+	}
+
+	lines.push(
+		"### Upgrading",
+		"",
+		"Install over your previous Mason Jar folder or unzip to a new path. User data and models stay under `~/.masonjar` (Windows: `%USERPROFILE%\\.masonjar`).",
+		"",
+		"### Build from source",
+		"",
+		"```bash",
+		"node scripts/build-release.js",
+		"node scripts/publish-release.js --all-platforms",
+		"```",
+		"",
 	);
+
+	return lines.join("\n");
 }
 
 async function main() {
@@ -267,15 +336,23 @@ async function main() {
 		}
 	}
 
+	const notesBody = releaseNotes(version, opts);
+
 	if (!release || !release.id) {
 		release = await githubRequest("POST", base + "/releases", token, {
 			tag_name: tag,
 			name: "Mason Jar v" + version,
-			body: releaseNotes(version),
+			body: notesBody,
 			draft: false,
 			prerelease: false,
 		});
 		console.log("Created release id=" + release.id);
+	} else {
+		await githubRequest("PATCH", base + "/releases/" + release.id, token, {
+			name: "Mason Jar v" + version,
+			body: notesBody,
+		});
+		console.log("Updated release notes for id=" + release.id);
 	}
 
 	const existing = new Set((release.assets || []).map((a) => a.name));
