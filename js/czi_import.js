@@ -536,6 +536,17 @@ function defaultSliceId(basename, sceneIndex, sceneCount) {
 	return stem;
 }
 
+function canonicalSourceDir(dir) {
+	if (!dir) {
+		return "";
+	}
+	try {
+		return path.resolve(String(dir).trim());
+	} catch (e) {
+		return String(dir).trim();
+	}
+}
+
 function normalizeProbeFileEntry(file, sourceDir, scanIndex) {
 	var scenes = (file.scenes || []).map(function (sc) {
 		var originalSliceId =
@@ -792,20 +803,31 @@ function validateSliceOrder(cziImport) {
 }
 
 function mergeProbeDirIntoImport(cziImport, probeResult, sourceDir, scanIndex) {
+	var canonicalDir = canonicalSourceDir(sourceDir);
 	var incoming = (probeResult.files || []).map(function (f) {
-		return normalizeProbeFileEntry(f, sourceDir, scanIndex);
+		return normalizeProbeFileEntry(f, canonicalDir, scanIndex);
 	});
 	var files = (cziImport.files || []).filter(function (f) {
-		return f.source_dir !== sourceDir;
+		return canonicalSourceDir(f.source_dir) !== canonicalDir;
 	});
 	cziImport.files = files.concat(incoming);
 	if (!cziImport.source_dirs) {
 		cziImport.source_dirs = [];
 	}
-	if (cziImport.source_dirs.indexOf(sourceDir) < 0) {
-		cziImport.source_dirs.push(sourceDir);
+	var dirs = cziImport.source_dirs;
+	var foundIdx = -1;
+	for (var d = 0; d < dirs.length; d++) {
+		if (canonicalSourceDir(dirs[d]) === canonicalDir) {
+			foundIdx = d;
+			break;
+		}
 	}
-	cziImport.source_dir = cziImport.source_dirs[0] || sourceDir || "";
+	if (foundIdx >= 0) {
+		dirs[foundIdx] = canonicalDir;
+	} else {
+		dirs.push(canonicalDir);
+	}
+	cziImport.source_dir = dirs[0] || canonicalDir || "";
 	rebuildChannelsFromFiles(cziImport);
 	return cziImport;
 }
@@ -1747,6 +1769,7 @@ module.exports = {
 	entryScanIndex: entryScanIndex,
 	buildFilesLookup: buildFilesLookup,
 	resolveFileEntry: resolveFileEntry,
+	canonicalSourceDir: canonicalSourceDir,
 	normalizeSourceDirs: normalizeSourceDirs,
 	naturalSortKey: naturalSortKey,
 	naturalCompare: naturalCompare,

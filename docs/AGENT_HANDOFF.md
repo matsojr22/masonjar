@@ -1,14 +1,16 @@
 # Agent session handoff
 
-Last updated: 2026-05-27 (CZI multi-folder ordering v2.4.4). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-05-27 (CZI multi-folder path canonicalization v2.4.5). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 ## Current release
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **2.4.4** |
-| Latest tag | `v2.4.4` |
+| `package.json` version | **2.4.5** |
+| Latest tag | `v2.4.5` |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v2.4.5** — CZI multi-folder import reliability. `canonicalSourceDir()` (`path.resolve`) on all wizard `source_dir` strings so Windows path variants cannot reset folder-2 `scan_index` to 0 (fixes M514 two-day interleave). Probe IPC always resolves (`cziProbeResult` on close/kill/error; 60 min wizard timeout; single-flight CZI guard). Step 2 **`probeLog`** mirrors `cziJobLog`/`updateLoad`; Application log replays buffered lines on first open. Re-probe all no longer kills an in-flight probe. Tests: `testResyncScanIndicesCanonicalPaths`, `testMergeProbeDirCanonicalReplace` in `scripts/test-czi-import.js`.
 
 **v2.4.4** — CZI multi-folder import ordering. Step 2 probes **incrementally** (new folder only on add; **Re-probe all** for full refresh); live `probeStatus` from `updateLoad`. Folder list order drives batch concatenation via `scan_index` in `naturalCompare` / `buildSliceOrder` (e.g. two M514 day folders → `M514_s001`… contiguous, not interleaved by section number). Channels keyed by `file.path` for duplicate basenames across folders. Step 2 UI: numbered folders, per-folder file counts, ↑↓ reorder without re-probe, mosaic info capped in DOM. Tests: `testBuildSliceOrderTwoDirsDuplicateNames` in `scripts/test-czi-import.js`.
 

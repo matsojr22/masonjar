@@ -334,6 +334,76 @@ function testNormalizeSourceDirsPreservesOrder() {
 	]);
 }
 
+function testCanonicalSourceDir() {
+	assert.strictEqual(
+		cziImport.canonicalSourceDir("/foo/bar"),
+		path.resolve("/foo/bar"),
+	);
+	assert.strictEqual(
+		cziImport.canonicalSourceDir("/foo/bar/"),
+		path.resolve("/foo/bar"),
+	);
+}
+
+function testMergeProbeDirCanonicalReplace() {
+	var imp = cziImport.buildDefaultCziImport("");
+	var day2Root = path.join("/tmp", "day2");
+	var makeFile = function (filePath) {
+		return {
+			path: filePath,
+			basename: path.basename(filePath),
+			scene_count: 1,
+			scenes: [{ index: 0, sliceId: "s1", originalSliceId: "s1" }],
+		};
+	};
+	var day2a = path.join(day2Root, "A.czi");
+	var day2b = path.join(day2Root, "B.czi");
+	cziImport.mergeProbeDirIntoImport(
+		imp,
+		{ files: [makeFile(day2a)] },
+		day2Root + path.sep,
+		1,
+	);
+	assert.strictEqual(imp.files.length, 1);
+	assert.strictEqual(imp.files[0].path, day2a);
+	cziImport.mergeProbeDirIntoImport(
+		imp,
+		{ files: [makeFile(day2b)] },
+		day2Root,
+		1,
+	);
+	assert.strictEqual(imp.files.length, 1);
+	assert.strictEqual(imp.files[0].path, day2b);
+	assert.strictEqual(cziImport.canonicalSourceDir(imp.files[0].source_dir), path.resolve(day2Root));
+}
+
+function testResyncScanIndicesCanonicalPaths() {
+	var dirs = [path.resolve("/day1"), path.resolve("/day2")];
+	var files = [
+		{
+			path: "/day1/M514(1).czi",
+			basename: "M514(1).czi",
+			source_dir: "/day1",
+			scan_index: 0,
+		},
+		{
+			path: path.join("/day2", "M514(1).czi"),
+			basename: "M514(1).czi",
+			source_dir: "/day2/",
+			scan_index: 0,
+		},
+	];
+	for (var i = 0; i < files.length; i++) {
+		var canon = cziImport.canonicalSourceDir(files[i].source_dir);
+		files[i].source_dir = canon;
+		var idx = dirs.indexOf(canon);
+		files[i].scan_index = idx >= 0 ? idx : 0;
+	}
+	assert.strictEqual(files[0].scan_index, 0);
+	assert.strictEqual(files[1].scan_index, 1);
+	assert.strictEqual(files[1].source_dir, path.resolve("/day2"));
+}
+
 function testChannelPathKeysDuplicateBasenames() {
 	var imp = cziImport.buildDefaultCziImport("");
 	cziImport.mergeProbeDirIntoImport(
@@ -520,6 +590,9 @@ testBuildSliceOrderSingleSceneMultiZ();
 testBuildSliceOrderRenameMultiDir();
 testBuildSliceOrderTwoDirsDuplicateNames();
 testNormalizeSourceDirsPreservesOrder();
+testCanonicalSourceDir();
+testMergeProbeDirCanonicalReplace();
+testResyncScanIndicesCanonicalPaths();
 testChannelPathKeysDuplicateBasenames();
 testValidateSliceOrderDuplicate();
 testCollectKeptSignalRoleKeys();

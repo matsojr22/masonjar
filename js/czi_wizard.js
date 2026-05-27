@@ -35,6 +35,12 @@ var extractWaitStartedAt = 0;
 var extractLastPythonActivityAt = 0;
 var extractGapEmitted = false;
 var EXTRACT_LOG_MAX_LINES = 2000;
+var PROBE_TIMEOUT_MS = 60 * 60 * 1000;
+var PROBE_LOG_MAX_LINES = 1500;
+
+function sourceDirMatches(a, b) {
+	return cziImport.canonicalSourceDir(a) === cziImport.canonicalSourceDir(b);
+}
 
 function qs(id) {
 	return document.getElementById(id);
@@ -189,6 +195,19 @@ function verboseExtractLog(msg) {
 		var lines = el.textContent.split("\n");
 		if (lines.length > EXTRACT_LOG_MAX_LINES) {
 			el.textContent = lines.slice(lines.length - EXTRACT_LOG_MAX_LINES).join("\n");
+		}
+		el.scrollTop = el.scrollHeight;
+	}
+}
+
+function verboseProbeLog(msg) {
+	console.log("[CziWizard]", msg);
+	var el = qs("probeLog");
+	if (el) {
+		el.textContent = (el.textContent ? el.textContent + "\n" : "") + msg;
+		var lines = el.textContent.split("\n");
+		if (lines.length > PROBE_LOG_MAX_LINES) {
+			el.textContent = lines.slice(lines.length - PROBE_LOG_MAX_LINES).join("\n");
 		}
 		el.scrollTop = el.scrollHeight;
 	}
@@ -410,17 +429,23 @@ function sortedCziFilesForDisplay() {
 }
 
 function countFilesForSourceDir(dir) {
+	var target = cziImport.canonicalSourceDir(dir);
 	return (wizardState.cziImport.files || []).filter(function (f) {
-		return f.source_dir === dir && !f.error;
+		return cziImport.canonicalSourceDir(f.source_dir) === target && !f.error;
 	}).length;
 }
 
 function resyncScanIndices() {
-	var dirs = wizardState.cziSourceDirs || [];
+	var dirs = (wizardState.cziSourceDirs || []).map(function (d) {
+		return cziImport.canonicalSourceDir(d);
+	});
+	wizardState.cziSourceDirs = dirs;
 	wizardState.cziImport.source_dirs = dirs.slice();
 	var files = wizardState.cziImport.files || [];
 	for (var i = 0; i < files.length; i++) {
-		var idx = dirs.indexOf(files[i].source_dir);
+		var canon = cziImport.canonicalSourceDir(files[i].source_dir);
+		files[i].source_dir = canon;
+		var idx = dirs.indexOf(canon);
 		files[i].scan_index = idx >= 0 ? idx : 0;
 	}
 }
@@ -634,7 +659,9 @@ function renderSourceDirList() {
 			wizardState.cziSourceDirs.splice(idx, 1);
 			wizardState.cziImport.source_dirs = wizardState.cziSourceDirs.slice();
 			wizardState.cziImport.files = (wizardState.cziImport.files || []).filter(function (f) {
-				return wizardState.cziSourceDirs.indexOf(f.source_dir) >= 0;
+				return wizardState.cziSourceDirs.some(function (d) {
+					return sourceDirMatches(f.source_dir, d);
+				});
 			});
 			renderSourceDirList();
 			if (wizardState.cziSourceDirs.length) {
@@ -1539,7 +1566,32 @@ function updateExtractIndexNote(matchedCount) {
 
 function probeSingleDir(dir, scanIndex, folderProgress) {
 	var status = qs("probeStatus");
+	dir = cziImport.canonicalSourceDir(dir);
 	return new Promise(function (resolve, reject) {
+		var settled = false;
+		var timeoutId = setTimeout(function () {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			cleanup();
+			reject(
+				new Error(
+					"Probe timed out after " +
+						Math.round(PROBE_TIMEOUT_MS / 60000) +
+						" minutes for " +
+						dir,
+				),
+			);
+		}, PROBE_TIMEOUT_MS);
+
+		function cleanup() {
+			clearTimeout(timeoutId);
+			ipc.removeListener("updateLoad", onLoadProgress);
+			ipc.removeListener("cziJobLog", onJobLog);
+			ipc.removeListener("cziProbeResult", onResult);
+		}
+
 		function onLoadProgress(ev, data) {
 			if (!status) {
 				return;
@@ -1556,30 +1608,73 @@ function probeSingleDir(dir, scanIndex, folderProgress) {
 			} else if (message) {
 				status.textContent = message;
 			}
+			if (message) {
+				verboseProbeLog(message);
+			}
 		}
+
+		function onJobLog(ev, line) {
+			if (line) {
+				verboseProbeLog(String(line));
+			}
+		}
+
 		function onResult(ev, payload) {
-			ipc.removeListener("updateLoad", onLoadProgress);
-			ipc.removeListener("cziProbeResult", onResult);
+			if (settled) {
+				return;
+			}
+			settled = true;
+			cleanup();
 			if (!payload || payload.ok === false) {
 				reject(new Error((payload && payload.error) || "Probe failed for " + dir));
 				return;
 			}
 			cziImport.mergeProbeDirIntoImport(wizardState.cziImport, payload, dir, scanIndex);
+			resyncScanIndices();
 			resolve(payload);
 		}
+
 		ipc.on("updateLoad", onLoadProgress);
+		ipc.on("cziJobLog", onJobLog);
 		ipc.once("cziProbeResult", onResult);
+		verboseProbeLog("Starting probe: " + dir);
 		ipc.send("runCziProbe", [dir]);
 	});
+}
+
+function warnZeroFilesAfterProbe(dir, folderNum, status) {
+	var fileCount = countFilesForSourceDir(dir);
+	if (fileCount !== 0) {
+		if (status) {
+			status.classList.remove("text-warning");
+		}
+		return fileCount;
+	}
+	var warnMsg =
+		"Probe finished but 0 files matched folder " +
+		folderNum +
+		" — path mismatch? (" +
+		dir +
+		")";
+	if (status) {
+		status.textContent = warnMsg;
+		status.classList.add("text-warning");
+	}
+	verboseProbeLog("WARNING: " + warnMsg);
+	return 0;
 }
 
 async function probeIncrementalNewDir(dir) {
 	if (probeInFlight) {
 		return;
 	}
+	dir = cziImport.canonicalSourceDir(dir);
 	probeInFlight = true;
 	setProbeControlsBusy(true);
 	var scanIndex = wizardState.cziSourceDirs.indexOf(dir);
+	if (scanIndex < 0) {
+		scanIndex = wizardState.cziSourceDirs.length - 1;
+	}
 	var status = qs("probeStatus");
 	var nextBtn = qs("step2Next");
 	if (nextBtn) {
@@ -1590,12 +1685,13 @@ async function probeIncrementalNewDir(dir) {
 	if (status) {
 		status.textContent =
 			"Probing folder " + folderNum + "/" + totalFolders + ": " + dir;
+		status.classList.remove("text-warning");
 	}
 	try {
 		await probeSingleDir(dir, scanIndex, { index: folderNum, total: totalFolders });
-		var fileCount = countFilesForSourceDir(dir);
+		var fileCount = warnZeroFilesAfterProbe(dir, folderNum, status);
 		refreshAfterProbeIncremental(scanIndex === 0);
-		if (status) {
+		if (status && fileCount > 0) {
 			status.textContent =
 				"Folder " +
 				folderNum +
@@ -1610,6 +1706,16 @@ async function probeIncrementalNewDir(dir) {
 						}).length +
 						" file(s) total.");
 		}
+	} catch (err) {
+		alert(
+			"Probe failed for folder " +
+				folderNum +
+				":\n" +
+				dir +
+				"\n\n" +
+				String(err.message || err),
+		);
+		throw err;
 	} finally {
 		probeInFlight = false;
 		setProbeControlsBusy(false);
@@ -1619,14 +1725,15 @@ async function probeIncrementalNewDir(dir) {
 
 async function runProbeAll() {
 	if (probeInFlight) {
-		ipc.send("killCziProbe");
-		await new Promise(function (resolve) {
-			setTimeout(resolve, 150);
-		});
+		alert("A probe is already running. Wait for it to finish or cancel from the application log.");
+		return;
 	}
 	probeInFlight = true;
 	setProbeControlsBusy(true);
-	var dirs = wizardState.cziSourceDirs || [];
+	var dirs = (wizardState.cziSourceDirs || []).map(function (d) {
+		return cziImport.canonicalSourceDir(d);
+	});
+	wizardState.cziSourceDirs = dirs;
 	var status = qs("probeStatus");
 	var nextBtn = qs("step2Next");
 	if (nextBtn) {
@@ -1645,16 +1752,19 @@ async function runProbeAll() {
 		}
 		wizardState.cziImport.source_dirs = dirs.slice();
 		wizardState.cziImport.files = (wizardState.cziImport.files || []).filter(function (f) {
-			return dirs.indexOf(f.source_dir) >= 0;
+			var fd = cziImport.canonicalSourceDir(f.source_dir);
+			return dirs.indexOf(fd) >= 0;
 		});
 		if (status) {
 			status.textContent = "Probing " + dirs.length + " folder(s)…";
+			status.classList.remove("text-warning");
 		}
 		for (var i = 0; i < dirs.length; i++) {
 			if (status) {
 				status.textContent = "Probing folder " + (i + 1) + "/" + dirs.length + ": " + dirs[i];
 			}
 			await probeSingleDir(dirs[i], i, { index: i + 1, total: dirs.length });
+			warnZeroFilesAfterProbe(dirs[i], i + 1, status);
 			resyncScanIndices();
 			refreshAfterProbeIncremental(false);
 			if (status && i < dirs.length - 1) {
@@ -1687,6 +1797,9 @@ async function runProbeAll() {
 		if (nextBtn) {
 			nextBtn.disabled = !(wizardState.cziImport.files && wizardState.cziImport.files.length);
 		}
+	} catch (err) {
+		alert("Re-probe failed:\n" + String(err.message || err));
+		throw err;
 	} finally {
 		probeInFlight = false;
 		setProbeControlsBusy(false);
@@ -1699,6 +1812,9 @@ function hydrateWizardFromSavedCziImport(saved) {
 	if (!wizardState.cziSourceDirs.length && saved.source_dir) {
 		wizardState.cziSourceDirs = [saved.source_dir];
 	}
+	wizardState.cziSourceDirs = wizardState.cziSourceDirs.map(function (d) {
+		return cziImport.canonicalSourceDir(d);
+	});
 	resyncScanIndices();
 	wizardState.importResult = {
 		max_runs: saved.max_runs || {},
@@ -2135,8 +2251,12 @@ function bindStep2() {
 			if (!response[0]) {
 				return;
 			}
-			var dir = response[0];
-			if (wizardState.cziSourceDirs.indexOf(dir) >= 0) {
+			var dir = cziImport.canonicalSourceDir(response[0]);
+			if (
+				wizardState.cziSourceDirs.some(function (d) {
+					return sourceDirMatches(d, dir);
+				})
+			) {
 				alert("That folder is already in the list.");
 				return;
 			}
@@ -2144,7 +2264,7 @@ function bindStep2() {
 			wizardState.cziImport.source_dirs = wizardState.cziSourceDirs.slice();
 			renderSourceDirList();
 			probeIncrementalNewDir(dir).catch(function (err) {
-				alert(String(err.message || err));
+				console.error("[CziWizard] probe", err);
 			});
 		});
 		ipc.send("openDialog", {

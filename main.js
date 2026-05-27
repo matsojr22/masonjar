@@ -760,6 +760,7 @@ function createLogWindow() {
     win.webContents.once("did-finish-load", () => {
         try {
             win.webContents.send("resetLogSession", appLogSessionId);
+            flushLogUiQueue();
         }
         catch (_error) {
             // window closed during load
@@ -796,6 +797,7 @@ function ensureLogWindowVisible(opts) {
         logWin.show();
     }
     logWin.focus();
+    flushLogUiQueue();
     return true;
 }
 function hideLogWindowByUser() {
@@ -1661,7 +1663,16 @@ function mapExtractItemProgressPct(itemPct) {
 function mapProbeProgressPct(itemPct) {
     return 5 + Math.round(Math.min(100, Math.max(0, itemPct)) * 0.90);
 }
+/** One CZI PythonShell at a time per app process (probe or extract). */
+let activeCziPythonShell = null;
 function runCziPythonScript(event, scriptName, args, killChannel, resultChannel) {
+    if (activeCziPythonShell) {
+        event.sender.send(resultChannel, {
+            ok: false,
+            error: "Another CZI job is already running in this app instance",
+        });
+        return;
+    }
     const isProbe = scriptName === "czi_probe.py";
     const pythonExe = path.join(envPythonPath, pyCommand);
     queueLogLineForUi(`Launching Python: ${scriptName} (${pythonExe})`);
@@ -1674,11 +1685,36 @@ function runCziPythonScript(event, scriptName, args, killChannel, resultChannel)
         env: pythonShellEnv(),
     };
     const pyshell = new PythonShell(scriptName, options);
-    attachPythonShellKillCleanup(pyshell, killChannel);
+    activeCziPythonShell = pyshell;
     let total = 0;
     let current = 0;
     let resultPayload = null;
     let processStarted = false;
+    let resultSent = false;
+    let doneMessageReceived = false;
+    function releaseActiveCziShell() {
+        if (activeCziPythonShell === pyshell) {
+            activeCziPythonShell = null;
+        }
+    }
+    function sendCziResult(payload) {
+        if (resultSent) {
+            return;
+        }
+        resultSent = true;
+        releaseActiveCziShell();
+        cleanupPythonKillListener(killChannel);
+        event.sender.send(resultChannel, payload);
+    }
+    function finalizeCziFailure(err, code, signal) {
+        const pyFail = describePythonShellFailure(err, code, signal);
+        if (pyFail) {
+            reportPythonFailure(pyFail);
+            sendCziResult({ ok: false, error: pyFail });
+            return;
+        }
+        sendCziResult({ ok: false, error: "CZI script ended without result" });
+    }
     function ackProcessStarted() {
         if (!processStarted) {
             processStarted = true;
@@ -1686,6 +1722,23 @@ function runCziPythonScript(event, scriptName, args, killChannel, resultChannel)
             event.sender.send("cziJobLog", "Python process started");
         }
     }
+    pyshell.on("error", function (err) {
+        log(err);
+        if (!resultSent) {
+            sendCziResult({ ok: false, error: String(err) });
+        }
+    });
+    pyshell.on("close", function (code, signal) {
+        if (resultSent) {
+            releaseActiveCziShell();
+            cleanupPythonKillListener(killChannel);
+            return;
+        }
+        if (doneMessageReceived) {
+            return;
+        }
+        finalizeCziFailure(null, code, signal);
+    });
     pyshell.on("stderr", function (stderr) {
         ackProcessStarted();
         queueLogLineForUi(stderr);
@@ -1741,13 +1794,20 @@ function runCziPythonScript(event, scriptName, args, killChannel, resultChannel)
             }
         }
         if (message === "Done!") {
+            doneMessageReceived = true;
             pyshell.end((err, code, signal) => {
                 const pyFail = describePythonShellFailure(err, code, signal);
                 if (pyFail) {
                     reportPythonFailure(pyFail);
+                    sendCziResult({ ok: false, error: pyFail });
+                    return;
                 }
-                event.sender.send(resultChannel, pyFail ? { ok: false, error: pyFail } : resultPayload);
-                cleanupPythonKillListener(killChannel);
+                if (resultPayload != null) {
+                    sendCziResult(resultPayload);
+                }
+                else {
+                    sendCziResult({ ok: false, error: "CZI script finished without result payload" });
+                }
             });
         }
         else if (isProbe) {
@@ -1778,6 +1838,13 @@ function runCziPythonScript(event, scriptName, args, killChannel, resultChannel)
     });
     ipcMain.once(killChannel, function () {
         pyshell.kill();
+        if (!resultSent) {
+            setTimeout(function () {
+                if (!resultSent) {
+                    sendCziResult({ ok: false, error: "CZI job cancelled" });
+                }
+            }, 500);
+        }
     });
 }
 ipcMain.on("runCziProbe", function (event, data) {
@@ -1815,6 +1882,7 @@ ipcMain.on("toggleLogWindow", function (event) {
         logDismissedByUser = false;
         logWin.show();
         logWin.focus();
+        flushLogUiQueue();
     }
     replyLogWindowState(event);
 });
