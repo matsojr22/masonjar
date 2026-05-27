@@ -407,10 +407,49 @@ function entrySceneIndex(entry) {
 			: 0;
 }
 
+function entryScanIndex(entry) {
+	return entry.scan_index != null ? Number(entry.scan_index) : 0;
+}
+
+function buildFilesLookup(files) {
+	var byPath = {};
+	var byBasename = {};
+	var basenameCounts = {};
+	var list = files || [];
+	for (var f = 0; f < list.length; f++) {
+		var entry = list[f];
+		if (entry.path) {
+			byPath[String(entry.path)] = entry;
+		}
+		var bn = entry.basename || path.basename(entry.path || "");
+		if (bn) {
+			basenameCounts[bn] = (basenameCounts[bn] || 0) + 1;
+			byBasename[bn] = entry;
+		}
+	}
+	return { byPath: byPath, byBasename: byBasename, basenameCounts: basenameCounts };
+}
+
+function resolveFileEntry(fileKey, lookup) {
+	if (!fileKey || !lookup) {
+		return null;
+	}
+	var key = String(fileKey);
+	if (lookup.byPath[key]) {
+		return lookup.byPath[key];
+	}
+	var bn = path.basename(key);
+	if (lookup.basenameCounts[bn] === 1) {
+		return lookup.byBasename[bn] || null;
+	}
+	return null;
+}
+
 function naturalSortKey(entry, cziImport) {
 	var sliceId = entry.sliceId || entry.originalSliceId || "";
 	var basename = entry.basename || "";
 	var sceneIndex = entrySceneIndex(entry);
+	var scanIndex = entryScanIndex(entry);
 	var sectionId =
 		cziImport && cziImport.section_identifier ? String(cziImport.section_identifier) : "";
 	if (sectionId) {
@@ -418,13 +457,24 @@ function naturalSortKey(entry, cziImport) {
 		var section = parseSectionWithIdentifier(stem, sectionId);
 		var sectionKey = section != null ? section : 1e9;
 		var remainder = remainderAfterSectionIdentifier(stem, sectionId);
-		return [sectionKey, naturalSortTokens(remainder), sceneIndex, String(entry.path || "").toLowerCase()];
+		return [
+			scanIndex,
+			sectionKey,
+			naturalSortTokens(remainder),
+			sceneIndex,
+			String(entry.path || "").toLowerCase(),
+		];
 	}
 	var primary = sliceId || basename || entry.path || "";
-	return [naturalSortTokens(primary), sceneIndex, String(entry.path || "").toLowerCase()];
+	return [scanIndex, naturalSortTokens(primary), sceneIndex, String(entry.path || "").toLowerCase()];
 }
 
 function naturalCompare(a, b, cziImport) {
+	var scanA = entryScanIndex(a);
+	var scanB = entryScanIndex(b);
+	if (scanA !== scanB) {
+		return scanA - scanB;
+	}
 	var sectionId =
 		cziImport && cziImport.section_identifier ? String(cziImport.section_identifier) : "";
 	if (sectionId) {
@@ -614,7 +664,7 @@ function rebuildChannelsFromFiles(cziImport) {
 		for (var c = 0; c < chans.length; c++) {
 			var ch = chans[c];
 			channels.push({
-				file: file.basename,
+				file: file.path || file.basename,
 				index: ch.index,
 				label: ch.label || "",
 				role: ch.suggested_role || suggestRoleFromLabel(ch.label),
@@ -839,22 +889,14 @@ function countExtractWorkItems(cfg) {
 	var channels = (cfg.channels || []).filter(function (ch) {
 		return ch.keep && ch.role !== ROLE_UNUSED;
 	});
-	var filesByName = {};
-	var files = cfg.files || [];
-	for (var f = 0; f < files.length; f++) {
-		var entry = files[f];
-		filesByName[entry.basename] = entry;
-		filesByName[path.basename(entry.path || "")] = entry;
-	}
+	var lookup = buildFilesLookup(cfg.files || []);
 	var count = 0;
 	for (var i = 0; i < channels.length; i++) {
 		var ch = channels[i];
 		if (ch.role === ROLE_OTHER && !sanitizeOtherName(ch.other_name)) {
 			continue;
 		}
-		var fileKey = ch.file || "";
-		var fileEntry =
-			filesByName[fileKey] || filesByName[path.basename(fileKey)] || null;
+		var fileEntry = resolveFileEntry(ch.file || "", lookup);
 		if (!fileEntry) {
 			continue;
 		}
@@ -1183,15 +1225,22 @@ function normalizeSourceDirs(cziImport) {
 	if (!dirs.length && cziImport.source_dir) {
 		dirs = [cziImport.source_dir];
 	}
-	return dirs
-		.map(function (d) {
-			try {
-				return path.resolve(String(d || ""));
-			} catch (e) {
-				return String(d || "");
-			}
-		})
-		.sort();
+	var seen = {};
+	var out = [];
+	for (var i = 0; i < dirs.length; i++) {
+		var resolved;
+		try {
+			resolved = path.resolve(String(dirs[i] || ""));
+		} catch (e) {
+			resolved = String(dirs[i] || "");
+		}
+		if (!resolved || seen[resolved]) {
+			continue;
+		}
+		seen[resolved] = true;
+		out.push(resolved);
+	}
+	return out;
 }
 
 function fingerprintPayload(cziImport) {
@@ -1303,13 +1352,7 @@ function scenesForFileEntry(fileEntry, cziImport) {
 }
 
 function iterKeptChannelScenes(cziImport) {
-	var filesByName = {};
-	var files = cziImport.files || [];
-	for (var f = 0; f < files.length; f++) {
-		var entry = files[f];
-		filesByName[entry.basename] = entry;
-		filesByName[path.basename(entry.path || "")] = entry;
-	}
+	var lookup = buildFilesLookup(cziImport.files || []);
 	var channels = (cziImport.channels || []).filter(function (ch) {
 		return ch.keep && ch.role !== ROLE_UNUSED;
 	});
@@ -1319,9 +1362,7 @@ function iterKeptChannelScenes(cziImport) {
 		if (ch.role === ROLE_OTHER && !sanitizeOtherName(ch.other_name)) {
 			continue;
 		}
-		var fileKey = ch.file || "";
-		var fileRef =
-			filesByName[fileKey] || filesByName[path.basename(fileKey)] || null;
+		var fileRef = resolveFileEntry(ch.file || "", lookup);
 		var scenes = scenesForFileEntry(fileRef, cziImport);
 		for (var si = 0; si < scenes.length; si++) {
 			var scene = scenes[si];
@@ -1651,15 +1692,8 @@ function buildRepairTargetsFromAudit(audit, cziImport) {
 		seen[key] = true;
 		var fileRef = null;
 		if (cziImport.files) {
-			for (var f = 0; f < cziImport.files.length; f++) {
-				if (
-					cziImport.files[f].basename === dapiChannel.file ||
-					path.basename(cziImport.files[f].path || "") === dapiChannel.file
-				) {
-					fileRef = cziImport.files[f];
-					break;
-				}
-			}
+			var lookup = buildFilesLookup(cziImport.files);
+			fileRef = resolveFileEntry(dapiChannel.file || "", lookup);
 		}
 		var sceneIndex = 0;
 		if (fileRef && fileRef.scenes) {
@@ -1709,6 +1743,11 @@ module.exports = {
 	parseSectionSuffix: parseSectionSuffix,
 	naturalSortTokens: naturalSortTokens,
 	compareTokens: compareTokens,
+	entrySceneIndex: entrySceneIndex,
+	entryScanIndex: entryScanIndex,
+	buildFilesLookup: buildFilesLookup,
+	resolveFileEntry: resolveFileEntry,
+	normalizeSourceDirs: normalizeSourceDirs,
 	naturalSortKey: naturalSortKey,
 	naturalCompare: naturalCompare,
 	stemFromBasename: stemFromBasename,

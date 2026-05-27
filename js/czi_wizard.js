@@ -385,13 +385,89 @@ function sortedCziFilesForDisplay() {
 	var files = (wizardState.cziImport.files || []).slice();
 	var imp = wizardState.cziImport;
 	files.sort(function (a, b) {
+		var scanA = a.scan_index != null ? a.scan_index : 0;
+		var scanB = b.scan_index != null ? b.scan_index : 0;
+		if (scanA !== scanB) {
+			return scanA - scanB;
+		}
 		return cziImport.naturalCompare(
-			{ basename: a.basename, path: a.path, scene_index: 0 },
-			{ basename: b.basename, path: b.path, scene_index: 0 },
+			{
+				basename: a.basename,
+				path: a.path,
+				scan_index: a.scan_index,
+				scene_index: 0,
+			},
+			{
+				basename: b.basename,
+				path: b.path,
+				scan_index: b.scan_index,
+				scene_index: 0,
+			},
 			imp,
 		);
 	});
 	return files;
+}
+
+function countFilesForSourceDir(dir) {
+	return (wizardState.cziImport.files || []).filter(function (f) {
+		return f.source_dir === dir && !f.error;
+	}).length;
+}
+
+function resyncScanIndices() {
+	var dirs = wizardState.cziSourceDirs || [];
+	wizardState.cziImport.source_dirs = dirs.slice();
+	var files = wizardState.cziImport.files || [];
+	for (var i = 0; i < files.length; i++) {
+		var idx = dirs.indexOf(files[i].source_dir);
+		files[i].scan_index = idx >= 0 ? idx : 0;
+	}
+}
+
+function updateProbeStatusSummary() {
+	var status = qs("probeStatus");
+	var nextBtn = qs("step2Next");
+	var dirs = wizardState.cziSourceDirs || [];
+	var fileCount = (wizardState.cziImport.files || []).filter(function (f) {
+		return !f.error;
+	}).length;
+	if (status && !probeInFlight) {
+		if (!dirs.length) {
+			status.textContent = "";
+		} else if (fileCount) {
+			status.textContent =
+				fileCount + " file(s) from " + dirs.length + " folder(s) probed.";
+		}
+	}
+	if (nextBtn) {
+		nextBtn.disabled = !fileCount;
+	}
+}
+
+function refreshAfterProbeIncremental(resetSectionDefault) {
+	applySliceNumberingDefault();
+	resyncScanIndices();
+	refreshSectionIdentifierAfterProbe(!!resetSectionDefault);
+	refreshSliceOrder();
+	renderSourceDirList();
+	renderCziFileTable(sortedCziFilesForDisplay());
+	updateProbeStatusSummary();
+}
+
+function moveSourceDir(idx, delta) {
+	var dirs = wizardState.cziSourceDirs || [];
+	var newIdx = idx + delta;
+	if (newIdx < 0 || newIdx >= dirs.length) {
+		return;
+	}
+	var tmp = dirs[idx];
+	dirs[idx] = dirs[newIdx];
+	dirs[newIdx] = tmp;
+	resyncScanIndices();
+	refreshSliceOrder();
+	renderSourceDirList();
+	renderCziFileTable(sortedCziFilesForDisplay());
 }
 
 function onSectionIdentifierChange(value) {
@@ -485,8 +561,12 @@ function syncSliceNumberingRadios() {
 
 function setProbeControlsBusy(busy) {
 	var addBtn = qs("addCziDir");
+	var reprobeBtn = qs("reprobeAllCziDirs");
 	if (addBtn) {
 		addBtn.disabled = !!busy;
+	}
+	if (reprobeBtn) {
+		reprobeBtn.disabled = !!busy;
 	}
 }
 
@@ -506,16 +586,48 @@ function renderSourceDirList() {
 	}
 	for (var i = 0; i < dirs.length; i++) {
 		var dir = dirs[i];
+		var fileCount = countFilesForSourceDir(dir);
+		var countLabel = fileCount ? " — " + fileCount + " file(s)" : "";
 		var li = document.createElement("li");
-		li.className = "list-group-item d-flex justify-content-between align-items-center";
-		li.innerHTML =
+		li.className = "list-group-item d-flex justify-content-between align-items-start gap-2";
+		var label =
+			'<div class="flex-grow-1 text-start">' +
+			'<strong>' +
+			(i + 1) +
+			".</strong> " +
 			'<span class="small text-break">' +
 			dir +
-			'</span><button type="button" class="btn btn-sm btn-outline-danger ms-2" data-remove-dir="' +
+			countLabel +
+			"</span></div>";
+		var controls =
+			'<div class="btn-group btn-group-sm flex-shrink-0" role="group">' +
+			'<button type="button" class="btn btn-outline-secondary" data-move-dir-up="' +
 			i +
-			'">Remove</button>';
+			'"' +
+			(i === 0 ? " disabled" : "") +
+			'>↑</button>' +
+			'<button type="button" class="btn btn-outline-secondary" data-move-dir-down="' +
+			i +
+			'"' +
+			(i === dirs.length - 1 ? " disabled" : "") +
+			'>↓</button>' +
+			'<button type="button" class="btn btn-outline-danger" data-remove-dir="' +
+			i +
+			'">Remove</button>' +
+			"</div>";
+		li.innerHTML = label + controls;
 		list.appendChild(li);
 	}
+	list.querySelectorAll("[data-move-dir-up]").forEach(function (btn) {
+		btn.addEventListener("click", function (ev) {
+			moveSourceDir(Number(ev.target.getAttribute("data-move-dir-up")), -1);
+		});
+	});
+	list.querySelectorAll("[data-move-dir-down]").forEach(function (btn) {
+		btn.addEventListener("click", function (ev) {
+			moveSourceDir(Number(ev.target.getAttribute("data-move-dir-down")), 1);
+		});
+	});
 	list.querySelectorAll("[data-remove-dir]").forEach(function (btn) {
 		btn.addEventListener("click", function (ev) {
 			var idx = Number(ev.target.getAttribute("data-remove-dir"));
@@ -526,15 +638,15 @@ function renderSourceDirList() {
 			});
 			renderSourceDirList();
 			if (wizardState.cziSourceDirs.length) {
-				runProbeAll().catch(function (err) {
-					alert(String(err.message || err));
-				});
+				resyncScanIndices();
+				refreshAfterProbeIncremental(false);
 			} else {
 				wizardState.cziImport.section_identifier = null;
 				wizardState.sectionIdentifierCandidates = [];
 				renderSectionIdentifierSelect();
 				renderCziFileTable([]);
 				renderMosaicWarnings([]);
+				renderMosaicInfo([]);
 				var nextBtn = qs("step2Next");
 				if (nextBtn) {
 					nextBtn.disabled = true;
@@ -653,13 +765,20 @@ function renderMosaicInfo(files) {
 		box.innerHTML = "";
 		return;
 	}
+	var MOSAIC_INFO_CAP = 5;
 	var html =
 		"<strong>Mosaic files detected:</strong> These CZIs contain mosaic tile structure. " +
 		"This is normal for ZEN-stitched exports.<ul class=\"mb-0 mt-2\">";
-	for (var i = 0; i < infos.length; i++) {
+	for (var i = 0; i < Math.min(infos.length, MOSAIC_INFO_CAP); i++) {
 		var info = infos[i];
 		var label = info.basename ? "<code>" + info.basename + "</code>: " : "";
 		html += "<li>" + label + info.message + "</li>";
+	}
+	if (infos.length > MOSAIC_INFO_CAP) {
+		html +=
+			'<li class="text-muted">… and ' +
+			(infos.length - MOSAIC_INFO_CAP) +
+			" more mosaic file(s).</li>";
 	}
 	html += "</ul>";
 	box.innerHTML = html;
@@ -708,6 +827,18 @@ function mosaicTableLabel(f) {
 	return label;
 }
 
+function sourceFolderLabel(fileEntry) {
+	var dirs = wizardState.cziSourceDirs || [];
+	var scanIdx = fileEntry.scan_index != null ? fileEntry.scan_index : dirs.indexOf(fileEntry.source_dir);
+	if (scanIdx >= 0) {
+		return "Folder " + (scanIdx + 1);
+	}
+	if (fileEntry.source_dir) {
+		return path.basename(fileEntry.source_dir) || fileEntry.source_dir;
+	}
+	return "—";
+}
+
 function renderCziFileTable(files) {
 	var tbody = qs("cziFileTableBody");
 	if (!tbody) {
@@ -716,6 +847,7 @@ function renderCziFileTable(files) {
 	renderMosaicInfo(files);
 	renderMosaicWarnings(files);
 	tbody.innerHTML = "";
+	var showFolderCol = (wizardState.cziSourceDirs || []).length > 1;
 	for (var i = 0; i < files.length; i++) {
 		var f = files[i];
 		var tr = document.createElement("tr");
@@ -724,7 +856,11 @@ function renderCziFileTable(files) {
 		}
 		var err = f.error ? ' <span class="text-danger">' + f.error + "</span>" : "";
 		var mosaicLabel = mosaicTableLabel(f);
+		var folderCell = showFolderCol
+			? "<td class=\"small\">" + sourceFolderLabel(f) + "</td>"
+			: "";
 		tr.innerHTML =
+			folderCell +
 			"<td>" +
 			(f.basename || path.basename(f.path || "")) +
 			err +
@@ -738,6 +874,20 @@ function renderCziFileTable(files) {
 			mosaicLabel +
 			"</td>";
 		tbody.appendChild(tr);
+	}
+	var thead = document.querySelector("#cziFileTable thead tr");
+	if (thead) {
+		var folderTh = thead.querySelector("[data-col-source-folder]");
+		if (showFolderCol) {
+			if (!folderTh) {
+				var th = document.createElement("th");
+				th.setAttribute("data-col-source-folder", "1");
+				th.textContent = "Source folder";
+				thead.insertBefore(th, thead.firstChild);
+			}
+		} else if (folderTh) {
+			folderTh.remove();
+		}
 	}
 }
 
@@ -957,7 +1107,7 @@ function renderChannelTable() {
 		}
 		tr.innerHTML =
 			"<td>" +
-			ch.file +
+			(ch.file ? path.basename(ch.file) : "—") +
 			"</td><td>" +
 			ch.index +
 			"</td><td>" +
@@ -1387,12 +1537,24 @@ function updateExtractIndexNote(matchedCount) {
 		"Detailed lines also appear in the application log window.";
 }
 
-function probeSingleDir(dir, scanIndex) {
+function probeSingleDir(dir, scanIndex, folderProgress) {
 	var status = qs("probeStatus");
 	return new Promise(function (resolve, reject) {
 		function onLoadProgress(ev, data) {
-			if (status && data[1]) {
-				status.textContent = data[1];
+			if (!status) {
+				return;
+			}
+			var message = data && data[1] ? String(data[1]) : "";
+			if (folderProgress && folderProgress.total) {
+				status.textContent =
+					"Folder " +
+					folderProgress.index +
+					"/" +
+					folderProgress.total +
+					": " +
+					message;
+			} else if (message) {
+				status.textContent = message;
 			}
 		}
 		function onResult(ev, payload) {
@@ -1409,6 +1571,50 @@ function probeSingleDir(dir, scanIndex) {
 		ipc.once("cziProbeResult", onResult);
 		ipc.send("runCziProbe", [dir]);
 	});
+}
+
+async function probeIncrementalNewDir(dir) {
+	if (probeInFlight) {
+		return;
+	}
+	probeInFlight = true;
+	setProbeControlsBusy(true);
+	var scanIndex = wizardState.cziSourceDirs.indexOf(dir);
+	var status = qs("probeStatus");
+	var nextBtn = qs("step2Next");
+	if (nextBtn) {
+		nextBtn.disabled = true;
+	}
+	var folderNum = scanIndex + 1;
+	var totalFolders = wizardState.cziSourceDirs.length;
+	if (status) {
+		status.textContent =
+			"Probing folder " + folderNum + "/" + totalFolders + ": " + dir;
+	}
+	try {
+		await probeSingleDir(dir, scanIndex, { index: folderNum, total: totalFolders });
+		var fileCount = countFilesForSourceDir(dir);
+		refreshAfterProbeIncremental(scanIndex === 0);
+		if (status) {
+			status.textContent =
+				"Folder " +
+				folderNum +
+				" done — " +
+				fileCount +
+				" file(s)" +
+				(folderNum < totalFolders
+					? "; add or probe remaining folders."
+					: "; " +
+						(wizardState.cziImport.files || []).filter(function (f) {
+							return !f.error;
+						}).length +
+						" file(s) total.");
+		}
+	} finally {
+		probeInFlight = false;
+		setProbeControlsBusy(false);
+		updateProbeStatusSummary();
+	}
 }
 
 async function runProbeAll() {
@@ -1448,16 +1654,32 @@ async function runProbeAll() {
 			if (status) {
 				status.textContent = "Probing folder " + (i + 1) + "/" + dirs.length + ": " + dirs[i];
 			}
-			await probeSingleDir(dirs[i], i);
+			await probeSingleDir(dirs[i], i, { index: i + 1, total: dirs.length });
+			resyncScanIndices();
+			refreshAfterProbeIncremental(false);
+			if (status && i < dirs.length - 1) {
+				var doneCount = countFilesForSourceDir(dirs[i]);
+				status.textContent =
+					"Folder " +
+					(i + 1) +
+					" done — " +
+					doneCount +
+					" file(s); probing folder " +
+					(i + 2) +
+					"/" +
+					dirs.length +
+					"…";
+			}
 		}
-		applySliceNumberingDefault();
 		refreshSectionIdentifierAfterProbe(true);
 		refreshSliceOrder();
 		renderSourceDirList();
 		renderCziFileTable(sortedCziFilesForDisplay());
 		if (status) {
 			status.textContent =
-				(wizardState.cziImport.files || []).length +
+				(wizardState.cziImport.files || []).filter(function (f) {
+					return !f.error;
+				}).length +
 				" file(s) from " +
 				dirs.length +
 				" folder(s) probed.";
@@ -1477,6 +1699,7 @@ function hydrateWizardFromSavedCziImport(saved) {
 	if (!wizardState.cziSourceDirs.length && saved.source_dir) {
 		wizardState.cziSourceDirs = [saved.source_dir];
 	}
+	resyncScanIndices();
 	wizardState.importResult = {
 		max_runs: saved.max_runs || {},
 		primary_signal_role: saved.primary_signal_role,
@@ -1905,6 +2128,9 @@ function bindStep1() {
 function bindStep2() {
 	bindSectionIdentifierSelects();
 	qs("addCziDir").addEventListener("click", function () {
+		if (probeInFlight) {
+			return;
+		}
 		ipc.once("returnPath", function (event, response) {
 			if (!response[0]) {
 				return;
@@ -1915,8 +2141,9 @@ function bindStep2() {
 				return;
 			}
 			wizardState.cziSourceDirs.push(dir);
+			wizardState.cziImport.source_dirs = wizardState.cziSourceDirs.slice();
 			renderSourceDirList();
-			runProbeAll().catch(function (err) {
+			probeIncrementalNewDir(dir).catch(function (err) {
 				alert(String(err.message || err));
 			});
 		});
@@ -1928,6 +2155,17 @@ function bindStep2() {
 				wizardState.parentDir,
 		});
 	});
+	var reprobeBtn = qs("reprobeAllCziDirs");
+	if (reprobeBtn) {
+		reprobeBtn.addEventListener("click", function () {
+			if (!wizardState.cziSourceDirs.length) {
+				return;
+			}
+			runProbeAll().catch(function (err) {
+				alert(String(err.message || err));
+			});
+		});
+	}
 	renderSourceDirList();
 	qs("step2Back").addEventListener("click", function () {
 		setStep(1);

@@ -224,19 +224,23 @@ function testBuildSliceOrderSingleSceneMultiZ() {
 
 function testBuildSliceOrderRenameMultiDir() {
 	var imp = cziImport.buildDefaultCziImport("");
+	var makeFile = function (dirPath, basename, scanIndex) {
+		return {
+			path: dirPath + "/" + basename,
+			basename: basename,
+			source_dir: dirPath,
+			scan_index: scanIndex,
+			scene_count: 1,
+			channels: [{ index: 0, label: "DAPI" }],
+			scenes: [{ index: 0, sliceId: basename.replace(/\.czi$/i, ""), originalSliceId: basename.replace(/\.czi$/i, "") }],
+		};
+	};
 	cziImport.mergeProbeDirIntoImport(
 		imp,
 		{
 			files: [
-				{
-					path: "/scan1/A.czi",
-					basename: "A.czi",
-					scene_count: 25,
-					channels: [{ index: 0, label: "DAPI" }],
-					scenes: Array.from({ length: 25 }, function (_, i) {
-						return { index: i, sliceId: "A_s" + String(i).padStart(3, "0") };
-					}),
-				},
+				makeFile("/scan1", "A.czi", 0),
+				makeFile("/scan1", "B.czi", 0),
 			],
 		},
 		"/scan1",
@@ -246,15 +250,8 @@ function testBuildSliceOrderRenameMultiDir() {
 		imp,
 		{
 			files: [
-				{
-					path: "/scan2/B.czi",
-					basename: "B.czi",
-					scene_count: 25,
-					channels: [{ index: 0, label: "DAPI" }],
-					scenes: Array.from({ length: 25 }, function (_, i) {
-						return { index: i, sliceId: "B_s" + String(i).padStart(3, "0") };
-					}),
-				},
+				makeFile("/scan2", "C.czi", 1),
+				makeFile("/scan2", "D.czi", 1),
 			],
 		},
 		"/scan2",
@@ -262,9 +259,125 @@ function testBuildSliceOrderRenameMultiDir() {
 	);
 	imp.slice_numbering = cziImport.SLICE_NUMBERING_RENAME;
 	cziImport.buildSliceOrder(imp, "M528");
-	assert.strictEqual(imp.slice_order.length, 50);
+	assert.strictEqual(imp.slice_order.length, 4);
 	assert.strictEqual(imp.slice_order[0].sliceId, "M528_s001");
-	assert.strictEqual(imp.slice_order[49].sliceId, "M528_s050");
+	assert.strictEqual(imp.slice_order[0].scan_index, 0);
+	assert.strictEqual(imp.slice_order[2].scan_index, 1);
+	assert.strictEqual(imp.slice_order[3].sliceId, "M528_s004");
+}
+
+function testBuildSliceOrderTwoDirsDuplicateNames() {
+	var imp = cziImport.buildDefaultCziImport("");
+	imp.section_identifier = "M514(";
+	var makeFile = function (dirPath, n, scanIndex) {
+		var basename = "M514(" + n + ").czi";
+		var stem = "M514(" + n + ")";
+		return {
+			path: dirPath + "/" + basename,
+			basename: basename,
+			source_dir: dirPath,
+			scan_index: scanIndex,
+			scene_count: 1,
+			scenes: [{ index: 0, sliceId: stem, originalSliceId: stem }],
+		};
+	};
+	var makeStemFile = function (dirPath, scanIndex) {
+		return {
+			path: dirPath + "/M514.czi",
+			basename: "M514.czi",
+			source_dir: dirPath,
+			scan_index: scanIndex,
+			scene_count: 1,
+			scenes: [{ index: 0, sliceId: "M514", originalSliceId: "M514" }],
+		};
+	};
+	var dir0Files = [];
+	var dir1Files = [];
+	for (var n = 1; n <= 10; n++) {
+		dir0Files.push(makeFile("/day1", n, 0));
+		dir1Files.push(makeFile("/day2", n, 1));
+	}
+	dir0Files.push(makeStemFile("/day1", 0));
+	dir1Files.push(makeStemFile("/day2", 1));
+	cziImport.mergeProbeDirIntoImport(imp, { files: dir0Files }, "/day1", 0);
+	cziImport.mergeProbeDirIntoImport(imp, { files: dir1Files }, "/day2", 1);
+	imp.slice_numbering = cziImport.SLICE_NUMBERING_RENAME;
+	cziImport.buildSliceOrder(imp, "M514");
+	assert.strictEqual(imp.slice_order.length, 22);
+	for (var i = 0; i < imp.slice_order.length; i++) {
+		assert.strictEqual(imp.slice_order[i].sliceId, "M514_s" + String(i + 1).padStart(3, "0"));
+	}
+	for (var j = 0; j < 11; j++) {
+		assert.strictEqual(imp.slice_order[j].scan_index, 0);
+	}
+	for (var k = 11; k < 22; k++) {
+		assert.strictEqual(imp.slice_order[k].scan_index, 1);
+	}
+	var firstBatchSections = imp.slice_order.slice(0, 11).map(function (e) {
+		return e.originalSliceId;
+	});
+	assert.deepStrictEqual(
+		firstBatchSections.slice(0, 10),
+		["M514(1)", "M514(2)", "M514(3)", "M514(4)", "M514(5)", "M514(6)", "M514(7)", "M514(8)", "M514(9)", "M514(10)"],
+	);
+	assert.strictEqual(firstBatchSections[10], "M514");
+	var secondBatchFirst = imp.slice_order[11].originalSliceId;
+	assert.strictEqual(secondBatchFirst, "M514(1)");
+	assert.notStrictEqual(imp.slice_order[0].path, imp.slice_order[11].path);
+}
+
+function testNormalizeSourceDirsPreservesOrder() {
+	var imp = { source_dirs: ["/z/second", "/a/first"] };
+	assert.deepStrictEqual(cziImport.normalizeSourceDirs(imp), [
+		path.resolve("/z/second"),
+		path.resolve("/a/first"),
+	]);
+}
+
+function testChannelPathKeysDuplicateBasenames() {
+	var imp = cziImport.buildDefaultCziImport("");
+	cziImport.mergeProbeDirIntoImport(
+		imp,
+		{
+			files: [
+				{
+					path: "/day1/M514(1).czi",
+					basename: "M514(1).czi",
+					channels: [{ index: 0, label: "DAPI" }],
+					scenes: [{ index: 0 }],
+				},
+			],
+		},
+		"/day1",
+		0,
+	);
+	cziImport.mergeProbeDirIntoImport(
+		imp,
+		{
+			files: [
+				{
+					path: "/day2/M514(1).czi",
+					basename: "M514(1).czi",
+					channels: [{ index: 0, label: "DAPI" }],
+					scenes: [{ index: 0 }],
+				},
+			],
+		},
+		"/day2",
+		1,
+	);
+	assert.strictEqual(imp.channels[0].file, "/day1/M514(1).czi");
+	assert.strictEqual(imp.channels[1].file, "/day2/M514(1).czi");
+	var lookup = cziImport.buildFilesLookup(imp.files);
+	assert.strictEqual(
+		cziImport.resolveFileEntry("/day1/M514(1).czi", lookup).path,
+		"/day1/M514(1).czi",
+	);
+	assert.strictEqual(
+		cziImport.resolveFileEntry("/day2/M514(1).czi", lookup).path,
+		"/day2/M514(1).czi",
+	);
+	assert.strictEqual(cziImport.resolveFileEntry("M514(1).czi", lookup), null);
 }
 
 function testValidateSliceOrderDuplicate() {
@@ -405,6 +518,9 @@ testDetectIdentifierScanFile();
 testSortWithIdentifier();
 testBuildSliceOrderSingleSceneMultiZ();
 testBuildSliceOrderRenameMultiDir();
+testBuildSliceOrderTwoDirsDuplicateNames();
+testNormalizeSourceDirsPreservesOrder();
+testChannelPathKeysDuplicateBasenames();
 testValidateSliceOrderDuplicate();
 testCollectKeptSignalRoleKeys();
 testImportConfigPath();

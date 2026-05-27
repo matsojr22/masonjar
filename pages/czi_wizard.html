@@ -92,13 +92,20 @@
         <div class="mb-3">
           <label class="form-label">CZI source folders</label>
           <p class="small text-muted mb-2">
-            Add one or more folders containing <code>.czi</code> files. Multiple folders default to
-            renamed contiguous slice IDs on the next step.
+            Add one or more folders containing <code>.czi</code> files. Folders are processed in
+            list order (use ↑↓ to reorder). Each folder is sorted by slice number internally; the
+            wizard then concatenates batches and assigns contiguous
+            <code>Project_s###</code> IDs on the next step when multiple folders are present.
           </p>
           <ul id="cziSourceDirList" class="list-group mb-2"></ul>
+          <div class="d-flex flex-wrap gap-2 mb-2">
           <button type="button" class="btn btn-outline-primary btn-sm" id="addCziDir">
             Add folder
           </button>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="reprobeAllCziDirs">
+            Re-probe all
+          </button>
+          </div>
         </div>
         <p id="probeStatus" class="small text-muted"></p>
         <div
