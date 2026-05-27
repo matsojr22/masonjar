@@ -431,7 +431,135 @@ function defaultProcessing() {
 			max: "merge",
 			sharpen: "merge",
 		},
+		step_failures: {
+			align: {},
+		},
 	};
+}
+
+var processingStateListeners = [];
+
+function addProcessingStateListener(fn) {
+	if (typeof fn === "function") {
+		processingStateListeners.push(fn);
+	}
+}
+
+function notifyProcessingStateChanged() {
+	for (var i = 0; i < processingStateListeners.length; i++) {
+		try {
+			processingStateListeners[i]();
+		} catch (err) {
+			console.warn("[project] processing state listener:", err);
+		}
+	}
+}
+
+function ensureStepFailures(processing) {
+	if (!processing.step_failures) {
+		processing.step_failures = defaultProcessing().step_failures;
+	} else {
+		processing.step_failures = Object.assign(
+			{},
+			defaultProcessing().step_failures,
+			processing.step_failures,
+		);
+		if (!processing.step_failures.align) {
+			processing.step_failures.align = {};
+		}
+	}
+	return processing.step_failures;
+}
+
+function recordStepFailure(stepId, sliceId, detail) {
+	if (!state.active || !state.project) {
+		return;
+	}
+	if (!state.project.processing) {
+		state.project.processing = defaultProcessing();
+	}
+	var failures = ensureStepFailures(state.project.processing);
+	if (!failures[stepId]) {
+		failures[stepId] = {};
+	}
+	failures[stepId][sliceId] = Object.assign(
+		{
+			message: "",
+			file: "",
+			at: nowIso(),
+		},
+		detail || {},
+	);
+	if (!failures[stepId][sliceId].message && detail && detail.error) {
+		failures[stepId][sliceId].message = String(detail.error);
+	}
+	saveProjectJson();
+	notifyProcessingStateChanged();
+}
+
+function clearStepFailure(stepId, sliceId) {
+	if (!state.active || !state.project || !state.project.processing) {
+		return;
+	}
+	var failures = ensureStepFailures(state.project.processing);
+	if (!failures[stepId] || !failures[stepId][sliceId]) {
+		return;
+	}
+	delete failures[stepId][sliceId];
+	saveProjectJson();
+	notifyProcessingStateChanged();
+}
+
+function getFailedSliceIds(stepId) {
+	if (!state.project || !state.project.processing) {
+		return [];
+	}
+	var failures = ensureStepFailures(state.project.processing);
+	var stepMap = failures[stepId] || {};
+	return Object.keys(stepMap);
+}
+
+function mergeAlignWarpReport(bundleRoot, alignLeafAbs) {
+	if (!state.active || !alignLeafAbs) {
+		return { recorded: 0, cleared: 0 };
+	}
+	bundleRoot = bundleRoot || state.bundleRoot;
+	var reportPath = path.join(alignLeafAbs, ".masonjar", "align_warp_report.json");
+	if (!fs.existsSync(reportPath)) {
+		return { recorded: 0, cleared: 0 };
+	}
+	var report;
+	try {
+		report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+	} catch (err) {
+		console.warn("[project] mergeAlignWarpReport:", err);
+		return { recorded: 0, cleared: 0 };
+	}
+	var recorded = 0;
+	var cleared = 0;
+	var failed = report.warp_failed || [];
+	for (var i = 0; i < failed.length; i++) {
+		var entry = failed[i] || {};
+		var sliceId = entry.slice_id || entry.sliceId;
+		if (!sliceId) {
+			continue;
+		}
+		recordStepFailure("align", sliceId, {
+			message: entry.error || entry.message || "Alignment warp failed",
+			file: entry.file || "",
+			at: report.timestamp || nowIso(),
+		});
+		recorded += 1;
+	}
+	var ok = report.warp_ok || [];
+	for (var j = 0; j < ok.length; j++) {
+		var okId = ok[j];
+		if (getFailedSliceIds("align").indexOf(okId) >= 0) {
+			clearStepFailure("align", okId);
+			cleared += 1;
+		}
+	}
+	return { recorded: recorded, cleared: cleared };
 }
 
 function readProjectFileIndex(bundleRoot) {
@@ -1287,6 +1415,12 @@ module.exports = {
 	refreshProjectIndex: refreshProjectIndex,
 	readProjectFileIndex: readProjectFileIndex,
 	defaultProcessing: defaultProcessing,
+	recordStepFailure: recordStepFailure,
+	clearStepFailure: clearStepFailure,
+	getFailedSliceIds: getFailedSliceIds,
+	mergeAlignWarpReport: mergeAlignWarpReport,
+	addProcessingStateListener: addProcessingStateListener,
+	notifyProcessingStateChanged: notifyProcessingStateChanged,
 	computeMatchReport: fileIndex.computeMatchReport,
 	planRun: fileIndex.planRun,
 	getProcessingSliceIds: fileIndex.getProcessingSliceIds,

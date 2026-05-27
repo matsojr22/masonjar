@@ -891,6 +891,18 @@ function getProcessingSliceIds(bundleRoot, projectData, index, report) {
 			return subset[sid];
 		});
 	}
+	var alignFailures =
+		proc.step_failures && proc.step_failures.align ? proc.step_failures.align : {};
+	var failedAlignIds = Object.keys(alignFailures);
+	if (failedAlignIds.length) {
+		var failedSet = {};
+		for (var f = 0; f < failedAlignIds.length; f++) {
+			failedSet[failedAlignIds[f]] = true;
+		}
+		ids = ids.filter(function (sid) {
+			return !failedSet[sid];
+		});
+	}
 	return ids;
 }
 

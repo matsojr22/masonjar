@@ -128,7 +128,10 @@ ipc.on("alignResult", function (event, response) {
 	loadbar.style.width = "0";
 	if (project.isActive() && lastRunRel) {
 		pipelineRuns.setActiveRunRel("align", lastRunRel);
+		var alignLeaf = pipelineRuns.resolveActiveRunLeafAbs("slices");
+		project.mergeAlignWarpReport(project.getBundleRoot(), alignLeaf);
 		project.refreshProjectIndex().catch(function () {});
+		project.notifyProcessingStateChanged();
 	}
 });
 

@@ -55,5 +55,8 @@ pageInit.onReady(function () {
 		"navTrail",
 	);
 	refreshProjectChip();
+	project.addProcessingStateListener(function () {
+		projectFiles.renderStepFailures();
+	});
 	projectFiles.bindProjectFileControls();
 });

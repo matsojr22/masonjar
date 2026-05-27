@@ -50,6 +50,52 @@ function populateSubsetList(container, selectedIds) {
 	}
 }
 
+function truncateFailureMessage(message, maxLen) {
+	maxLen = maxLen || 120;
+	var text = String(message || "").replace(/\s+/g, " ").trim();
+	if (text.length <= maxLen) {
+		return text;
+	}
+	return text.slice(0, maxLen - 1) + "…";
+}
+
+function renderStepFailures() {
+	var section = document.getElementById("projectStepFailuresSection");
+	var list = document.getElementById("projectStepFailuresList");
+	if (!section || !list) {
+		return;
+	}
+	if (!project.isActive()) {
+		section.classList.add("d-none");
+		list.innerHTML = "";
+		return;
+	}
+	var failures = project.getFailedSliceIds("align");
+	if (!failures.length) {
+		section.classList.add("d-none");
+		list.innerHTML = "";
+		return;
+	}
+	var proc = project.getProject().processing || project.defaultProcessing();
+	var alignMap =
+		(proc.step_failures && proc.step_failures.align) || {};
+	failures.sort();
+	list.innerHTML = "";
+	for (var i = 0; i < failures.length; i++) {
+		var sliceId = failures[i];
+		var detail = alignMap[sliceId] || {};
+		var line = document.createElement("div");
+		line.className = "mb-1";
+		line.textContent =
+			sliceId +
+			" — " +
+			truncateFailureMessage(detail.message || "Alignment warp failed") +
+			(detail.at ? " — " + detail.at : "");
+		list.appendChild(line);
+	}
+	section.classList.remove("d-none");
+}
+
 function bindActiveRunControls(containerId) {
 	var container = document.getElementById(containerId);
 	if (!container || !project.isActive()) {
@@ -143,6 +189,7 @@ function bindProjectFileControls(options) {
 	}
 
 	bindActiveRunControls("projectActiveRunsSection");
+	renderStepFailures();
 
 	var proj = project.getProject();
 	var proc = proj.processing || project.defaultProcessing();
@@ -269,4 +316,5 @@ module.exports = {
 	bindProjectFileControls: bindProjectFileControls,
 	bindActiveRunControls: bindActiveRunControls,
 	populateSubsetList: populateSubsetList,
+	renderStepFailures: renderStepFailures,
 };

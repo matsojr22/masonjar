@@ -155,6 +155,10 @@ When DAPI is enabled in **Isolate Regions** ([pages/intensity.html](pages/intens
 
 The left **Controls** dock shows the current **slice index and filename**, and the viewer / window title is kept in sync. Optional **Flag section…** appends one JSON object per line to **`<align output / 01_slices>/.masonjar/alignment_flags.json`** (same directory tree as warped outputs / `Annotation_*.pkl`), e.g. `{ "sliceId", "filename", "index", "note", "timestamp" }`. This keeps notes out of `alignment.pkl` in the input folder.
 
+**Warp failures (Finish):** [`py/demons.py`](py/demons.py) guards flat Sobel edges (no divide-by-zero) and retries registration without edge preprocess / geometry-only fallback on Mattes MI failure. [`py/map.py`](py/map.py) `finish()` warps per slice in try/except — failed slices skip `Annotation_` / `Atlas_` / `Composite_` writes, log `LOG: align_warp_failed`, and record `warp_ok` / `warp_failed` in `run_manifest.json` plus `<align leaf>/.masonjar/align_warp_report.json`. Exit **0** when at least one slice warps; **1** only when zero slices succeed.
+
+**Project tracking:** `processing.step_failures.align` maps `sliceId → { message, file, at }`. [`js/align.js`](js/align.js) calls `mergeAlignWarpReport` on `alignResult`; successes clear prior failures. [`js/file_index.js`](js/file_index.js) `getProcessingSliceIds` and [`js/pipeline_run.js`](js/pipeline_run.js) exclude failed align slices from Count / Intensity / Adjust plans. Workspace hub **Alignment issues** (`projectStepFailuresSection` on [`pages/workspace_menu.html`](pages/workspace_menu.html)) lists persistent failures below **Completed tasks**.
+
 ### Run-aware output organization (all pipeline steps)
 
 Shared contract: [`js/pipeline_runs.js`](js/pipeline_runs.js), [`py/run_manifest.py`](py/run_manifest.py).

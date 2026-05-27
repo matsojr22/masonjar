@@ -1,14 +1,16 @@
 # Agent session handoff
 
-Last updated: 2026-05-26 (CZI scene vs Z fix v2.4.2). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-05-26 (align warp failure handling v2.4.3). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 ## Current release
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **2.4.2** |
-| Latest tag | `v2.4.1` on `main` (v2.4.2 pending tag) |
+| `package.json` version | **2.4.3** |
+| Latest tag | `v2.4.1` on `main` (v2.4.2–v2.4.3 pending tag) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v2.4.3** — Align warp failure handling. [`py/demons.py`](py/demons.py) fixes flat-edge divide-by-zero in `preprocess_image`, adds registration preflight/fallbacks (retry without edge preprocess, geometry-only). [`py/map.py`](py/map.py) `finish()` skips failed slices per-section, writes `warp_ok`/`warp_failed` to run manifest + `.masonjar/align_warp_report.json`. Project JSON `processing.step_failures.align` tracks failures; workspace hub **Alignment issues** section; downstream Count/Intensity/Adjust exclude failed slices via `getProcessingSliceIds`. Tests: `python/tests/test_demons_preprocess.py`, `scripts/test-step-failures.js`.
 
 **v2.4.2** — CZI scene counting fix. `scene_indices_from_czi` no longer treats Z-only dim blocks as scenes (`M467(57).czi` with 57 Z planes → 1 scene, not 57 renaming rows). Mosaic files stay single-scene; inconsistent multi-block shapes use S range starts per aicspylibczi. Wizard step 3 help clarifies one row per tissue section. Regression tests in `python/tests/test_czi_common.py` + `scripts/test-czi-import.js`.
 

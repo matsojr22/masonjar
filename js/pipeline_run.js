@@ -54,9 +54,15 @@ function preparePipelineRun(stepId, runMode) {
 	if (stepId === "count") {
 		var predLeaf = pipelineRuns.resolveActiveRunLeafAbs("predictions");
 		var slicesLeaf = pipelineRuns.resolveActiveRunLeafAbs("slices");
+		var failedAlign = project.getFailedSliceIds("align");
+		var failedAlignSet = {};
+		for (var fa = 0; fa < failedAlign.length; fa++) {
+			failedAlignSet[failedAlign[fa]] = true;
+		}
 		var before = plan.toProcess.length;
 		plan.toProcess = plan.toProcess.filter(function (sid) {
 			return (
+				!failedAlignSet[sid] &&
 				fileIndex.predictionPklExistsForSlice(predLeaf, sid) &&
 				fileIndex.outputExistsForSlice(bundleRoot, "align", sid, roles, activeRuns)
 			);

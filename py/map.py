@@ -1005,34 +1005,57 @@ class AlignmentController:
         with open(self.structures_path, "rb") as f:
             structure_map = pickle.load(f)
 
+        from slice_index import slice_stem_from_image_filename
+
+        warp_ok = []
+        warp_failed = []
         for i in range(self.num_slices):
-            print(f"Warping {self.file_list[i]}...", flush=True)
-            current_slice = self.atlas_slices[self.file_list[i]]
+            filename = self.file_list[i]
+            slice_stem = slice_stem_from_image_filename(filename)
+            print(f"Warping {filename}...", flush=True)
+            current_slice = self.atlas_slices[filename]
             sample = cv2.imread(
-                str(Path(self.input_path) / self.file_list[i]),
+                str(Path(self.input_path) / filename),
                 cv2.IMREAD_GRAYSCALE,
             )
 
-            # isolate
-            # sample = self.isolate_section(sample)
-
+            atlas_image = current_slice.image
+            atlas_label = current_slice.label
             if current_slice.region != "A":
-                masked_atlas, masked_annotation = mask_slice_by_region(
+                atlas_image, atlas_label = mask_slice_by_region(
                     current_slice.image,
                     current_slice.label,
                     structure_map,
                     current_slice.region,
                 )
-                current_slice.image = masked_atlas
-                current_slice.label = masked_annotation
 
+            saved_image = current_slice.image
+            saved_label = current_slice.label
+            try:
+                current_slice.image = atlas_image
+                current_slice.label = atlas_label
+                warped_labels, warped_atlas, color_label = current_slice.get_registered(
+                    sample,
+                )
+            except Exception as exc:
+                err_msg = str(exc)
+                warp_failed.append(
+                    {
+                        "slice_id": slice_stem,
+                        "file": filename,
+                        "error": err_msg,
+                    }
+                )
+                print(
+                    f"LOG: align_warp_failed slice={slice_stem} file={filename} error={err_msg}",
+                    flush=True,
+                )
+                continue
+            finally:
+                current_slice.image = saved_image
+                current_slice.label = saved_label
 
-
-            warped_labels, warped_atlas, color_label = current_slice.get_registered(
-                sample,
-            )
-
-            stripped_filename = self.file_list[i].split(".")
+            stripped_filename = filename.split(".")
             stripped_filename = ".".join(stripped_filename[:-1])
 
             cv2.imwrite(
@@ -1067,24 +1090,40 @@ class AlignmentController:
                 Path(self.output_path) / f"Annotation_{stripped_filename}.pkl", "wb"
             ) as f:
                 pickle.dump(warped_labels, f)
+            warp_ok.append(slice_stem)
 
         self.viewer.close()
         from run_manifest import write_run_manifest
 
-        write_run_manifest(
-            self.output_path,
-            {
-                "step": "align",
-                "input_dir": self.input_path,
-                "output_dir": self.output_path,
-                "whole": self.is_whole,
-                "spacing": self.spacing,
-                "legacy": self.use_legacy,
-                "slice_filter": sorted(self.slice_filter)
-                if self.slice_filter is not None
-                else None,
-            },
-        )
+        manifest_payload = {
+            "step": "align",
+            "input_dir": self.input_path,
+            "output_dir": self.output_path,
+            "whole": self.is_whole,
+            "spacing": self.spacing,
+            "legacy": self.use_legacy,
+            "slice_filter": sorted(self.slice_filter)
+            if self.slice_filter is not None
+            else None,
+            "warp_ok": warp_ok,
+            "warp_failed": warp_failed,
+        }
+        write_run_manifest(self.output_path, manifest_payload)
+
+        report_dir = Path(self.output_path) / ".masonjar"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path = report_dir / "align_warp_report.json"
+        with open(report_path, "w", encoding="utf-8") as report_file:
+            json.dump(manifest_payload, report_file, indent=2)
+
+        if warp_failed:
+            print(
+                f"LOG: align_warp_summary ok={len(warp_ok)} failed={len(warp_failed)}",
+                flush=True,
+            )
+        if not warp_ok:
+            print("LOG: align_warp_zero_slices_warped", flush=True)
+            raise SystemExit(1)
         print("Done!", flush=True)
 
     def start_viewer(self):
