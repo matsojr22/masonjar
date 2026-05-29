@@ -105,6 +105,13 @@ var RUN_STEP_CONFIG = {
 		inputRoles: ["dapi"],
 		scriptRoles: { indir: "dapi", outdir: "dapi" },
 	},
+	parcellation: {
+		stepId: "parcellation",
+		outputRole: null,
+		branch: null,
+		inputRoles: ["slices"],
+		scriptRoles: { annodir: "slices" },
+	},
 	apply_geometry: {
 		stepId: "apply_geometry",
 		outputRole: null,

@@ -85,6 +85,11 @@ def _run_step(step_name: str, args: argparse.Namespace) -> int:
 
         step = CollateStep(config)
 
+    elif step_name == "parcellate":
+        from belljar.pipeline.parcellate import ParcellateStep
+
+        step = ParcellateStep(config)
+
     else:
         logger.error("Unknown step: %s", step_name)
         return 1
@@ -248,6 +253,33 @@ def _build_parser() -> argparse.ArgumentParser:
     col.add_argument("--input-dir", type=Path, required=True, help="Directory of count results.")
     col.add_argument("--output-dir", type=Path, required=True, help="Output directory for summary CSV.")
 
+    # ── parcellate ────────────────────────────────────────────────────
+    par = subparsers.add_parser(
+        "parcellate",
+        help="Roll annotation PKLs to a coarser CCF tier (bulk headless).",
+    )
+    par.add_argument(
+        "--annotation-dir",
+        "-a",
+        type=Path,
+        required=True,
+        help="Directory containing Annotation_*.pkl files.",
+    )
+    par.add_argument(
+        "--structures",
+        "-s",
+        type=Path,
+        required=True,
+        help="Path to structure_map.pkl (structure_graph.json must sit beside it).",
+    )
+    par.add_argument(
+        "--config",
+        "-j",
+        type=Path,
+        required=True,
+        help="parcellation_run_config.json",
+    )
+
     # ── run ────────────────────────────────────────────────────────────
     run = subparsers.add_parser("run", help="Run the full pipeline (estimate → align → detect → count → collate).")
     run.add_argument("--input-dir", type=Path, required=True, help="Directory of tissue section images.")
@@ -309,6 +341,15 @@ def main() -> int:
 
     if args.command == "run":
         return _run_full_pipeline(args)
+
+    if args.command == "parcellate":
+        from belljar.pipeline.parcellate import run_parcellate_cli
+
+        return run_parcellate_cli(
+            str(args.config),
+            str(args.annotation_dir),
+            str(args.structures),
+        )
 
     # Single step commands
     return _run_step(args.command, args)

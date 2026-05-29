@@ -22,6 +22,7 @@ var CATEGORIES = {
 		tools: [
 			{ label: "Align Sections", href: "./align.html" },
 			{ label: "Viewer/Editor", href: "./adjust.html" },
+			{ label: "Parcellation (bulk)", href: "./parcellation_wizard.html" },
 		],
 	},
 	detection: {

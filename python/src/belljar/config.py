@@ -185,6 +185,17 @@ class EstimationConfig(BaseModel):
     data_generation: DataGenerationConfig = Field(default_factory=DataGenerationConfig)
 
 
+class ParcellationConfig(BaseModel):
+    """CCF parcellation rollup configuration."""
+
+    annotation_dir: str = ""
+    structure_map_path: str = ""
+    tier_id: str | None = Field("areas", description="Semantic tier id or null when using st_level")
+    st_level: int | None = Field(None, description="Raw CCFv3 st_level when tier_id is null")
+    excluded_region_ids: list[int] = Field(default_factory=list)
+    slice_ids: list[str] | None = Field(None, description="Optional subset of slice stems")
+
+
 class BelljarConfig(BaseModel):
     """Top-level application configuration."""
 

@@ -24,6 +24,8 @@ var pipelineRuns = require("./pipeline_runs");
 var structureCatalog = require("./structure_catalog");
 var atlasStyle = require("./atlas_region_style");
 var branding = require("./branding");
+var parcelCtx = require("./parcellation_context");
+var wizardBusy = require("./wizard_busy");
 
 var LOG_MAX = 2000;
 var PICKER_MODE_KEY = "masonjar.ccfPickerMode";
@@ -61,6 +63,12 @@ var state = {
 		whole: true,
 		useDapi: false,
 	},
+	parcellation: {
+		excludedRegionIds: [],
+		ccfAdvanced: false,
+	},
+	parcelAvailableHighlight: null,
+	parcelSelectedHighlight: null,
 	collate: {
 		outputProjectPath: "",
 		name: "collated",
@@ -345,6 +353,43 @@ function renderParamSection(stepId, body, params) {
 			'<p class="small text-muted mb-0">No parameters. Uses each project\'s active <code>pkls/intensity/&lt;run&gt;</code> leaf.</p>';
 		return;
 	}
+	if (stepId === "parcellation") {
+		body.innerHTML =
+			'<div class="alert alert-warning small py-2">' +
+			"Reverts manual Viewer/Editor brush edits on every slice in the active align run." +
+			"</div>" +
+			'<div class="row g-2 mb-2">' +
+				'<div class="col-md-6">' +
+					'<label class="form-label small" for="parcelTierSelect">Hierarchy</label>' +
+					'<select id="parcelTierSelect" class="form-select form-select-sm"></select>' +
+					'<select id="parcelLevelSelect" class="form-select form-select-sm d-none" aria-label="CCFv3 raw depth"></select>' +
+				"</div>" +
+				'<div class="col-md-6">' +
+					'<label class="form-label small" for="parcelRegionSearch">Search regions to exclude</label>' +
+					'<input type="search" class="form-control form-control-sm" id="parcelRegionSearch" placeholder="acronym or name" />' +
+				"</div>" +
+			"</div>" +
+			'<div class="form-check mb-2">' +
+			'<input class="form-check-input" type="checkbox" id="parcelAdvanced" ' +
+			(params.ccfAdvanced ? "checked" : "") +
+			'/><label class="form-check-label" for="parcelAdvanced">Advanced — show CCFv3 raw depths</label></div>' +
+			'<div class="region-dual-list mb-2">' +
+				'<div><div class="small fw-bold mb-1">Available regions</div>' +
+				'<div id="parcelAvailable" class="region-list-panel"></div></div>' +
+				'<div class="d-flex flex-column justify-content-center gap-2">' +
+				'<button type="button" class="btn btn-sm btn-primary" id="parcelAdd">Exclude →</button>' +
+				'<button type="button" class="btn btn-sm btn-outline-secondary" id="parcelRemove">← Remove</button>' +
+				"</div>" +
+				'<div><div class="small fw-bold mb-1">Excluded after rollup</div>' +
+				'<div id="parcelExcluded" class="region-list-panel"></div></div>' +
+			"</div>" +
+			'<p id="parcelRegionHint" class="small text-muted mb-0"></p>';
+		if (!state.parcellation.excludedRegionIds.length && params.excludedRegionIds) {
+			state.parcellation.excludedRegionIds = params.excludedRegionIds.slice();
+		}
+		setTimeout(initParcellationPicker, 0);
+		return;
+	}
 	if (stepId === "dapi_cleanup") {
 		body.innerHTML =
 			fieldRow(
@@ -521,6 +566,186 @@ function renderParams() {
 			renderParamSection(stepId, body, params);
 		}
 	}
+}
+
+// ---------------------------------------------------------------- parcellation picker ----
+
+function initParcellationPicker() {
+	if (!state.catalog) {
+		try {
+			state.catalog = structureCatalog.loadCatalog(getAppRoot());
+		} catch (err) {
+			console.warn("loadCatalog failed", err);
+			return;
+		}
+	}
+	var params = state.params.parcellation || registry.DEFAULT_PARAMS.parcellation;
+	var tierSel = qs("parcelTierSelect");
+	var levelSel = qs("parcelLevelSelect");
+	if (tierSel && !tierSel.dataset.populated) {
+		var tiers = structureCatalog.listTiers(state.catalog);
+		for (var t = 0; t < tiers.length; t++) {
+			var opt = document.createElement("option");
+			opt.value = tiers[t].id;
+			opt.textContent = tiers[t].label;
+			tierSel.appendChild(opt);
+		}
+		tierSel.value = params.tierId || "areas";
+		tierSel.dataset.populated = "1";
+		tierSel.addEventListener("change", function () {
+			state.parcelAvailableHighlight = null;
+			renderParcellationAvailable();
+		});
+	}
+	if (levelSel && !levelSel.dataset.populated) {
+		var infos = structureCatalog.listCcfLevels(state.catalog);
+		for (var i = 0; i < infos.length; i++) {
+			var lopt = document.createElement("option");
+			lopt.value = String(infos[i].level);
+			lopt.textContent = structureCatalog.formatCcfLevelLabel(infos[i]);
+			levelSel.appendChild(lopt);
+		}
+		levelSel.value = String(params.stLevel != null ? params.stLevel : 6);
+		levelSel.dataset.populated = "1";
+		levelSel.addEventListener("change", renderParcellationAvailable);
+	}
+	var adv = qs("parcelAdvanced");
+	if (adv && !adv.dataset.bound) {
+		adv.dataset.bound = "1";
+		adv.checked = !!params.ccfAdvanced;
+		state.parcellation.ccfAdvanced = !!params.ccfAdvanced;
+		adv.addEventListener("change", function () {
+			state.parcellation.ccfAdvanced = adv.checked;
+			tierSel.classList.toggle("d-none", adv.checked);
+			levelSel.classList.toggle("d-none", !adv.checked);
+			renderParcellationAvailable();
+		});
+		tierSel.classList.toggle("d-none", adv.checked);
+		levelSel.classList.toggle("d-none", !adv.checked);
+	}
+	var search = qs("parcelRegionSearch");
+	if (search && !search.dataset.bound) {
+		search.dataset.bound = "1";
+		search.addEventListener("input", renderParcellationAvailable);
+	}
+	var addBtn = qs("parcelAdd");
+	if (addBtn && !addBtn.dataset.bound) {
+		addBtn.dataset.bound = "1";
+		addBtn.addEventListener("click", function () {
+			if (state.parcelAvailableHighlight != null) {
+				addParcellationExcluded(state.parcelAvailableHighlight);
+			}
+		});
+	}
+	var remBtn = qs("parcelRemove");
+	if (remBtn && !remBtn.dataset.bound) {
+		remBtn.dataset.bound = "1";
+		remBtn.addEventListener("click", function () {
+			if (state.parcelSelectedHighlight != null) {
+				removeParcellationExcluded(state.parcelSelectedHighlight);
+			}
+		});
+	}
+	renderParcellationAvailable();
+	renderParcellationExcluded();
+}
+
+function parcellationRegionsForPicker(search) {
+	var adv = qs("parcelAdvanced") && qs("parcelAdvanced").checked;
+	if (adv) {
+		var level = Number(qs("parcelLevelSelect").value);
+		return structureCatalog.listRegionsAtLevel(level, search, state.catalog);
+	}
+	var tierId = qs("parcelTierSelect") ? qs("parcelTierSelect").value : "areas";
+	return structureCatalog.listRegionsForTier(tierId, search, state.catalog);
+}
+
+function renderParcellationAvailable() {
+	var panel = qs("parcelAvailable");
+	if (!panel || !state.catalog) return;
+	var search = qs("parcelRegionSearch") ? qs("parcelRegionSearch").value : "";
+	var regions = parcellationRegionsForPicker(search);
+	var excluded = {};
+	for (var s = 0; s < state.parcellation.excludedRegionIds.length; s++) {
+		excluded[state.parcellation.excludedRegionIds[s]] = true;
+	}
+	panel.innerHTML = "";
+	for (var i = 0; i < regions.length; i++) {
+		var node = regions[i];
+		if (excluded[node.id]) continue;
+		var row = document.createElement("div");
+		row.className = "region-picker-row";
+		if (state.parcelAvailableHighlight === node.id) row.classList.add("selected-row");
+		var style = atlasStyle.rowStyleForRegion(node, state.catalog.byId);
+		row.style.borderLeftColor = style.borderLeftColor;
+		row.style.backgroundColor = style.backgroundColor;
+		var sw = document.createElement("span");
+		sw.className = "region-swatch";
+		sw.style.backgroundColor = style.swatchColor;
+		row.appendChild(sw);
+		row.appendChild(document.createTextNode(node.acronym + " — " + node.name));
+		row.addEventListener("click", (function (id) {
+			return function () {
+				state.parcelAvailableHighlight = id;
+				renderParcellationAvailable();
+			};
+		})(node.id));
+		panel.appendChild(row);
+	}
+	var hint = qs("parcelRegionHint");
+	if (hint) {
+		hint.textContent =
+			state.parcellation.excludedRegionIds.length +
+			" region(s) excluded. Pick a coarser hierarchy or add exclusions.";
+	}
+}
+
+function renderParcellationExcluded() {
+	var panel = qs("parcelExcluded");
+	if (!panel || !state.catalog) return;
+	panel.innerHTML = "";
+	for (var i = 0; i < state.parcellation.excludedRegionIds.length; i++) {
+		var id = state.parcellation.excludedRegionIds[i];
+		var node = state.catalog.byId[id];
+		if (!node) continue;
+		var row = document.createElement("div");
+		row.className = "region-picker-row";
+		if (state.parcelSelectedHighlight === id) row.classList.add("selected-row");
+		row.textContent = node.acronym + " — " + node.name;
+		row.addEventListener("click", (function (rid) {
+			return function () {
+				state.parcelSelectedHighlight = rid;
+				renderParcellationExcluded();
+			};
+		})(id));
+		panel.appendChild(row);
+	}
+}
+
+function addParcellationExcluded(id) {
+	if (state.parcellation.excludedRegionIds.indexOf(id) >= 0) return;
+	state.parcellation.excludedRegionIds.push(id);
+	renderParcellationAvailable();
+	renderParcellationExcluded();
+}
+
+function removeParcellationExcluded(id) {
+	state.parcellation.excludedRegionIds = state.parcellation.excludedRegionIds.filter(function (x) {
+		return x !== id;
+	});
+	renderParcellationAvailable();
+	renderParcellationExcluded();
+}
+
+function isParcellationPlanValid() {
+	if (!state.selectedSteps.parcellation) return true;
+	var p = state.params.parcellation || {};
+	var adv = !!p.ccfAdvanced;
+	var tierId = adv ? null : p.tierId || "areas";
+	var excluded = state.parcellation.excludedRegionIds.length;
+	if (adv) return true;
+	if (tierId !== "full") return true;
+	return excluded > 0;
 }
 
 // ---------------------------------------------------------------- intensity picker ----
@@ -793,6 +1018,13 @@ function collectParamsFromUi() {
 			next.useDapi = !!(qs("intensity-useDapi") && qs("intensity-useDapi").checked);
 			next.selectedRegionIds = state.intensity.selectedIds.slice();
 			next.includeLayers = state.intensity.includeLayers;
+		} else if (stepId === "parcellation") {
+			next.tierId = qs("parcelTierSelect") ? qs("parcelTierSelect").value : "areas";
+			next.stLevel = qs("parcelLevelSelect")
+				? parseInt(qs("parcelLevelSelect").value, 10)
+				: 6;
+			next.ccfAdvanced = !!(qs("parcelAdvanced") && qs("parcelAdvanced").checked);
+			next.excludedRegionIds = state.parcellation.excludedRegionIds.slice();
 		} else if (stepId === "dapi_cleanup") {
 			next.inPlace = qs("dapi-inplace") ? qs("dapi-inplace").value === "true" : true;
 			next.isolate = !!(qs("dapi-isolate") && qs("dapi-isolate").checked);
@@ -875,6 +1107,64 @@ function classifyPreflightCell(bundleRoot, stepId) {
 		return anyPending
 			? { tone: "green", label: "ready", reason: ids.length + " slice(s) with pending geometry" }
 			: { tone: "amber", label: "no-op", reason: "No pending geometry — will skip." };
+	}
+	if (stepId === "intensity") {
+		var iPaths = project.resolvePathsForBundle(bundleRoot, "intensity");
+		if (!iPaths.annodir || !fs.existsSync(iPaths.annodir)) {
+			return { tone: "red", label: "no slices", reason: "Active slices leaf missing." };
+		}
+		var pSummary = parcelCtx.summarizeParcellationForLeaf(iPaths.annodir);
+		if (pSummary.hasParcellation) {
+			var pLabel = parcelCtx.formatParcellationLabel({
+				tier_id: pSummary.tierId,
+				st_level: pSummary.stLevel,
+			});
+			if (state.intensity.includeLayers && !parcelCtx.includeLayersAllowed(pSummary)) {
+				return {
+					tone: "amber",
+					label: "layers off",
+					reason:
+						"Parcellation at " +
+						pLabel +
+						" — include cortical layers will be disabled at run time.",
+				};
+			}
+			return {
+				tone: "green",
+				label: pLabel,
+				reason:
+					"Align run uses " +
+					pLabel +
+					" parcellation; region IDs roll up at run time." +
+					(pSummary.mixedTiers ? " Mixed tiers across slices." : ""),
+			};
+		}
+	}
+	if (stepId === "parcellation") {
+		var pPaths = project.resolvePathsForBundle(bundleRoot, "parcellation");
+		if (!pPaths.annodir || !fs.existsSync(pPaths.annodir)) {
+			return { tone: "red", label: "no slices", reason: "Active slices leaf missing." };
+		}
+		var annoCount = project.countAnnotationPkls(pPaths.annodir);
+		if (!annoCount) {
+			return { tone: "red", label: "no PKLs", reason: "No Annotation_*.pkl in active align run." };
+		}
+		var pParams = state.params.parcellation || registry.DEFAULT_PARAMS.parcellation;
+		var adv = !!pParams.ccfAdvanced;
+		var tierId = adv ? null : pParams.tierId || "areas";
+		var excluded = (state.parcellation.excludedRegionIds || []).length;
+		if (!adv && tierId === "full" && excluded === 0) {
+			return {
+				tone: "amber",
+				label: "no-op",
+				reason: "Full detail with no exclusions — step will skip.",
+			};
+		}
+		return {
+			tone: "green",
+			label: annoCount + " PKL",
+			reason: annoCount + " annotation(s); in-place rollup on active align run.",
+		};
 	}
 	if (stepId === "dapi_cleanup") {
 		var paths = project.resolvePathsForBundle(bundleRoot, "max");
@@ -980,6 +1270,20 @@ function renderPreflightMatrix() {
 		html += "</tr>";
 	}
 	html += "</tbody></table>";
+	if (
+		steps.indexOf("parcellation") >= 0 &&
+		steps.indexOf("intensity") >= 0
+	) {
+		var pIdx = steps.indexOf("parcellation");
+		var iIdx = steps.indexOf("intensity");
+		if (pIdx > iIdx) {
+			html +=
+				'<p class="small text-warning mt-2 mb-0">Parcellation runs after Isolate Regions in this plan — intensity will use pre-parcellation annotations. Re-order tools or run parcellation first.</p>';
+		} else {
+			html +=
+				'<p class="small text-muted mt-2 mb-0">Parcellation runs before Isolate Regions — intensity will match rolled-up annotations.</p>';
+		}
+	}
 	holder.innerHTML = html;
 	updateStartButton(anyRed);
 }
@@ -992,14 +1296,18 @@ function updateStartButton(anyRed) {
 	var hasRed = !!anyRed;
 	var intensityOk =
 		!state.selectedSteps.intensity || state.intensity.selectedIds.length > 0;
+	var parcellationOk = isParcellationPlanValid();
 	var collateOk =
 		!state.selectedSteps.collate || listProjects().length >= 2;
-	btn.disabled = !(hasP && hasS && !hasRed && intensityOk && collateOk);
+	btn.disabled = !(hasP && hasS && !hasRed && intensityOk && parcellationOk && collateOk);
 }
 
 // ---------------------------------------------------------------- start batch ----
 
 function startBatch() {
+	if (state.running || wizardBusy.isWizardBusy()) {
+		return;
+	}
 	state.params = collectParamsFromUi();
 	var plan = buildPlan();
 	var errors = registry.validateBatchPlan(plan);
@@ -1011,6 +1319,13 @@ function startBatch() {
 	if (qs("saveDefaults") && qs("saveDefaults").checked) {
 		registry.saveBatchDefaults(state.params);
 	}
+	wizardBusy.setWizardBusy({
+		busy: true,
+		rootId: "step1",
+		primarySelector: "#startBatch",
+		cancelSelector: "#cancelWizard",
+		stepPillSelector: "#wizardSteps .nav-link",
+	});
 	state.running = true;
 	state.matrixCells = {};
 	state.failedTails = {};
@@ -1240,6 +1555,7 @@ ipc.on("batchJobEnd", function (_event, result) {
 
 ipc.on("batchComplete", function (_event, result) {
 	state.running = false;
+	wizardBusy.setWizardBusy({ busy: false });
 	stopElapsedClock();
 	state.summary = result || null;
 	if (qs("loadbar")) {

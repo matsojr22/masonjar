@@ -22,6 +22,7 @@ const PAGES = [
 	"dapi_cleanup.html",
 	"credits.html",
 	"batch_wizard.html",
+	"parcellation_wizard.html",
 	"align.html",
 	"adjust.html",
 ];
@@ -58,6 +59,12 @@ const DOM_ASSERTIONS = {
 	],
 	"align.html": ["indir", "outdir", "run", "spacing", "whole", "half"],
 	"adjust.html": ["imdir", "annodir", "run"],
+	"parcellation_wizard.html": [
+		"step1",
+		"sliceTableBody",
+		"tierSelect",
+		"step3Start",
+	],
 };
 
 const repoRoot = path.join(__dirname, "..");

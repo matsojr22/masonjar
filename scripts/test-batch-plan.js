@@ -10,6 +10,7 @@ var registry = require("../js/batch_registry");
 function testStepOrderIncludesNewSteps() {
 	assert.ok(registry.BATCH_STEP_ORDER.indexOf("apply_geometry") >= 0);
 	assert.ok(registry.BATCH_STEP_ORDER.indexOf("dapi_cleanup") >= 0);
+	assert.ok(registry.BATCH_STEP_ORDER.indexOf("parcellation") >= 0);
 	assert.ok(registry.BATCH_STEP_ORDER.indexOf("collate") >= 0);
 	assert.ok(registry.BATCH_STEP_ORDER.indexOf("max") >= 0);
 	assert.ok(registry.BATCH_STEP_ORDER.indexOf("sharpen") >= 0);
@@ -116,6 +117,14 @@ function testValidateBatchPlanCollateNeedsTwo() {
 	);
 }
 
+function testDependencyGraphParcellationFanout() {
+	var downstream = registry.DEPENDENCY_GRAPH.parcellation || [];
+	assert.ok(downstream.indexOf("count") >= 0);
+	assert.ok(downstream.indexOf("intensity") >= 0);
+	assert.ok(downstream.indexOf("dual") >= 0);
+	assert.ok(downstream.indexOf("collate") >= 0);
+}
+
 function testDefaultParamsExist() {
 	assert.ok(registry.DEFAULT_PARAMS.max);
 	assert.ok(registry.DEFAULT_PARAMS.sharpen);
@@ -123,6 +132,7 @@ function testDefaultParamsExist() {
 	assert.ok(registry.DEFAULT_PARAMS.intensity);
 	assert.ok(registry.DEFAULT_PARAMS.dapi_cleanup);
 	assert.ok(registry.DEFAULT_PARAMS.apply_geometry);
+	assert.ok(registry.DEFAULT_PARAMS.parcellation);
 	assert.ok(registry.DEFAULT_PARAMS.collate);
 }
 
@@ -131,6 +141,7 @@ function run() {
 	testStepMetaShape();
 	testSortSteps();
 	testDependencyGraphMaxFanout();
+	testDependencyGraphParcellationFanout();
 	testGetDownstreamSteps();
 	testComputeSkipDownstream();
 	testValidateBatchPlanRequiresProjects();

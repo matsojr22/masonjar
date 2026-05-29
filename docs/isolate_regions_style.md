@@ -24,6 +24,8 @@ Advanced help copy (rendered as small italic text under the dropdown when on, in
 
 > Allen Institute CCFv3 ontology depths (st_level 0–11). Some depths group structures that are not anatomically meaningful (e.g. Level 4 contains only Cortical plate). Use the standard tiers above for everyday region picking.
 
+**On-disk parcellation vs picker tier:** The hierarchy dropdown controls which atlas IDs you *select* for output. If the active align run was parcellated (metadata in `{align_leaf}/.masonjar/annotation_parcellation.json`), [`py/annotation_match.py`](../py/annotation_match.py) rolls those selections to match annotation labels at run time — the picker tier is informational; banners on the setup and wizard pages show the applied parcellation level.
+
 ### Mode persistence
 
 | Toolset | Persistence |

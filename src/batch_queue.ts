@@ -129,6 +129,7 @@ export interface BatchQueueCallbacks {
 const DEPENDENCY_GRAPH: Record<string, string[]> = {
   apply_geometry: [
     "dapi_cleanup",
+    "parcellation",
     "max",
     "sharpen",
     "detect",
@@ -137,7 +138,8 @@ const DEPENDENCY_GRAPH: Record<string, string[]> = {
     "dual",
     "collate",
   ],
-  dapi_cleanup: ["intensity", "dual"],
+  dapi_cleanup: ["parcellation", "intensity", "dual"],
+  parcellation: ["count", "intensity", "dual", "collate"],
   max: ["sharpen", "detect", "intensity", "count", "collate", "dual"],
   sharpen: ["detect", "intensity", "count", "collate", "dual"],
   detect: ["count", "collate"],
@@ -443,6 +445,67 @@ interface PreflightDecision {
   skip: boolean;
   reason?: string;
   sliceListPath?: string;
+  forceIncludeLayersOff?: boolean;
+}
+
+const PARCELLATION_META = "annotation_parcellation.json";
+
+function readParcellationMeta(annodir: string): Record<string, unknown> {
+  for (const metaDir of [".masonjar", ".belljar"]) {
+    const p = path.join(annodir, metaDir, PARCELLATION_META);
+    if (fs.existsSync(p)) {
+      try {
+        const raw = fs.readFileSync(p, "utf8");
+        const data = JSON.parse(raw) as unknown;
+        return data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+      } catch {
+        return {};
+      }
+    }
+  }
+  return {};
+}
+
+function includeLayersAllowedForParcellation(meta: Record<string, unknown>): boolean {
+  const keys = Object.keys(meta);
+  if (!keys.length) {
+    return true;
+  }
+  const tiers: Record<string, number> = {};
+  let parcelled = 0;
+  for (const sid of keys) {
+    const entry = meta[sid] as { tier_id?: string; st_level?: number } | undefined;
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    parcelled++;
+    const key = `${entry.tier_id || ""}|${entry.st_level != null ? entry.st_level : ""}`;
+    tiers[key] = (tiers[key] || 0) + 1;
+  }
+  if (parcelled === 0) {
+    return true;
+  }
+  const tierKeys = Object.keys(tiers);
+  let dominant = tierKeys.length === 1 ? tierKeys[0].split("|") : null;
+  if (!dominant && tierKeys.length > 1) {
+    tierKeys.sort((a, b) => tiers[b] - tiers[a]);
+    dominant = tierKeys[0].split("|");
+  }
+  const tierId = dominant && dominant[0] ? dominant[0] : null;
+  const stLevel =
+    dominant && dominant[1] !== "" && dominant[1] != null
+      ? Number(dominant[1])
+      : null;
+  if (!tierId && stLevel == null) {
+    return true;
+  }
+  if (tierId === "layers") {
+    return true;
+  }
+  if (stLevel != null && stLevel >= 11) {
+    return true;
+  }
+  return false;
 }
 
 function preflightJob(
@@ -531,6 +594,35 @@ function preflightJob(
     }
   }
 
+  if (stepId === "parcellation") {
+    const slicesLeaf = resolveActiveRunLeafForBundle(
+      proj.path,
+      roles,
+      processing,
+      "slices",
+    );
+    if (!slicesLeaf || !fs.existsSync(slicesLeaf)) {
+      return { skip: true, reason: "no active slices leaf" };
+    }
+    const annoIds = listAnnotationSliceIds(slicesLeaf);
+    if (!annoIds.length) {
+      return { skip: true, reason: "no annotation PKLs" };
+    }
+    const pParams = (plan.params?.parcellation || {}) as Record<string, unknown>;
+    const ccfAdvanced = !!pParams.ccfAdvanced;
+    const tierId = ccfAdvanced ? null : ((pParams.tierId as string | undefined) || "areas");
+    const stLevel = ccfAdvanced
+      ? (pParams.stLevel != null ? Number(pParams.stLevel) : 6)
+      : null;
+    const excluded = (pParams.excludedRegionIds as number[]) || [];
+    if (!ccfAdvanced && tierId === "full" && excluded.length === 0) {
+      return { skip: true, reason: "no parcellation change" };
+    }
+    if (ccfAdvanced && stLevel == null && excluded.length === 0) {
+      return { skip: true, reason: "no parcellation change" };
+    }
+  }
+
   // slice list for detect/count/intensity
   if (stepId === "detect" || stepId === "count" || stepId === "intensity") {
     const stepPaths = resolvePathsForStep(proj.path, stepId);
@@ -568,6 +660,20 @@ function preflightJob(
     onLine(
       `[repair] wrote ${stepId} slice list (${candidateIds.length}) → ${sliceListPath}`,
     );
+    if (stepId === "intensity") {
+      const includeLayers = !!(plan.intensity && plan.intensity.include_layers);
+      const parcelMeta = readParcellationMeta(slicesLeaf);
+      if (
+        includeLayers &&
+        Object.keys(parcelMeta).length > 0 &&
+        !includeLayersAllowedForParcellation(parcelMeta)
+      ) {
+        onLine(
+          "[repair] intensity: include_layers disabled (parcellation above layer resolution)",
+        );
+        return { skip: false, sliceListPath, forceIncludeLayersOff: true };
+      }
+    }
     return { skip: false, sliceListPath };
   }
 
@@ -582,10 +688,15 @@ function writeIntensityConfig(
   sliceListPath: string,
   whole: boolean,
   useDapi: boolean,
+  forceIncludeLayersOff?: boolean,
 ): string {
+  let includeLayers = !!(plan.intensity && plan.intensity.include_layers);
+  if (forceIncludeLayersOff) {
+    includeLayers = false;
+  }
   const cfg = {
     selected_region_ids: (plan.intensity && plan.intensity.selected_region_ids) || [],
-    include_layers: !!(plan.intensity && plan.intensity.include_layers),
+    include_layers: includeLayers,
     whole,
     use_dapi: useDapi,
     input_dir: paths.indir || "",
@@ -678,6 +789,7 @@ function buildJob(
   plan: BatchPlan,
   sliceListPath: string,
   onLine: (line: string) => void,
+  preflight?: PreflightDecision,
 ): BuiltJob | null {
   const params = (plan.params && plan.params[stepId]) || {};
   const meta = readProjectMeta(proj.path);
@@ -862,12 +974,14 @@ function buildJob(
         ? plan.intensity.selected_region_ids.length
         : 0) || 0;
     const includeLayers = !!(plan.intensity && plan.intensity.include_layers);
+    const effectiveIncludeLayers =
+      preflight && preflight.forceIncludeLayersOff ? false : includeLayers;
     const slug = buildRunSlug("intensity", {
       sortedStems: stems,
       whole: whole ? "True" : "False",
       useDapi,
       regionCount,
-      includeLayers,
+      includeLayers: effectiveIncludeLayers,
     });
     const base = resolveRolePath(proj.path, roles, "pkls");
     const finalOut = resolveRunLeaf(base, "intensity", slug);
@@ -880,6 +994,7 @@ function buildJob(
       sliceListPath || "",
       whole,
       useDapi,
+      preflight && preflight.forceIncludeLayersOff,
     );
     const args = [
       "-i",
@@ -971,14 +1086,13 @@ function buildJob(
   }
 
   if (stepId === "apply_geometry") {
-    const settings = (() => {
-      try {
-        const d = loadProjectJson(proj.path);
-        return (d.settings || {}) as Record<string, unknown>;
-      } catch {
-        return {} as Record<string, unknown>;
-      }
-    })();
+    let settings: Record<string, unknown> = {};
+    try {
+      const d = loadProjectJson(proj.path);
+      settings = (d.settings || {}) as Record<string, unknown>;
+    } catch {
+      settings = {};
+    }
     const cziImport = (settings.czi_import || {}) as Record<string, unknown>;
     const cfg = {
       project_root: proj.path,
@@ -992,6 +1106,36 @@ function buildJob(
       scriptName: "apply_geometry.py",
       args,
       finalOutAbs: proj.path,
+      finalOutRel: "",
+      branch: null,
+    };
+  }
+
+  if (stepId === "parcellation") {
+    const stepPaths = resolvePathsForStep(proj.path, stepId);
+    const annodir = stepPaths.annodir || "";
+    if (!annodir) {
+      return null;
+    }
+    const pParams = (plan.params?.parcellation || {}) as Record<string, unknown>;
+    const cfg = {
+      annotation_dir: annodir,
+      tier_id: pParams.ccfAdvanced ? null : pParams.tierId || "areas",
+      st_level: pParams.ccfAdvanced
+        ? (pParams.stLevel != null ? Number(pParams.stLevel) : 6)
+        : null,
+      excluded_region_ids: pParams.excludedRegionIds || [],
+      slice_ids: null,
+    };
+    const metaPath = ensureMetaDir(proj.path);
+    const cfgPath = path.join(metaPath, "parcellation_run_config.json");
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
+    const mapPath = path.join(deps.appDir, "csv", "structure_map.pkl");
+    const args = ["-a", annodir, "-s", mapPath, "-j", cfgPath];
+    return {
+      scriptName: "apply_parcellation.py",
+      args,
+      finalOutAbs: annodir,
       finalOutRel: "",
       branch: null,
     };
@@ -1259,6 +1403,7 @@ export async function runBatchQueue(
   let completedJobs = 0;
   const batchStartedAt = new Date().toISOString();
   const batchT0 = Date.now();
+  callbacks.onProgress(0, "Starting batch…", "");
 
   function bumpStatus(status: BatchJobResult["status"]) {
     if (!byStatus[status]) {
@@ -1362,7 +1507,7 @@ export async function runBatchQueue(
 
       let job: BuiltJob | null = null;
       try {
-        job = buildJob(deps, proj, stepId, plan, pre.sliceListPath || "", onLine);
+        job = buildJob(deps, proj, stepId, plan, pre.sliceListPath || "", onLine, pre);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         const result = makeJobResult(

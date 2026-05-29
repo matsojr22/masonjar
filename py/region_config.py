@@ -105,12 +105,21 @@ def build_output_targets(
     structure_map: dict,
     selected_region_ids: list[int],
     include_layers: bool,
+    *,
+    context=None,
+    catalog=None,
 ) -> dict[int, str]:
-    """
-    Map atlas id -> acronym for PKL output filenames.
-    include_layers=False: one PKL per selected parent, aggregating descendants.
-    include_layers=True: layer structures and layer descendants under selected parents.
-    """
+    """Map atlas id -> acronym for PKL output filenames."""
+    if context is not None and catalog is not None:
+        from annotation_match import resolve_output_targets
+
+        return resolve_output_targets(
+            structure_map,
+            selected_region_ids,
+            include_layers,
+            context,
+            catalog,
+        )
     selected_set = {int(x) for x in selected_region_ids}
     targets: dict[int, str] = {}
 

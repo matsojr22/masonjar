@@ -10,6 +10,8 @@ var pipelineRuns = require("./pipeline_runs");
 var branding = require("./branding");
 var structureCatalog = require("./structure_catalog");
 var atlasStyle = require("./atlas_region_style");
+var parcelCtx = require("./parcellation_context");
+var wizardBusy = require("./wizard_busy");
 
 var SETUP_KEY = "masonjar.intensity.setup";
 var CONFIG_FILENAME = "intensity_run_config.json";
@@ -28,6 +30,7 @@ var extractRunning = false;
 var lastRunRel = "";
 var lastResult = { slices: 0, pkls: 0, outputDir: "" };
 var pickerMode = "tiers"; // "tiers" | "advanced"
+var parcelSummary = null;
 
 function qs(id) {
 	return document.getElementById(id);
@@ -384,11 +387,57 @@ function writeRunConfig(finalOut) {
 	return { cfgPath: cfgPath, includeLayers: includeLayers };
 }
 
+function updateParcellationBannerWizard() {
+	var banner = qs("intensityParcellationBanner");
+	var layers = qs("includeLayers");
+	if (!setup || !setup.annodir || !banner) return;
+	parcelSummary = parcelCtx.summarizeParcellationForLeaf(setup.annodir);
+	if (!parcelSummary.hasParcellation) {
+		banner.classList.add("d-none");
+		if (layers) layers.disabled = false;
+		return;
+	}
+	var label = parcelCtx.formatParcellationLabel({
+		tier_id: parcelSummary.tierId,
+		st_level: parcelSummary.stLevel,
+	});
+	var msg =
+		"Align run uses <strong>" +
+		label +
+		"</strong> parcellation — selections roll up automatically.";
+	if (parcelSummary.mixedTiers) {
+		msg += " Mixed tiers across slices; Python uses per-slice matching.";
+	}
+	banner.innerHTML = msg;
+	banner.classList.remove("d-none");
+	if (layers) {
+		var allowed = parcelCtx.includeLayersAllowed(parcelSummary);
+		layers.disabled = !allowed;
+		if (!allowed) layers.checked = false;
+	}
+}
+
 function startProcess() {
 	if (!selectedIds.length) {
 		alert("Select at least one region for output.");
 		return;
 	}
+	if (parcelSummary && qs("includeLayers") && qs("includeLayers").checked) {
+		if (!parcelCtx.includeLayersAllowed(parcelSummary)) {
+			alert(
+				"Include cortical layers is not available when annotations are parcellated above layer resolution.",
+			);
+			return;
+		}
+	}
+	wizardBusy.setWizardBusy({
+		busy: true,
+		primarySelector: "#step2Process",
+		backSelectors: ["#step2Back"],
+		extraSelectors: ["#addRegion", "#removeRegion", "#presetVisRsp"],
+		messageEl: "#extractStatus",
+		message: "Starting Isolate Regions…",
+	});
 	var sortedStems = setup.sortedStems || pipelineRuns.listImageSliceStems(setup.indir);
 	var includeLayers = qs("includeLayers") && qs("includeLayers").checked;
 	var slug = pipelineRuns.buildRunSlug("intensity", {
@@ -409,6 +458,7 @@ function startProcess() {
 	try {
 		fs.mkdirSync(finalOut, { recursive: true });
 	} catch (err) {
+		wizardBusy.setWizardBusy({ busy: false });
 		alert("Could not create output directory: " + (err.message || err));
 		return;
 	}
@@ -539,6 +589,7 @@ if (!setup || !setup.indir || !setup.annodir) {
 		renderAvailableList();
 		renderSelectedList();
 	});
+	updateParcellationBannerWizard();
 	qs("step2Process").addEventListener("click", startProcess);
 	qs("cancelExtract").addEventListener("click", function () {
 		if (extractRunning) {
@@ -556,6 +607,7 @@ if (!setup || !setup.indir || !setup.annodir) {
 
 	ipc.on("intensityResult", function () {
 		extractRunning = false;
+		wizardBusy.setWizardBusy({ busy: false });
 		lastResult.pkls = countPklsInOutput(lastResult.outputDir);
 		if (project.isActive() && lastRunRel) {
 			pipelineRuns.setActiveRunRel("intensity", lastRunRel);
@@ -571,6 +623,7 @@ if (!setup || !setup.indir || !setup.annodir) {
 
 	ipc.on("intensityError", function (_event, response) {
 		extractRunning = false;
+		wizardBusy.setWizardBusy({ busy: false });
 		var msg = response && response[0] ? String(response[0]) : "";
 		showSummary(false, msg);
 	});

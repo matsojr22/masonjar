@@ -10,9 +10,15 @@ from slice_index import load_slice_list, slice_id_allowed
 from intensity_flags import parse_whole_flag
 from region_config import (
     build_output_targets,
-    children_for_target,
     load_intensity_config,
 )
+from annotation_match import (
+    atlas_ids_matching_target,
+    include_layers_allowed,
+    load_parcellation_context,
+    resolve_output_targets,
+)
+from structure_catalog import load_catalog
 
 LEGACY_VIS_RSP_ACRONYMS = [
     "VISa",
@@ -274,14 +280,29 @@ if __name__ == "__main__":
     print("Setting up...", flush=True)
 
     structure_map = pickle.load(open(args.map.strip(), "rb"))
+    map_path = Path(args.map.strip())
+    graph_path = map_path.parent / "structure_graph.json"
+    catalog = load_catalog(graph_path) if graph_path.is_file() else {"by_id": {}, "by_acronym": {}}
     if not selected_region_ids:
         selected_region_ids = [
             int(atlas_id)
             for atlas_id, data in structure_map.items()
             if data["acronym"] in LEGACY_VIS_RSP_ACRONYMS
         ]
-    output_targets = build_output_targets(
-        structure_map, selected_region_ids, include_layers
+    run_ctx = load_parcellation_context(annotation_dir)
+    effective_include_layers = include_layers
+    if include_layers and not include_layers_allowed(run_ctx):
+        print(
+            "LOG: intensity_layers_forced_off reason=parcellation_tier_not_layers",
+            flush=True,
+        )
+        effective_include_layers = False
+    output_targets = resolve_output_targets(
+        structure_map,
+        selected_region_ids,
+        effective_include_layers,
+        run_ctx,
+        catalog,
     )
     if not output_targets:
         print(
@@ -360,17 +381,48 @@ if __name__ == "__main__":
             annotation_recaled = resize_image_nearest_neighbor(
                 annotation, (width, height)
             )
-            intensities = {tid: {} for tid in output_targets}
-            dapi_intensities = {tid: {} for tid in output_targets}
-            children_ids = {
-                tid: children_for_target(structure_map, tid, include_layers)
-                for tid in output_targets
+            slice_ctx = load_parcellation_context(annotation_dir, stem)
+            slice_include_layers = effective_include_layers
+            if slice_include_layers and not include_layers_allowed(slice_ctx):
+                slice_include_layers = False
+            slice_targets = resolve_output_targets(
+                structure_map,
+                selected_region_ids,
+                slice_include_layers,
+                slice_ctx,
+                catalog,
+            )
+            if not slice_targets:
+                print(
+                    f"LOG: intensity_skip_slice slice={stem} reason=no_output_targets",
+                    flush=True,
+                )
+                continue
+            tier_log = slice_ctx.tier_id or (
+                f"level_{slice_ctx.st_level}" if slice_ctx.st_level is not None else "full"
+            )
+            print(
+                f"LOG: intensity_parcellation_context slice={stem} "
+                f"tier={tier_log} layers_allowed={include_layers_allowed(slice_ctx)} "
+                f"layers={slice_include_layers}",
+                flush=True,
+            )
+            intensities = {tid: {} for tid in slice_targets}
+            dapi_intensities = {tid: {} for tid in slice_targets}
+            matching_ids = {
+                tid: atlas_ids_matching_target(
+                    structure_map,
+                    tid,
+                    slice_include_layers,
+                    slice_ctx,
+                    catalog,
+                )
+                for tid in slice_targets
             }
 
-            for parent_id, children in children_ids.items():
-                for child_id in children:
-                    # Get the vertex of the child
-                    verts = np.where(annotation_recaled == child_id)
+            for parent_id, label_ids in matching_ids.items():
+                for label_id in label_ids:
+                    verts = np.where(annotation_recaled == np.uint32(label_id))
                     if verts[0].size == 0:
                         continue
                     for point in zip(*verts):
@@ -399,7 +451,7 @@ if __name__ == "__main__":
                     continue
 
                 name = stem
-                region_name = output_targets[region]
+                region_name = slice_targets[region]
 
                 # split file name
                 pkl_out = Path(

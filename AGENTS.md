@@ -89,6 +89,8 @@ Renderer scripts use `require("electron").ipcRenderer`. Main handlers are `ipcMa
 | `killSharpen` | once `killSharpen` | — | |
 | `runDapiCleanup` | `runDapiCleanup` | `dapi_cleanup.py` | `dapiCleanupResult`, `updateLoad`. Args: input dir, output dir, isolate, CLAHE, saturation %, backup dir (in-place), slice list, re-backup, optional bg value. Separate `-i`/`-o` argv tokens for Windows paths with spaces. In-place mode backs up originals to `data/counting/00_dapi_backup/`; separate mode writes `data/counting/00_dapi_clean/` without touching `00_dapi`. |
 | `killDapiCleanup` | once `killDapiCleanup` | — | |
+| `runParcellation` | `runParcellation` | `apply_parcellation.py` | `parcellationResult`, `updateLoad`. Args: `[annodir, configJsonPath]` → `-a`, `-s` (structure_map.pkl), `-j` as separate argv tokens. Config at `{bundle}/.masonjar/parcellation_run_config.json`: `tier_id`, `st_level`, `excluded_region_ids`, optional `slice_ids`. |
+| `killParcellation` | once `killParcellation` | — | |
 | `runDetection` | `runDetection` | `find_neurons.py` | `detectResult`, `updateLoad`. Optional 10th IPC element: slice-list path (`--slice-list`). `-o` is the run output leaf directory. |
 | `killDetect` | once `killDetect` | — | |
 | `runCziProbe` | `runCziProbe` | `czi_probe.py` | `cziProbeResult` (JSON payload), `updateLoad`. Arg: CZI directory. |
@@ -131,6 +133,8 @@ Some renderer files register `*Error` listeners (e.g. `alignError`, `detectError
 **Region picker**: [`js/structure_catalog.js`](js/structure_catalog.js) flattens [`csv/structure_graph.json`](csv/structure_graph.json). The default **Hierarchy** dropdown (`#tierSelect`) lists semantic tiers from `listTiers(catalog)` — **Major divisions / Classic regions / Functional areas / Sub-areas / Cortical layers** (default `areas`). **Advanced — show CCFv3 raw depths** (`#ccfAdvancedToggle`) swaps the picker to CCFv3 `st_level` rows from `listCcfLevels(catalog)` with `formatCcfLevelLabel` (e.g. `Level 6 — 34 regions (AUD, DORpm, GU, MO, SS, …)`); selected region ids are preserved across the swap. Picker mode persists in `sessionStorage["masonjar.ccfPickerMode"]`. **Include cortical layers** (`include_layers`): off = one PKL per selected parent aggregating descendants (default); on = separate PKLs for layer structures under selected parents ([`py/count.py`](py/count.py)-style `"layer"` in structure name). **Visual cortex preset** restores the legacy VIS+RSP ID set. Parent-area row colors: [`js/atlas_region_style.js`](js/atlas_region_style.js), [`docs/isolate_regions_style.md`](docs/isolate_regions_style.md) (`GROUP_STYLE_LEVEL=6`, Allen `color_hex_triplet`).
 
 **Slug** ([`js/pipeline_runs.js`](js/pipeline_runs.js)): span + `_whole`/`_hemi` + optional `_dapi` + `_r{N}` (selection count) + optional `_layers` + subset token.
+
+**Parcellation-aware matching:** When the active align run has per-slice parcellation metadata (`{align_leaf}/.masonjar/annotation_parcellation.json`), [`py/annotation_match.py`](py/annotation_match.py) rolls selected region IDs to the annotation resolution before PKL aggregation ([`py/region.py`](py/region.py) logs `LOG: intensity_parcellation_context …`). **Include cortical layers** is disabled when parcellation is coarser than layer resolution (UI banners in [`js/intensity.js`](js/intensity.js) / [`js/intensity_wizard.js`](js/intensity_wizard.js); batch preflight in [`js/batch_wizard.js`](js/batch_wizard.js) and [`src/batch_queue.ts`](src/batch_queue.ts)). Re-run Isolate Regions after changing parcellation.
 
 ## Isolate Regions PKL schema (with DAPI)
 
@@ -196,7 +200,7 @@ Input-only roles (`dapi`, `original_scans`) stay flat at the role root; `active_
 
 The PyQt viewer shows a **Background channel** bar listing only **`data/counting/_previews/{sliceId}_*.png`** (see [`py/adjust_channels.py`](py/adjust_channels.py); optional `--previews-dir`) — no duplicate entry from `00_dapi`. Switching channels reloads only the background image; annotation pairing stays keyed by slice id. **Paint region** controls: **Hierarchy** tier combo (default `areas`, populated from `list_tiers()`) + **Advanced — show CCFv3 raw depths** checkbox that swaps the dropdown to `list_ccf_levels()` rows with `format_ccf_level_label` and shows a small italic help label below it. Search/area combo is backed by [`py/structure_catalog.py`](py/structure_catalog.py) and sibling `csv/structure_graph.json` of `structure_map.pkl`; the previously-selected `selected_region_id` is preserved across tier and advanced-mode swaps. Left-click brush uses the selected atlas id (empty background OK). **Right-click** still picks from the slice and re-syncs the picker (level combo in advanced mode, area combo always) when the label is in the catalog. **Refresh drawings** rebuilds the overlay from `current_label` without changing region IDs.
 
-**Parcellation (per section):** A separate **Parcellation (this section)** panel ([`py/annotation_relabel.py`](py/annotation_relabel.py)) lets users roll annotation borders up the CCF hierarchy (semantic tiers or raw `st_level`) for **the current section only**. **Preview borders** shows a non-destructive overlay; **Apply parcellation** requires confirmation and relabels from that section’s full-detail backup at `{align_leaf}/.masonjar/annotation_full/{sliceId}.pkl` (written once on first open if missing), which **reverts manual brush edits on that section**. Other sections’ `Annotation_*.pkl` files are never touched. Applied level is recorded per slice in `{align_leaf}/.masonjar/annotation_parcellation.json`. **Restore fine** reloads the backup for the current section only. **Quick: layers → functional areas** applies the functional-areas tier via the same path. Alignment **Finish** optionally applies one parcellation level to every warped section (Napari **Parcellation** control) and writes the same per-slice backups/metadata.
+**Parcellation (per section):** A separate **Parcellation (this section)** panel ([`py/annotation_relabel.py`](py/annotation_relabel.py)) lets users roll annotation borders up the CCF hierarchy (semantic tiers or raw `st_level`) for **the current section only**. **Preview borders** shows a non-destructive overlay; **Apply parcellation** requires confirmation and relabels from that section’s full-detail backup at `{align_leaf}/.masonjar/annotation_full/{sliceId}.pkl` (written once on first open if missing), which **reverts manual brush edits on that section**. Other sections’ `Annotation_*.pkl` files are never touched. Applied level is recorded per slice in `{align_leaf}/.masonjar/annotation_parcellation.json` (optional `excluded_region_ids`). **Restore fine** reloads the backup for the current section only. **Quick: layers → functional areas** applies the functional-areas tier via the same path. **Bulk in Adjust:** checkable slice list + **Apply to selected sections…** (optional per-slice confirm) calls [`py/apply_parcellation.py`](py/apply_parcellation.py) per slice. **Electron bulk wizard:** [`pages/parcellation_wizard.html`](pages/parcellation_wizard.html) + `runParcellation` IPC (hub: Atlas alignment → **Parcellation (bulk)**). **Batch step:** `parcellation` in batch wizard (after `dapi_cleanup`); per-project headless apply via `runBatch` / [`src/batch_queue.ts`](src/batch_queue.ts). **Headless core:** [`py/apply_parcellation.py`](py/apply_parcellation.py), [`py/annotation_exclusion.py`](py/annotation_exclusion.py); package mirror under [`python/src/belljar/annotation/`](python/src/belljar/annotation/) + `belljar parcellate` CLI. Alignment **Finish** optionally applies one parcellation level to every warped section (Napari **Parcellation** control) and writes the same per-slice backups/metadata.
 
 ### Window focus on launch ([`py/qt_window_utils.py`](py/qt_window_utils.py))
 
@@ -220,8 +224,9 @@ Three-step wizard (Setup → Run → Summary) mirroring the CZI / Isolate Region
 
 | Step | Downstream steps marked `skipped: prerequisite_failed` on per-project failure |
 |------|-------------------------------------------------------------------------------|
-| `apply_geometry` | dapi_cleanup, max, sharpen, detect, count, intensity, dual, collate |
-| `dapi_cleanup` | intensity, dual |
+| `apply_geometry` | dapi_cleanup, parcellation, max, sharpen, detect, count, intensity, dual, collate |
+| `dapi_cleanup` | parcellation, intensity, dual |
+| `parcellation` | count, intensity, dual, collate |
 | `max` | sharpen, detect, intensity, count, collate, dual |
 | `sharpen` | detect, intensity, count, collate, dual |
 | `detect` | count, collate |
@@ -240,6 +245,7 @@ Auto-repairs run immediately before launching Python and log each action via `ba
 - **Detect / Count / Intensity missing slice list** — build on the fly from the active `slices` leaf intersected with `00_dapi` (signal branch where applicable) and pass `--slice-list`.
 - **Apply geometry** — skip with reason `no pending geometry` when `settings.czi_import.geometry` is identity or `geometry_applied_at` is already set with no pending changes.
 - **DAPI cleanup** — skip with reason `no DAPI input` when `00_dapi` has zero images.
+- **Parcellation** — skip with reason `no parcellation change` when tier is `full` with no exclusions, or `no annotation PKLs` when active slices leaf is empty.
 - **Collate** — skip with reason `collate needs >= 2 counted projects` when fewer than two selected projects have a count leaf.
 - **Intensity** — write `intensity_run_config.json` from the Step 1 plan and pass `--config` as separate argv tokens; treat `NO_PKLS_WRITTEN` on stderr as failure with a descriptive error.
 
@@ -248,6 +254,7 @@ After every successful job, [`applyPostStepSideEffects`](src/batch_queue.ts) upd
 ### New tools wired into batch
 
 - **DAPI cleanup** (`py/dapi_cleanup.py`) — Step 1 params: isolate, CLAHE, saturation %, backup dir, optional bg value. In-place mode backs up originals to `data/counting/00_dapi_backup/`.
+- **Parcellation** (`py/apply_parcellation.py`) — Step 1 params: CCF tier (or advanced `st_level`), optional exclude regions. In-place rollup on active `slices` leaf; skips when tier is `full` with no exclusions.
 - **Apply geometry** (`py/apply_geometry.py`) — reads `settings.czi_import.geometry`; resets to identity + sets `geometry_applied_at` on success (mirrors `js/orient.js`).
 - **Collate** (`py/collate.py`) — **runs once at end of the batch** across the selected projects that have a quantification leaf. Step 1 picker chooses the output destination project and a slug; the grid renders collate as a single bottom row spanning all project columns.
 

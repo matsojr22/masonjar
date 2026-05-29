@@ -23,6 +23,8 @@ from qtpy.QtWidgets import (
     QComboBox,
     QCompleter,
     QGroupBox,
+    QListWidget,
+    QListWidgetItem,
 )
 from qtpy.QtGui import QImage, QPixmap, QPainter, QColor
 from qtpy.QtCore import Qt, QPoint, QEvent
@@ -42,6 +44,10 @@ from structure_catalog import (
     list_regions_for_tier,
     list_tiers,
     load_catalog,
+)
+from apply_parcellation import (
+    apply_parcellation_to_slice,
+    restore_slice_from_backup,
 )
 from annotation_relabel import (
     clear_slice_parcellation,
@@ -163,6 +169,7 @@ class AnnotationViewer(QMainWindow):
         self.parcel_tier_id = "areas"
         self.parcel_preview = False
         self.parcel_preview_array = None
+        self.parcel_excluded_ids: list[int] = []
 
         self.current_label = None
         with open(self.pairs[self.current_index][1], "rb") as f:
@@ -648,6 +655,47 @@ class AnnotationViewer(QMainWindow):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
+        bulk_row = QHBoxLayout()
+        self.parcel_select_all = QCheckBox("Select all sections", self)
+        self.parcel_select_all.toggled.connect(self._on_parcel_select_all)
+        bulk_row.addWidget(self.parcel_select_all)
+        self.parcel_confirm_each = QCheckBox("Confirm each section", self)
+        bulk_row.addWidget(self.parcel_confirm_each)
+        bulk_row.addStretch()
+        layout.addLayout(bulk_row)
+
+        self.parcel_slice_list = QListWidget(self)
+        self.parcel_slice_list.setMaximumHeight(120)
+        layout.addWidget(self.parcel_slice_list)
+
+        exclude_row = QHBoxLayout()
+        self.parcel_exclude_button = QPushButton("Exclude selected area", self)
+        self.parcel_exclude_button.setToolTip(
+            "Add the paint-brush Area selection to the exclude list for parcellation."
+        )
+        self.parcel_exclude_button.clicked.connect(self._add_parcel_exclude_area)
+        exclude_row.addWidget(self.parcel_exclude_button)
+        self.parcel_clear_exclude_button = QPushButton("Clear excludes", self)
+        self.parcel_clear_exclude_button.clicked.connect(self._clear_parcel_excludes)
+        exclude_row.addWidget(self.parcel_clear_exclude_button)
+        exclude_row.addStretch()
+        layout.addLayout(exclude_row)
+
+        self.parcel_exclude_list = QListWidget(self)
+        self.parcel_exclude_list.setMaximumHeight(80)
+        layout.addWidget(self.parcel_exclude_list)
+
+        bulk_btn_row = QHBoxLayout()
+        self.parcel_apply_selected_button = QPushButton(
+            "Apply to selected sections…", self
+        )
+        self.parcel_apply_selected_button.clicked.connect(
+            self.apply_parcellation_to_selected
+        )
+        bulk_btn_row.addWidget(self.parcel_apply_selected_button)
+        bulk_btn_row.addStretch()
+        layout.addLayout(bulk_btn_row)
+
         group.setLayout(layout)
         ui_layout.addWidget(group)
         self._parcellation_group = group
@@ -687,7 +735,51 @@ class AnnotationViewer(QMainWindow):
         self.parcel_level_combo.setCurrentIndex(default_level_index)
         self.parcel_level_combo.blockSignals(False)
 
+        self._populate_parcel_slice_list()
         self._sync_parcellation_ui_from_metadata()
+
+    def _populate_parcel_slice_list(self):
+        self.parcel_slice_list.blockSignals(True)
+        self.parcel_slice_list.clear()
+        current_sid = self._current_slice_id()
+        for i, (_, _, slice_id) in enumerate(self.pairs):
+            item = QListWidgetItem(f"{slice_id} ({i + 1}/{len(self.pairs)})")
+            item.setData(Qt.ItemDataRole.UserRole, slice_id)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            checked = Qt.CheckState.Checked if slice_id == current_sid else Qt.CheckState.Unchecked
+            item.setCheckState(checked)
+            self.parcel_slice_list.addItem(item)
+        self.parcel_slice_list.blockSignals(False)
+
+    def _on_parcel_select_all(self, checked: bool):
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        for i in range(self.parcel_slice_list.count()):
+            self.parcel_slice_list.item(i).setCheckState(state)
+
+    def _checked_slice_ids(self) -> list[str]:
+        out: list[str] = []
+        for i in range(self.parcel_slice_list.count()):
+            item = self.parcel_slice_list.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                out.append(str(item.data(Qt.ItemDataRole.UserRole)))
+        return out
+
+    def _parcel_excluded_region_ids(self) -> list[int]:
+        return list(self.parcel_excluded_ids)
+
+    def _add_parcel_exclude_area(self):
+        if self.selected_region_id is None:
+            return
+        rid = int(self.selected_region_id)
+        if rid not in self.parcel_excluded_ids:
+            self.parcel_excluded_ids.append(rid)
+            node = get_region(rid, self.catalog) if self.catalog else None
+            label = self._region_display_text(node) if node else str(rid)
+            self.parcel_exclude_list.addItem(label)
+
+    def _clear_parcel_excludes(self):
+        self.parcel_excluded_ids = []
+        self.parcel_exclude_list.clear()
 
     def _parcel_target(self) -> tuple[str | None, int | None]:
         if not self.catalog:
@@ -881,14 +973,127 @@ class AnnotationViewer(QMainWindow):
         tier_id: str | None,
         st_level: int | None,
         update_metadata: bool,
+        slice_id: str | None = None,
+        confirm: bool = True,
+        write_disk: bool = False,
     ) -> bool:
         if not self.catalog:
             return False
-        slice_id = self._current_slice_id()
-        baseline = load_full_backup(self.annotation_dir, slice_id)
-        if baseline is None:
-            baseline = np.asarray(self.current_label, dtype=np.uint32)
-            ensure_full_backup(self.annotation_dir, slice_id, baseline)
+        sid = slice_id or self._current_slice_id()
+        target_label = parcellation_target_label(
+            self.catalog,
+            tier_id=tier_id,
+            st_level=st_level,
+            ccf_advanced=self.parcel_ccf_advanced,
+        )
+        if confirm and not self._confirm_parcellation_apply(sid, target_label):
+            return False
+
+        before = np.asarray(self.current_label, dtype=np.uint32) if sid == self._current_slice_id() else None
+        if before is None and write_disk:
+            pkl_path = self.annotation_dir / f"Annotation_{sid}.pkl"
+            if pkl_path.is_file():
+                with pkl_path.open("rb") as f:
+                    before = np.asarray(pickle.load(f), dtype=np.uint32)
+
+        result = apply_parcellation_to_slice(
+            self.annotation_dir,
+            sid,
+            tier_id=tier_id,
+            st_level=st_level,
+            excluded_region_ids=self._parcel_excluded_region_ids() or None,
+            structure_map=self.structure_map,
+            catalog=self.catalog,
+            write_disk=write_disk,
+        )
+        if not result.ok:
+            self.status_bar.showMessage(f"{sid}: failed — {result.error}")
+            return False
+
+        if sid == self._current_slice_id() and result.label_array is not None:
+            if before is not None:
+                self._push_relabel_undo(before, result.label_array)
+            self.selected_region_id = None
+            self.selected_region_name = "None"
+            self.current_label = result.label_array
+            self.parcel_preview = False
+            self.parcel_preview_toggle.blockSignals(True)
+            self.parcel_preview_toggle.setChecked(False)
+            self.parcel_preview_toggle.blockSignals(False)
+            self.parcel_preview_array = None
+            self.was_changed = True
+            self.show_image_with_overlay()
+
+        if update_metadata and write_disk:
+            pass  # metadata written by apply_parcellation_to_slice
+
+        summary = (
+            f"{sid}: relabeled {result.pixels_changed:,} px; "
+            f"excluded {result.excluded_pixels:,} px; "
+            f"{len(result.unknown_ids)} unmapped ids"
+        )
+        self.status_bar.showMessage(summary)
+        self._update_parcellation_labels()
+        return True
+
+    def _set_parcel_bulk_busy(self, busy: bool) -> None:
+        widgets = [
+            self.parcel_tier_combo,
+            self.parcel_level_combo,
+            self.parcel_ccf_advanced_toggle,
+            self.parcel_preview_toggle,
+            self.parcel_apply_button,
+            self.parcel_restore_button,
+            self.parcel_select_all,
+            self.parcel_confirm_each,
+            self.parcel_slice_list,
+            self.parcel_exclude_button,
+            self.parcel_clear_exclude_button,
+            self.parcel_exclude_list,
+            self.parcel_apply_selected_button,
+            self.tier_combo,
+            self.level_combo,
+            self.area_combo,
+            self.brush_slider,
+            self.convert_button,
+            self.refresh_button,
+        ]
+        for widget in widgets:
+            if widget is not None:
+                widget.setEnabled(not busy)
+        if busy:
+            self.status_bar.showMessage("Applying parcellation to selected sections…")
+        QApplication.processEvents()
+
+    def apply_parcellation(self):
+        tier_id, st_level = self._parcel_target()
+        if tier_id == FULL_DETAIL_TIER and not self._parcel_excluded_region_ids():
+            QMessageBox.information(
+                self,
+                "Full detail",
+                "Choose a coarser parcellation target, add excludes, or use Restore fine.",
+            )
+            return
+        self._apply_parcellation_from_baseline(
+            tier_id=tier_id,
+            st_level=st_level,
+            update_metadata=True,
+            write_disk=False,
+        )
+
+    def apply_parcellation_to_selected(self):
+        tier_id, st_level = self._parcel_target()
+        if tier_id == FULL_DETAIL_TIER and not self._parcel_excluded_region_ids():
+            QMessageBox.information(
+                self,
+                "Full detail",
+                "Choose a coarser parcellation target or add excludes.",
+            )
+            return
+        selected = self._checked_slice_ids()
+        if not selected:
+            QMessageBox.warning(self, "No sections", "Select at least one section.")
+            return
 
         target_label = parcellation_target_label(
             self.catalog,
@@ -896,63 +1101,75 @@ class AnnotationViewer(QMainWindow):
             st_level=st_level,
             ccf_advanced=self.parcel_ccf_advanced,
         )
-        if not self._confirm_parcellation_apply(slice_id, target_label):
-            return False
-
-        before = np.asarray(self.current_label, dtype=np.uint32)
-        result = relabel_to_target(
-            baseline,
-            self.catalog,
-            tier_id=tier_id,
-            st_level=st_level,
-            structure_map=self.structure_map,
+        preview = ", ".join(selected[:5])
+        if len(selected) > 5:
+            preview += f", … and {len(selected) - 5} more"
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Apply parcellation")
+        dialog.setText(f"Apply parcellation to {len(selected)} sections?")
+        unsaved = (
+            "\n\nYou have unsaved brush strokes on the current section."
+            if self.was_changed
+            else ""
         )
-        self._push_relabel_undo(before, result.label_array)
+        dialog.setInformativeText(
+            f"Target: {target_label}. Sections: {preview}.\n"
+            "Manual brush adjustments on selected sections will be reverted."
+            f"{unsaved}\n\nUnchecked sections are not changed."
+        )
+        dialog.setStandardButtons(
+            QMessageBox.StandardButton.Apply | QMessageBox.StandardButton.Cancel
+        )
+        if dialog.exec() != QMessageBox.StandardButton.Apply:
+            return
 
-        self.selected_region_id = None
-        self.selected_region_name = "None"
-        self.current_label = result.label_array
+        self._set_parcel_bulk_busy(True)
         self.parcel_preview = False
-        self.parcel_preview_toggle.blockSignals(True)
         self.parcel_preview_toggle.setChecked(False)
-        self.parcel_preview_toggle.blockSignals(False)
         self.parcel_preview_array = None
-        self.was_changed = True
 
-        if update_metadata:
-            if tier_id == FULL_DETAIL_TIER:
-                clear_slice_parcellation(self.annotation_dir, slice_id)
-            else:
-                set_slice_parcellation(
+        ok_count = 0
+        fail_count = 0
+        confirm_each = self.parcel_confirm_each.isChecked()
+        try:
+            for i, sid in enumerate(selected):
+                self.status_bar.showMessage(
+                    f"Parcellation {i + 1}/{len(selected)}: {sid}"
+                )
+                QApplication.processEvents()
+                if confirm_each:
+                    if not self._confirm_parcellation_apply(sid, target_label):
+                        continue
+                result = apply_parcellation_to_slice(
                     self.annotation_dir,
-                    slice_id,
+                    sid,
                     tier_id=tier_id,
                     st_level=st_level,
+                    excluded_region_ids=self._parcel_excluded_region_ids() or None,
+                    structure_map=self.structure_map,
+                    catalog=self.catalog,
+                    write_disk=True,
                 )
+                if result.ok:
+                    ok_count += 1
+                else:
+                    fail_count += 1
+        finally:
+            self._set_parcel_bulk_busy(False)
 
-        summary = (
-            f"{slice_id}: relabeled {result.pixels_changed:,} px; "
-            f"{len(result.unknown_ids)} unmapped ids"
-        )
-        self.status_bar.showMessage(summary)
-        self._update_parcellation_labels()
-        self.show_image_with_overlay()
-        return True
+        current_sid = self._current_slice_id()
+        if current_sid in selected:
+            pkl_path = self.annotation_dir / f"Annotation_{current_sid}.pkl"
+            if pkl_path.is_file():
+                with pkl_path.open("rb") as f:
+                    self.current_label = pickle.load(f)
+                self.was_changed = False
+                self.show_image_with_overlay()
 
-    def apply_parcellation(self):
-        tier_id, st_level = self._parcel_target()
-        if tier_id == FULL_DETAIL_TIER:
-            QMessageBox.information(
-                self,
-                "Full detail",
-                "Choose a coarser parcellation target, or use Restore fine to "
-                "reload the full-detail backup for this section.",
-            )
-            return
-        self._apply_parcellation_from_baseline(
-            tier_id=tier_id,
-            st_level=st_level,
-            update_metadata=True,
+        self._sync_parcellation_ui_from_metadata()
+        self.status_bar.showMessage(
+            f"Bulk parcellation: {ok_count} ok, {fail_count} failed"
         )
 
     def restore_fine_parcellation(self):
@@ -985,8 +1202,16 @@ class AnnotationViewer(QMainWindow):
             return
 
         before = np.asarray(self.current_label, dtype=np.uint32)
-        self._push_relabel_undo(before, backup)
-        self.current_label = np.asarray(backup, dtype=np.uint32)
+        result = restore_slice_from_backup(
+            self.annotation_dir, slice_id, write_disk=True
+        )
+        if not result.ok:
+            return
+        backup_arr = load_full_backup(self.annotation_dir, slice_id)
+        if backup_arr is None:
+            return
+        self._push_relabel_undo(before, backup_arr)
+        self.current_label = np.asarray(backup_arr, dtype=np.uint32)
         self.was_changed = True
         clear_slice_parcellation(self.annotation_dir, slice_id)
         self.parcel_preview = False
@@ -1192,6 +1417,7 @@ class AnnotationViewer(QMainWindow):
             self._update_section_labels()
             self._sync_parcellation_ui_from_metadata()
             self.rebuild_channel_buttons()
+            self._populate_parcel_slice_list()
             self.show_image_with_overlay()
 
     def next_image(self):
@@ -1213,6 +1439,7 @@ class AnnotationViewer(QMainWindow):
             self._update_section_labels()
             self._sync_parcellation_ui_from_metadata()
             self.rebuild_channel_buttons()
+            self._populate_parcel_slice_list()
             self.show_image_with_overlay()
 
     def view_to_image_coordinates(self, view, point):

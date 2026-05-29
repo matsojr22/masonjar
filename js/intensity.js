@@ -9,6 +9,7 @@ var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
 var branding = require("./branding");
+var parcelCtx = require("./parcellation_context");
 
 var SETUP_KEY = "masonjar.intensity.setup";
 
@@ -159,3 +160,44 @@ workspace.bindPathPicker(annodir, "annodir", "slices");
 if (dapidir) {
 	workspace.bindPathPicker(dapidir, "dapidir", "dapi");
 }
+
+
+function updateParcellationBanner() {
+	var banner = document.getElementById("parcellationBanner");
+	if (!banner) return;
+	var annodirPath = annodir && annodir.value ? annodir.value : "";
+	if (!annodirPath) {
+		banner.classList.add("d-none");
+		return;
+	}
+	var summary = parcelCtx.summarizeParcellationForLeaf(annodirPath);
+	if (!summary.hasParcellation) {
+		banner.classList.add("d-none");
+		return;
+	}
+	var label = parcelCtx.formatParcellationLabel({
+		tier_id: summary.tierId,
+		st_level: summary.stLevel,
+	});
+	var msg =
+		"Active align run uses <strong>" +
+		label +
+		"</strong> parcellation. Region selections in the wizard are rolled up to match annotation labels. " +
+		'<a href="./parcellation_wizard.html">Change parcellation</a>. ' +
+		"Re-run Isolate Regions after changing parcellation.";
+	if (summary.mixedTiers) {
+		msg +=
+			" <span class=\"text-warning\">Mixed parcellation tiers across slices — results use per-slice context.</span>";
+	}
+	if (!parcelCtx.includeLayersAllowed(summary)) {
+		msg += " Include cortical layers is not available at this parcellation level.";
+	}
+	banner.innerHTML = msg;
+	banner.classList.remove("d-none");
+}
+
+if (annodir) {
+	annodir.addEventListener("change", updateParcellationBanner);
+	annodir.addEventListener("input", updateParcellationBanner);
+}
+updateParcellationBanner();

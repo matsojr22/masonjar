@@ -1721,6 +1721,59 @@ ipcMain.on("runSharpen", function (event: any, data: any[]) {
   });
 });
 
+// Parcellation (bulk CCF rollup)
+ipcMain.on("runParcellation", function (event: any, data: any[]) {
+  const structPath = path.join(appDir, "csv/structure_map.pkl");
+  const args: string[] = [];
+  appendFlagPathArg(args, "-a", data[0]);
+  appendFlagPathArg(args, "-s", structPath);
+  const configPath =
+    data.length > 1 && data[1] != null ? String(data[1]).trim() : "";
+  if (configPath.length > 0) {
+    appendFlagPathArg(args, "-j", configPath);
+  }
+
+  let options = {
+    mode: "text",
+    pythonPath: path.join(envPythonPath, pyCommand),
+    scriptPath: pyScriptsPath,
+    args,
+  };
+
+  let pyshell = new PythonShell("apply_parcellation.py", options);
+  attachPythonShellKillCleanup(pyshell, "killParcellation");
+  event.sender.send("updateLoad", [0, "Launching parcellation…"]);
+  var total: number = 0;
+  var current: number = 0;
+  pyshell.on("message", (message: string) => {
+    if (total === 0) {
+      total = Number(message);
+    } else if (message == "Done!") {
+      pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        const pyFail = describePythonShellFailure(err, code, signal);
+        if (pyFail) {
+          reportPythonFailure(pyFail);
+        } else {
+          console.log("The exit code was: " + code);
+          console.log("The exit signal was: " + signal);
+        }
+        event.sender.send("parcellationResult");
+        ipcMain.removeAllListeners("killParcellation");
+      });
+    } else {
+      current++;
+      event.sender.send("updateLoad", [
+        Math.round((current / total) * 100),
+        "Parcellation " + current + " / " + total,
+      ]);
+    }
+  });
+
+  ipcMain.once("killParcellation", function () {
+    pyshell.kill();
+  });
+});
+
 // DAPI cleanup
 ipcMain.on("runDapiCleanup", function (event: any, data: any[]) {
   let args: string[] = ["-i", String(data[0] || "").trim(), "-o", String(data[1] || "").trim()];

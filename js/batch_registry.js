@@ -13,6 +13,7 @@ var BATCH_DEFAULTS_KEY = "masonjar.batchDefaults";
 var BATCH_STEP_ORDER = [
 	"apply_geometry",
 	"dapi_cleanup",
+	"parcellation",
 	"max",
 	"sharpen",
 	"detect",
@@ -42,11 +43,21 @@ var STEP_META = {
 		roles: { indir: "dapi", outdir: "dapi" },
 		requiresAnnotations: false,
 	},
+	parcellation: {
+		id: "parcellation",
+		label: "Parcellation (CCF rollup)",
+		description:
+			"Roll annotation borders to a chosen CCF tier on every slice in the active align run (in-place).",
+		order: 2,
+		roles: { annodir: "slices" },
+		requiresAnnotations: true,
+		dependsOn: [],
+	},
 	max: {
 		id: "max",
 		label: "Max projection",
 		description: "Collapse z-stacks under `original_scans/` into a single max projection per slice.",
-		order: 2,
+		order: 3,
 		roles: { indir: "original_scans", outdir: "max" },
 	},
 	sharpen: {
@@ -116,6 +127,7 @@ var STEP_META = {
 var DEPENDENCY_GRAPH = {
 	apply_geometry: [
 		"dapi_cleanup",
+		"parcellation",
 		"max",
 		"sharpen",
 		"detect",
@@ -124,7 +136,8 @@ var DEPENDENCY_GRAPH = {
 		"dual",
 		"collate",
 	],
-	dapi_cleanup: ["intensity", "dual"],
+	dapi_cleanup: ["parcellation", "intensity", "dual"],
+	parcellation: ["count", "intensity", "dual", "collate"],
 	max: ["sharpen", "detect", "intensity", "count", "collate", "dual"],
 	sharpen: ["detect", "intensity", "count", "collate", "dual"],
 	detect: ["count", "collate"],
@@ -142,6 +155,12 @@ var DEFAULT_PARAMS = {
 		saturation: 5,
 		inPlace: true,
 		bgValue: "",
+	},
+	parcellation: {
+		tierId: "areas",
+		stLevel: null,
+		ccfAdvanced: false,
+		excludedRegionIds: [],
 	},
 	max: { dendrites: false, cells: false },
 	sharpen: { radius: 1, amount: 1, equalize: false },
