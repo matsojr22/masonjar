@@ -13,6 +13,7 @@ if str(_PY_DIR) not in sys.path:
 from structure_catalog import (  # noqa: E402
     CCF_ADVANCED_HELP,
     TIER_DEFS,
+    ancestor_at_level,
     format_ccf_level_label,
     get_region,
     list_ccf_levels,
@@ -172,3 +173,11 @@ def test_format_ccf_level_label_single_structure_ctxpl(catalog):
 def test_ccf_advanced_help_text_constant():
     assert "CCFv3" in CCF_ADVANCED_HELP
     assert "st_level" in CCF_ADVANCED_HELP
+
+
+def test_ancestor_at_level_matches_group_parent(catalog):
+    visp4 = catalog["by_acronym"]["VISp4"]
+    via_ancestor = ancestor_at_level(visp4["id"], catalog, st_level=6)
+    via_group = visp4["groupParentId"]
+    assert via_ancestor == via_group
+

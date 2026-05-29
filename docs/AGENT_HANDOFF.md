@@ -1,14 +1,16 @@
 # Agent session handoff
 
-Last updated: 2026-05-27 (CZI multi-folder path canonicalization v2.4.5). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-05-29 (CCF parcellation hierarchy v2.4.6). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 ## Current release
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **2.4.5** |
-| Latest tag | `v2.4.5` |
+| `package.json` version | **2.4.6** |
+| Latest tag | `v2.4.6` |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v2.4.6** — CCF parcellation hierarchy in Viewer/Editor and optional Align Finish. [`py/annotation_relabel.py`](py/annotation_relabel.py) + [`py/structure_catalog.py`](py/structure_catalog.py) `ancestor_at_level` / `relabel_to_target` roll annotation PKL borders up semantic tiers or raw `st_level`. Adjust **Parcellation (this section)** panel: preview, apply (confirm + revert brush edits on current slice only), restore fine from `.masonjar/annotation_full/{sliceId}.pkl`, per-slice metadata in `.masonjar/annotation_parcellation.json`. **Quick: layers → functional areas** uses same path. Align Napari **Parcellation** dropdown applies level on Finish (default full detail). Tests: `python/tests/test_annotation_relabel.py`.
 
 **v2.4.5** — CZI multi-folder import reliability. `canonicalSourceDir()` (`path.resolve`) on all wizard `source_dir` strings so Windows path variants cannot reset folder-2 `scan_index` to 0 (fixes M514 two-day interleave). Probe IPC always resolves (`cziProbeResult` on close/kill/error; 60 min wizard timeout; single-flight CZI guard). Step 2 **`probeLog`** mirrors `cziJobLog`/`updateLoad`; Application log replays buffered lines on first open. Re-probe all no longer kills an in-flight probe. Tests: `testResyncScanIndicesCanonicalPaths`, `testMergeProbeDirCanonicalReplace` in `scripts/test-czi-import.js`.
 

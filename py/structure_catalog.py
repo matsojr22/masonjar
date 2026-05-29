@@ -6,7 +6,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-GROUP_STYLE_LEVEL = 6
+TIER_TARGET_LEVEL: dict[str, int] = {
+    "major": 2,
+    "regions": 5,
+    "areas": 6,
+    "subareas": 8,
+    "layers": 11,
+}
+
+FULL_DETAIL_TIER = "full"
 
 # Semantic tier definitions. Order is the order shown in the Hierarchy dropdown.
 # Rules are derived from CCFv3 ``st_level`` plus simple name heuristics so a
@@ -55,6 +63,9 @@ def _parse_id_path(id_path: str | list[int] | None) -> list[int]:
     return [int(part) for part in str(id_path).split("/") if part]
 
 
+GROUP_STYLE_LEVEL = 6
+
+
 def group_parent_for_region(region: dict[str, Any], by_id: dict[int, dict[str, Any]]):
     if not region:
         return None
@@ -76,6 +87,103 @@ def group_parent_for_region(region: dict[str, Any], by_id: dict[int, dict[str, A
     if nearest_shallow:
         return nearest_shallow
     return region
+
+
+def _node_matches_tier_target(
+    node: dict[str, Any],
+    target_level: int,
+    tier_id: str | None,
+) -> bool:
+    """True when *node* is a valid rollup target for tier or raw st_level."""
+    lvl = int(node["st_level"])
+    if tier_id == "layers":
+        return lvl == target_level or _is_layer_name(node)
+    if tier_id == "subareas":
+        return lvl == target_level and not _is_layer_name(node)
+    return lvl == target_level
+
+
+def _resolve_target_level(
+    *,
+    tier_id: str | None = None,
+    st_level: int | None = None,
+) -> tuple[int | None, str | None]:
+    """Return ``(target_st_level, tier_id)`` for rollup; ``(None, None)`` = full detail."""
+    if tier_id == FULL_DETAIL_TIER:
+        return None, None
+    if st_level is not None:
+        return int(st_level), tier_id
+    if tier_id:
+        level = TIER_TARGET_LEVEL.get(tier_id)
+        if level is None:
+            raise ValueError(f"unknown tier_id: {tier_id!r}")
+        return level, tier_id
+    return None, None
+
+
+def ancestor_at_level(
+    region_id: int,
+    catalog: dict[str, Any],
+    *,
+    tier_id: str | None = None,
+    st_level: int | None = None,
+    structure_map: dict | None = None,
+) -> int:
+    """Map a structure id to its rollup ancestor at *tier_id* or raw *st_level*.
+
+    Walks ``idPath`` from root toward leaf. Returns the deepest ancestor whose
+    ``st_level`` matches the target (with tier heuristics for layers/subareas).
+    If none match, returns the nearest shallower ancestor (coarser). Unknown ids
+    are returned unchanged.
+    """
+    rid = int(region_id)
+    if rid == 0:
+        return 0
+
+    target_level, effective_tier = _resolve_target_level(
+        tier_id=tier_id, st_level=st_level
+    )
+    if target_level is None:
+        return rid
+
+    by_id = catalog.get("by_id") or {}
+    node = by_id.get(rid)
+    path_ids: list[int] = []
+    if node:
+        path_ids = list(node.get("idPath") or _parse_id_path(node.get("id_path")))
+    elif structure_map:
+        for key in (rid,):
+            info = structure_map.get(key)
+            if info is None:
+                try:
+                    import numpy as np
+
+                    info = structure_map.get(np.uint32(rid))
+                except ImportError:
+                    pass
+            if info:
+                path_ids = _parse_id_path(info.get("id_path"))
+                break
+    if not path_ids:
+        path_ids = [rid]
+
+    at_level = None
+    nearest_shallow = None
+    for nid in path_ids:
+        ancestor = by_id.get(int(nid))
+        if not ancestor:
+            continue
+        lvl = int(ancestor["st_level"])
+        if _node_matches_tier_target(ancestor, target_level, effective_tier):
+            at_level = ancestor
+        if lvl < target_level:
+            nearest_shallow = ancestor
+
+    if at_level:
+        return int(at_level["id"])
+    if nearest_shallow:
+        return int(nearest_shallow["id"])
+    return rid
 
 
 def _flatten_graph(

@@ -302,6 +302,13 @@ class AlignmentController:
         self.input_path = input_path
         self.output_path = output_path
         self.structures_path = structures_path
+        graph_path = Path(structures_path).parent / "structure_graph.json"
+        self.catalog = None
+        self.parcel_ccf_advanced = False
+        if graph_path.is_file():
+            from structure_catalog import load_catalog
+
+            self.catalog = load_catalog(graph_path)
         self.model_path = model_path
         self.sam_path = Path(sam_path).expanduser()
         self.spacing = spacing
@@ -395,6 +402,12 @@ class AlignmentController:
         )
         self.region_selection.currentIndexChanged.connect(self.que_update_slice)
 
+        self.parcel_selection = QComboBox()
+        self.parcel_advanced = QCheckBox("Parcellation: Advanced CCF levels")
+        self.parcel_level_combo = QComboBox()
+        self.parcel_level_combo.setVisible(False)
+        self._init_parcellation_controls()
+
         self.mask_button = QPushButton("Set Mask")
         self.mask_button.clicked.connect(self.update_mask)
 
@@ -461,6 +474,10 @@ class AlignmentController:
                 self.progress_bar,
                 QLabel("Region"),
                 self.region_selection,
+                QLabel("Parcellation (all sections on Finish)"),
+                self.parcel_selection,
+                self.parcel_advanced,
+                self.parcel_level_combo,
                 self.link_angles_button,
                 self.mask_button,
                 self.next_button,
@@ -493,6 +510,50 @@ class AlignmentController:
     def _slice_id_from_filename(name: str) -> str:
         stem = ".".join(name.split(".")[:-1]) if "." in name else name
         return stem.split(".")[0]
+
+    def _init_parcellation_controls(self):
+        from structure_catalog import (
+            FULL_DETAIL_TIER,
+            format_ccf_level_label,
+            list_ccf_levels,
+            list_tiers,
+        )
+
+        self.parcel_selection.clear()
+        self.parcel_selection.addItem("Full detail", FULL_DETAIL_TIER)
+        if self.catalog:
+            for tier in list_tiers(self.catalog):
+                self.parcel_selection.addItem(tier["label"], tier["id"])
+            self.parcel_level_combo.clear()
+            for info in list_ccf_levels(self.catalog):
+                self.parcel_level_combo.addItem(
+                    format_ccf_level_label(info), info["level"]
+                )
+        else:
+            self.parcel_selection.setEnabled(False)
+            self.parcel_advanced.setEnabled(False)
+            self.parcel_level_combo.setEnabled(False)
+            return
+
+        self.parcel_advanced.toggled.connect(self._on_parcel_advanced_toggled)
+
+    def _on_parcel_advanced_toggled(self, checked: bool):
+        self.parcel_ccf_advanced = bool(checked)
+        self.parcel_selection.setVisible(not self.parcel_ccf_advanced)
+        self.parcel_level_combo.setVisible(self.parcel_ccf_advanced)
+
+    def _parcel_target(self) -> tuple[str | None, int | None]:
+        from structure_catalog import FULL_DETAIL_TIER
+
+        if not self.catalog:
+            return FULL_DETAIL_TIER, None
+        if self.parcel_ccf_advanced:
+            level = self.parcel_level_combo.currentData()
+            return None, int(level) if level is not None else None
+        tier_id = self.parcel_selection.currentData()
+        if tier_id == FULL_DETAIL_TIER:
+            return FULL_DETAIL_TIER, None
+        return str(tier_id) if tier_id else None, None
 
     def scan_input(self):
         """Scan the input path for valid images and add to file_list"""
@@ -1054,6 +1115,41 @@ class AlignmentController:
             finally:
                 current_slice.image = saved_image
                 current_slice.label = saved_label
+
+            from annotation_relabel import (
+                colorize_labels,
+                ensure_full_backup,
+                relabel_to_target,
+                set_slice_parcellation,
+            )
+            from structure_catalog import FULL_DETAIL_TIER
+
+            output_leaf = Path(self.output_path)
+            ensure_full_backup(output_leaf, slice_stem, warped_labels)
+
+            tier_id, st_level = self._parcel_target()
+            if self.catalog and tier_id != FULL_DETAIL_TIER:
+                result = relabel_to_target(
+                    warped_labels,
+                    self.catalog,
+                    tier_id=tier_id,
+                    st_level=st_level,
+                    structure_map=structure_map,
+                )
+                warped_labels = result.label_array
+                color_label = colorize_labels(warped_labels, structure_map)
+                set_slice_parcellation(
+                    output_leaf,
+                    slice_stem,
+                    tier_id=tier_id,
+                    st_level=st_level,
+                )
+                print(
+                    f"LOG: align_parcellation slice={slice_stem} "
+                    f"tier={tier_id} level={st_level} "
+                    f"pixels_changed={result.pixels_changed}",
+                    flush=True,
+                )
 
             stripped_filename = filename.split(".")
             stripped_filename = ".".join(stripped_filename[:-1])
