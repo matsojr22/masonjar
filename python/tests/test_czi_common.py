@@ -38,7 +38,9 @@ from czi_common import (  # noqa: E402
     parse_section_suffix,
     parse_section_with_identifier,
     preview_plane_to_uint8,
+    probe_channels_read,
     read_czi_plane,
+    z_indices_with_data,
     role_key_for_channel,
     sanitize_other_name,
     select_largest_plane,
@@ -441,7 +443,11 @@ def test_probe_file_uses_metadata_only_assess(monkeypatch) -> None:
 
     fake_mod = types.ModuleType("aicspylibczi")
     fake_mod.CziFile = FakeCziFile
+    def fake_channel_probe(czi, scene=0):
+        return [], []
+
     monkeypatch.setattr(czi_probe, "assess_mosaic_import", fake_assess)
+    monkeypatch.setattr(czi_probe, "probe_channels_read", fake_channel_probe)
     monkeypatch.setitem(sys.modules, "aicspylibczi", fake_mod)
     result = czi_probe.probe_file(Path("sample.czi"))
     assert result["is_mosaic"] is True
@@ -726,3 +732,167 @@ def test_scene_indices_mosaic_multi_block() -> None:
     dims = [{"Z": (i, i + 1), "M": (0, 4)} for i in range(10)]
     czi = _fake_czi(dims, is_mosaic=True, shape_is_consistent=False)
     assert scene_indices_from_czi(czi) == [0]
+
+
+def test_z_indices_with_data_sparse() -> None:
+    import numpy as np
+
+    class FakeCzi:
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"Z": (0, 9), "C": (0, 3), "M": (0, 2), "S": (0, 1)}]
+
+        def get_all_mosaic_tile_bounding_boxes(self, **kwargs):
+            z = kwargs.get("Z", 0)
+            if z == 4:
+                return {0: type("B", (), {"x": 0, "y": 0, "w": 10, "h": 10})()}
+            return {}
+
+    assert z_indices_with_data(FakeCzi(), 0, 2, log_sparse=False) == [4]
+
+
+class PylibCZI_PixelTypeException(Exception):
+    pass
+
+
+def test_read_czi_plane_mosaic_pixel_type_fallback() -> None:
+    import numpy as np
+
+    class FakeCzi:
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"Z": (0, 1), "C": (0, 1), "M": (0, 1), "S": (0, 1)}]
+
+        def read_mosaic(self, **kwargs):
+            raise PylibCZI_PixelTypeException(
+                "PixelType( Unknown type ): Pixel Type unsupported by libCZI."
+            )
+
+        def read_image(self, **kwargs):
+            arr = np.full((8, 12), 42, dtype=np.uint8)
+            return arr, [("Y", 8), ("X", 12)]
+
+    plane = read_czi_plane(FakeCzi(), scene=0, z=0, channel=2)
+    assert plane.shape == (8, 12)
+    assert int(plane[0, 0]) == 42
+
+
+def test_read_czi_plane_mosaic_tile_fallback() -> None:
+    import numpy as np
+
+    class BBox:
+        def __init__(self, x, y, w, h):
+            self.x, self.y, self.w, self.h = x, y, w, h
+
+    class FakeCzi:
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"Z": (0, 1), "C": (0, 1), "M": (0, 2), "S": (0, 1)}]
+
+        def get_mosaic_scene_bounding_box(self, index=0):
+            return BBox(0, 0, 20, 10)
+
+        def read_mosaic(self, **kwargs):
+            raise PylibCZI_PixelTypeException("unsupported")
+
+        def read_image(self, **kwargs):
+            if "M" in kwargs:
+                arr = np.full((10, 10), int(kwargs["M"]) + 1, dtype=np.uint8)
+                return arr, [("Y", 10), ("X", 10)]
+            raise PylibCZI_PixelTypeException("unsupported")
+
+        def get_all_mosaic_tile_bounding_boxes(self, **kwargs):
+            return {
+                0: BBox(0, 0, 10, 10),
+                1: BBox(10, 0, 10, 10),
+            }
+
+    plane = read_czi_plane(FakeCzi(), scene=0, z=0, channel=0)
+    assert plane.shape == (10, 20)
+    assert int(plane[0, 0]) == 1
+    assert int(plane[0, 10]) == 2
+
+
+def test_probe_channel_pixel_probe_sparse() -> None:
+    import numpy as np
+
+    class FakeCzi:
+        pixel_type = "gray16"
+
+        def is_mosaic(self):
+            return False
+
+        def get_dims_shape(self):
+            return [{"Z": (0, 9), "C": (0, 3), "S": (0, 1)}]
+
+        def get_tile_bounding_box(self, **kwargs):
+            if kwargs.get("Z") == 4 and kwargs.get("C") == 2:
+                return type("B", (), {"x": 0, "y": 0, "w": 4, "h": 4})()
+            return type("B", (), {"x": 0, "y": 0, "w": 0, "h": 0})()
+
+        def read_image(self, **kwargs):
+            if kwargs.get("C") == 2:
+                raise PylibCZI_PixelTypeException("bad ch2")
+            arr = np.ones((4, 4), dtype=np.uint8)
+            return arr, [("Y", 4), ("X", 4)]
+
+        def read_mosaic(self, **kwargs):
+            raise AssertionError("not mosaic")
+
+    probe, warnings = probe_channels_read(FakeCzi(), scene=0)
+    ch2 = next(p for p in probe if p["index"] == 2)
+    assert ch2["sparse_z"] is True
+    assert ch2["z_with_data"] == [4]
+    assert ch2["ok"] is False
+    assert any("sample read failed" in w for w in warnings)
+
+
+def test_extract_sparse_z_single_plane(tmp_path: Path, monkeypatch) -> None:
+    """One sparse Z with data writes a 2D TIFF (no full Z loop)."""
+    import numpy as np
+
+    import czi_extract
+
+    read_calls: list[int] = []
+
+    class FakeCzi:
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"Z": (0, 9), "C": (0, 1), "M": (0, 1), "S": (0, 1)}]
+
+        def get_all_mosaic_tile_bounding_boxes(self, **kwargs):
+            if kwargs.get("Z") == 4:
+                return {0: type("B", (), {"x": 0, "y": 0, "w": 4, "h": 4})()}
+            return {}
+
+        def read_mosaic(self, **kwargs):
+            read_calls.append(int(kwargs.get("Z", -1)))
+            arr = np.full((4, 4), 7, dtype=np.uint8)
+            return arr, [("Y", 4), ("X", 4)]
+
+    out_path = tmp_path / "slice.tif"
+    czi_extract.extract_z_stack(
+        FakeCzi(),
+        scene=0,
+        channel=0,
+        z_indices=[4],
+        out_path=out_path,
+        preview_path=None,
+        preview_scale=0.05,
+        slice_id="M528_s001",
+    )
+    assert read_calls == [4]
+    assert out_path.is_file()
+    import tifffile
+
+    data = tifffile.imread(str(out_path))
+    assert data.ndim == 2
+    assert data.shape == (4, 4)

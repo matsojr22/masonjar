@@ -45,7 +45,7 @@ from czi_common import (
     signal_preview_path,
     slice_order_ordinal_map,
     write_import_state,
-    z_indices_from_czi,
+    z_indices_with_data,
 )
 from run_manifest import write_run_manifest
 
@@ -138,6 +138,27 @@ def read_plane(czi, scene: int, z: int, channel: int):
     return read_czi_plane(czi, scene, z, channel)
 
 
+def _preview_plane_from_stack(planes: list, z_indices: list[int]):
+    """Pick brightest plane for preview (sparse counterstain / single focal plane)."""
+    if not planes:
+        return None
+    if len(planes) == 1:
+        return planes[0]
+    import numpy as _np
+
+    best = planes[0]
+    best_score = -1.0
+    for plane in planes:
+        arr = _np.asarray(plane)
+        if arr.size == 0:
+            continue
+        score = float(_np.percentile(arr, 99))
+        if score > best_score:
+            best_score = score
+            best = plane
+    return best
+
+
 def extract_z_stack(
     czi,
     scene: int,
@@ -153,11 +174,18 @@ def extract_z_stack(
     role_key: str = "",
 ) -> None:
     planes = []
-    mid_z = z_indices[len(z_indices) // 2] if z_indices else 0
     n_z = len(z_indices)
     for i, z in enumerate(z_indices):
         emit_log(f"  Reading Z {i + 1}/{n_z} ({slice_id} ch {channel})")
-        plane = read_plane(czi, scene, z, channel)
+        try:
+            plane = read_plane(czi, scene, z, channel)
+        except Exception as exc:
+            sparse_n = len(z_indices)
+            raise RuntimeError(
+                f"CZI channel C={channel} Z={z} unsupported pixel type ({exc}). "
+                f"Sparse-Z had {sparse_n} position(s). "
+                "Try re-export from ZEN as 16-bit grayscale, or skip this channel."
+            ) from exc
         planes.append(plane)
     h, w = planes[0].shape[:2] if planes else (0, 0)
     parent = out_path.parent
@@ -185,7 +213,7 @@ def extract_z_stack(
     emit_log(f"  Writing {'plane' if n_z == 1 else 'z-stack'} -> {rel} ({approx_mb:.1f} MB approx)")
 
     if preview_path is not None or role_key == ROLE_DAPI:
-        preview_plane = planes[z_indices.index(mid_z)] if z_indices else planes[0]
+        preview_plane = _preview_plane_from_stack(planes, z_indices) or planes[0]
         if role_key == ROLE_DAPI:
             if bundle_root is None:
                 raise ValueError("bundle_root required for DAPI preview dual-write")
@@ -752,7 +780,7 @@ def main() -> int:
         )
         emit_progress(f"Extracting {czi_path.name} scene {scene_index} ch {channel_index}")
         czi = get_czi(czi_path)
-        z_idxs = z_indices_from_czi(czi)
+        z_idxs = z_indices_with_data(czi, scene_index, channel_index)
         out_path = original_scans_path(bundle_root, ch, slice_id)
         preview_path = None
         if role == ROLE_DAPI:

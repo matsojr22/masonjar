@@ -574,6 +574,8 @@ function normalizeProbeFileEntry(file, sourceDir, scanIndex) {
 		likely_unstitched: file.likely_unstitched,
 		mosaic_stitch_status: file.mosaic_stitch_status || "unknown",
 		mosaic_warnings: file.mosaic_warnings || [],
+		read_warnings: file.read_warnings || [],
+		channel_pixel_probe: file.channel_pixel_probe || [],
 		scenes: scenes,
 		channels: file.channels || [],
 		error: file.error,
@@ -615,6 +617,57 @@ function collectMosaicWarnings(files) {
 			if (!seen[fallback]) {
 				seen[fallback] = true;
 				out.push({ basename: f.basename || "", message: fallback });
+			}
+		}
+	}
+	return out;
+}
+
+function collectChannelProbeWarnings(files) {
+	var out = [];
+	var seen = {};
+	var list = files || [];
+	for (var i = 0; i < list.length; i++) {
+		var f = list[i];
+		if (f.error) {
+			continue;
+		}
+		var warnings = f.read_warnings || [];
+		for (var w = 0; w < warnings.length; w++) {
+			var msg = String(warnings[w] || "").trim();
+			if (!msg) {
+				continue;
+			}
+			var key = (f.basename || f.path || "file") + "|" + msg;
+			if (seen[key]) {
+				continue;
+			}
+			seen[key] = true;
+			out.push({
+				basename: f.basename || "",
+				message: msg,
+				isError: msg.indexOf("sample read failed") >= 0,
+			});
+		}
+		var probe = f.channel_pixel_probe || [];
+		for (var p = 0; p < probe.length; p++) {
+			var entry = probe[p];
+			if (entry.ok !== false) {
+				continue;
+			}
+			var errMsg =
+				(f.basename || "CZI") +
+				" channel " +
+				entry.index +
+				": read check failed — " +
+				(entry.error || "unknown");
+			if (!seen[errMsg]) {
+				seen[errMsg] = true;
+				out.push({
+					basename: f.basename || "",
+					message: errMsg,
+					isError: true,
+				});
 			}
 		}
 	}

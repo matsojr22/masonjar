@@ -836,6 +836,31 @@ function renderMosaicWarnings(files) {
 	box.classList.remove("d-none");
 }
 
+function renderChannelProbeWarnings(files) {
+	var box = qs("channelProbeWarningBox");
+	if (!box) {
+		return;
+	}
+	var warnings = cziImport.collectChannelProbeWarnings(files);
+	if (!warnings.length) {
+		box.classList.add("d-none");
+		box.innerHTML = "";
+		return;
+	}
+	var html =
+		"<strong>Channel read check:</strong> Sparse-Z counterstain (one focal plane) is normal. " +
+		"Failed sample reads may still fail at import unless fallbacks succeed.<ul class=\"mb-0 mt-2\">";
+	for (var i = 0; i < warnings.length; i++) {
+		var w = warnings[i];
+		var label = w.basename ? "<code>" + w.basename + "</code>: " : "";
+		var cls = w.isError ? "text-danger" : "text-muted";
+		html += '<li class="' + cls + '">' + label + w.message + "</li>";
+	}
+	html += "</ul>";
+	box.innerHTML = html;
+	box.classList.remove("d-none");
+}
+
 function mosaicTableLabel(f) {
 	if (f.error) {
 		return "—";
@@ -873,6 +898,7 @@ function renderCziFileTable(files) {
 	}
 	renderMosaicInfo(files);
 	renderMosaicWarnings(files);
+	renderChannelProbeWarnings(files);
 	tbody.innerHTML = "";
 	var showFolderCol = (wizardState.cziSourceDirs || []).length > 1;
 	for (var i = 0; i < files.length; i++) {

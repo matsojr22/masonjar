@@ -1,14 +1,16 @@
 # Agent session handoff
 
-Last updated: 2026-05-29 (CCF parcellation hierarchy v2.4.6). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-01 (CZI sparse-Z + mosaic read fallbacks v2.4.7). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 ## Current release
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **2.4.6** |
-| Latest tag | `v2.4.6` |
+| `package.json` version | **2.4.7** |
+| Latest tag | `v2.4.7` |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v2.4.7** — CZI import robustness for mosaic DAPI and sparse-Z counterstain. [`py/czi_common.py`](py/czi_common.py) `z_indices_with_data` skips empty Z slots (single focal-plane counterstain); `read_czi_plane` falls back from `read_mosaic` to `read_image` to per-tile composite on pixel-type errors. [`py/czi_probe.py`](py/czi_probe.py) per-channel `channel_pixel_probe` + wizard channel read alerts. Tests: `python/tests/test_czi_common.py` (sparse-Z, pixel fallback, probe).
 
 **v2.4.6** — CCF parcellation hierarchy in Viewer/Editor and optional Align Finish. [`py/annotation_relabel.py`](py/annotation_relabel.py) + [`py/structure_catalog.py`](py/structure_catalog.py) `ancestor_at_level` / `relabel_to_target` roll annotation PKL borders up semantic tiers or raw `st_level`. Adjust **Parcellation (this section)** panel: preview, apply (confirm + revert brush edits on current slice only), restore fine from `.masonjar/annotation_full/{sliceId}.pkl`, per-slice metadata in `.masonjar/annotation_parcellation.json`. **Quick: layers → functional areas** uses same path. Align Napari **Parcellation** dropdown applies level on Finish (default full detail). Tests: `python/tests/test_annotation_relabel.py`.
 

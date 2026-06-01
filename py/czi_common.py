@@ -449,6 +449,83 @@ def z_indices_from_czi(czi) -> list[int]:
     return list(range(z_count))
 
 
+def is_mosaic_read_error(exc: BaseException) -> bool:
+    """True when libCZI/aicspylibczi rejects a plane read (pixel type, etc.)."""
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    if "pixeltype" in name.lower():
+        return True
+    if "pixel type" in msg and "unsupported" in msg:
+        return True
+    if "unknown type" in msg:
+        return True
+    return False
+
+
+is_pixel_type_read_error = is_mosaic_read_error
+
+
+def _subblock_lookup_kwargs(czi, scene: int, z: int, channel: int) -> dict[str, Any]:
+    """Kwargs for tile/bbox APIs (omit S on single-scene mosaic reads)."""
+    kwargs: dict[str, Any] = {"Z": z, "C": channel}
+    is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
+    blocks = normalized_dim_blocks(czi)
+    s_count = dim_size(blocks[0], "S") if blocks else 1
+    if not is_mosaic or s_count > 1:
+        kwargs["S"] = scene
+    return kwargs
+
+
+def _z_position_has_subblocks(czi, scene: int, z: int, channel: int) -> bool:
+    """True when this Z/C (and scene) has at least one subblock or mosaic tile."""
+    is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
+    lookup = _subblock_lookup_kwargs(czi, scene, z, channel)
+    get_tiles = getattr(czi, "get_all_mosaic_tile_bounding_boxes", None)
+    if is_mosaic and callable(get_tiles):
+        try:
+            tiles = get_tiles(**lookup) or {}
+            for bbox in tiles.values():
+                w, h = bbox_width_height(bbox)
+                if w > 0 and h > 0:
+                    return True
+        except Exception:
+            pass
+    get_tile = getattr(czi, "get_tile_bounding_box", None)
+    if callable(get_tile):
+        try:
+            bbox = get_tile(**lookup)
+            w, h = bbox_width_height(bbox)
+            return w > 0 and h > 0
+        except Exception:
+            pass
+    if is_mosaic:
+        return False
+    return True
+
+
+def z_indices_with_data(
+    czi,
+    scene: int,
+    channel: int,
+    *,
+    log_sparse: bool = True,
+) -> list[int]:
+    """Z indices that have subblocks for this channel (sparse counterstain stacks)."""
+    all_z = z_indices_from_czi(czi)
+    if not all_z:
+        return [0]
+    with_data = [z for z in all_z if _z_position_has_subblocks(czi, scene, z, channel)]
+    if with_data:
+        if log_sparse and len(with_data) < len(all_z):
+            emit_log(
+                "LOG: sparse_z channel C="
+                f"{channel} using Z={with_data} ({len(with_data)} of {len(all_z)} "
+                "positions with subblocks)"
+            )
+        return with_data
+    return all_z
+
+
 def m_tile_count_from_czi(czi) -> int:
     blocks = normalized_dim_blocks(czi)
     return dim_size(blocks[0], "M") if blocks else 1
@@ -862,6 +939,165 @@ def select_largest_plane(data: Any) -> tuple[Any, bool]:
     return arr, selected
 
 
+def _coerce_plane_uint(plane: Any) -> Any:
+    import numpy as _np
+
+    arr = _np.asarray(plane)
+    while arr.ndim > 2:
+        arr = arr[0]
+    if arr.ndim < 2:
+        raise ValueError(f"expected 2D plane, got shape {arr.shape}")
+    if arr.dtype != _np.uint8 and arr.dtype != _np.uint16:
+        arr = arr.astype(_np.uint16)
+    return arr
+
+
+def _read_plane_from_read_image(
+    czi,
+    scene: int,
+    z: int,
+    channel: int,
+    *,
+    is_mosaic: bool,
+) -> Any:
+    fixed = {"Z", "C"}
+    if is_mosaic:
+        result = czi.read_image(Z=z, C=channel)
+    else:
+        fixed.add("S")
+        result = czi.read_image(S=scene, Z=z, C=channel)
+    data, dims = unpack_read_image(result)
+    plane = collapse_to_plane_2d(data, dims, fixed=fixed)
+    plane, picked = select_largest_plane(plane)
+    if picked:
+        h, w = plane.shape[:2]
+        emit_log(f"  selected largest plane ({h}x{w})")
+    return plane
+
+
+def _read_mosaic_plane_from_tiles(czi, scene: int, z: int, channel: int) -> Any:
+    import numpy as _np
+
+    get_tiles = getattr(czi, "get_all_mosaic_tile_bounding_boxes", None)
+    if not callable(get_tiles):
+        raise RuntimeError("get_all_mosaic_tile_bounding_boxes unavailable")
+    tiles = get_tiles(**_subblock_lookup_kwargs(czi, scene, z, channel)) or {}
+    if not tiles:
+        raise RuntimeError("no mosaic tiles for plane")
+    region = mosaic_region_for_scene(czi, scene)
+    if region is not None:
+        scene_x, scene_y, scene_w, scene_h = region
+    else:
+        get_bbox = getattr(czi, "get_mosaic_scene_bounding_box", None)
+        if not callable(get_bbox):
+            raise RuntimeError("no mosaic scene bounding box")
+        bbox = get_bbox(scene)
+        scene_x, scene_y = bbox_origin(bbox)
+        scene_w, scene_h = bbox_width_height(bbox)
+    if scene_w <= 0 or scene_h <= 0:
+        raise RuntimeError("invalid mosaic scene extent")
+    canvas = _np.zeros((scene_h, scene_w), dtype=_np.uint16)
+    n_pasted = 0
+    for m_key in sorted(tiles.keys(), key=lambda k: int(k)):
+        tile_bbox = tiles[m_key]
+        tx, ty = bbox_origin(tile_bbox)
+        tw, th = bbox_width_height(tile_bbox)
+        if tw <= 0 or th <= 0:
+            continue
+        rel_x = tx - scene_x
+        rel_y = ty - scene_y
+        result = czi.read_image(M=int(m_key), Z=z, C=channel)
+        data, dims = unpack_read_image(result)
+        tile_plane = collapse_to_plane_2d(data, dims, fixed={"Z", "C", "M"})
+        tile_plane, _ = select_largest_plane(tile_plane)
+        tile_plane = _coerce_plane_uint(tile_plane)
+        th_actual, tw_actual = tile_plane.shape[:2]
+        y1 = max(0, rel_y)
+        x1 = max(0, rel_x)
+        y2 = min(scene_h, y1 + th_actual)
+        x2 = min(scene_w, x1 + tw_actual)
+        sy1 = max(0, -rel_y)
+        sx1 = max(0, -rel_x)
+        dh, dw = y2 - y1, x2 - x1
+        if dh <= 0 or dw <= 0:
+            continue
+        canvas[y1:y2, x1:x2] = tile_plane[sy1 : sy1 + dh, sx1 : sx1 + dw]
+        n_pasted += 1
+    if n_pasted == 0:
+        raise RuntimeError("mosaic tile fallback pasted zero tiles")
+    emit_log(f"LOG: read_mosaic_tile_fallback tiles={n_pasted}")
+    return canvas
+
+
+def _read_mosaic_plane_primary(
+    czi,
+    scene: int,
+    z: int,
+    channel: int,
+    *,
+    sample_scale: float,
+) -> Any:
+    import numpy as _np
+
+    kwargs: dict[str, Any] = {
+        "scale_factor": float(sample_scale),
+        "Z": z,
+        "C": channel,
+    }
+    blocks = normalized_dim_blocks(czi)
+    s_count = dim_size(blocks[0], "S") if blocks else 1
+    if s_count > 1:
+        region = mosaic_region_for_scene(czi, scene)
+        if region is not None:
+            kwargs["region"] = region
+    result = czi.read_mosaic(**kwargs)
+    data, dims = unpack_read_image(result)
+    if not isinstance(data, _np.ndarray):
+        data = _np.asarray(data)
+    plane = data
+    while plane.ndim > 2:
+        plane = plane[0]
+    return plane
+
+
+def probe_channels_read(czi, scene: int = 0) -> tuple[list[dict[str, Any]], list[str]]:
+    """Per-channel sparse-Z + sample read for CZI probe."""
+    warnings: list[str] = []
+    pixel_type = ""
+    try:
+        pixel_type = str(getattr(czi, "pixel_type", "") or "")
+    except Exception:
+        pass
+    z_total = len(z_indices_from_czi(czi))
+    channel_pixel_probe: list[dict[str, Any]] = []
+    for cidx in channel_indices_from_czi(czi):
+        z_with_data = z_indices_with_data(czi, scene, cidx, log_sparse=False)
+        sparse = len(z_with_data) < z_total
+        sample_z = z_with_data[len(z_with_data) // 2] if z_with_data else 0
+        entry: dict[str, Any] = {
+            "index": cidx,
+            "ok": True,
+            "pixel_type": pixel_type,
+            "z_with_data": z_with_data,
+            "z_count": z_total,
+            "sparse_z": sparse,
+            "error": "",
+        }
+        if sparse and z_total > 1:
+            warnings.append(
+                f"Channel {cidx}: {len(z_with_data)}/{z_total} Z plane(s) with data "
+                "(single-plane counterstain is normal)."
+            )
+        try:
+            read_czi_plane(czi, scene, sample_z, cidx, sample_scale=0.05)
+        except Exception as exc:
+            entry["ok"] = False
+            entry["error"] = str(exc)
+            warnings.append(f"Channel {cidx}: sample read failed — {exc}")
+        channel_pixel_probe.append(entry)
+    return channel_pixel_probe, warnings
+
+
 def read_czi_plane(
     czi,
     scene: int,
@@ -871,37 +1107,25 @@ def read_czi_plane(
     sample_scale: float = 1.0,
 ) -> Any:
     """Read one S/Z/C plane (pyramid-safe, mosaic-aware). sample_scale applies to mosaic reads."""
-    import numpy as _np
-
     is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
-    fixed = {"S", "Z", "C"}
     if is_mosaic:
-        kwargs: dict[str, Any] = {
-            "scale_factor": float(sample_scale),
-            "Z": z,
-            "C": channel,
-        }
-        blocks = normalized_dim_blocks(czi)
-        s_count = dim_size(blocks[0], "S") if blocks else 1
-        if s_count > 1:
-            region = mosaic_region_for_scene(czi, scene)
-            if region is not None:
-                kwargs["region"] = region
-        result = czi.read_mosaic(**kwargs)
-        data, dims = unpack_read_image(result)
-        if not isinstance(data, _np.ndarray):
-            data = _np.asarray(data)
-        plane = data
-        while plane.ndim > 2:
-            plane = plane[0]
+        try:
+            plane = _read_mosaic_plane_primary(
+                czi, scene, z, channel, sample_scale=sample_scale
+            )
+        except Exception as exc:
+            emit_log(f"LOG: read_mosaic failed ({exc}); falling back to read_image")
+            try:
+                plane = _read_plane_from_read_image(
+                    czi, scene, z, channel, is_mosaic=True
+                )
+            except Exception as exc2:
+                emit_log(
+                    f"LOG: read_image fallback failed ({exc2}); trying tile composite"
+                )
+                plane = _read_mosaic_plane_from_tiles(czi, scene, z, channel)
     else:
-        result = czi.read_image(S=scene, Z=z, C=channel)
-        data, dims = unpack_read_image(result)
-        plane = collapse_to_plane_2d(data, dims, fixed=fixed)
-        plane, picked = select_largest_plane(plane)
-        if picked:
-            h, w = plane.shape[:2]
-            emit_log(f"  selected largest plane ({h}x{w})")
-    if plane.dtype != _np.uint8 and plane.dtype != _np.uint16:
-        plane = plane.astype(_np.uint16)
-    return plane
+        plane = _read_plane_from_read_image(
+            czi, scene, z, channel, is_mosaic=False
+        )
+    return _coerce_plane_uint(plane)

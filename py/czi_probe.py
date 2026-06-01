@@ -10,12 +10,12 @@ from czi_common import (
     assess_mosaic_import,
     channel_indices_from_czi,
     default_slice_id,
-    dim_size,
     emit_log,
     emit_progress,
     emit_result,
     natural_sort_czi_paths,
     normalized_dim_blocks,
+    probe_channels_read,
     scene_indices_from_czi,
     suggest_role_from_label,
     z_indices_from_czi,
@@ -57,6 +57,18 @@ def probe_file(path: Path) -> dict:
             }
         )
 
+    scene = scene_indices[0] if scene_indices else 0
+    channel_pixel_probe, read_warnings = probe_channels_read(czi, scene)
+    for entry in channel_pixel_probe:
+        cidx = int(entry.get("index", 0))
+        for ch in channel_meta:
+            if int(ch.get("index", -1)) == cidx:
+                ch["z_with_data"] = entry.get("z_with_data") or []
+                ch["z_count"] = entry.get("z_count")
+                ch["sparse_z"] = bool(entry.get("sparse_z"))
+                ch["read_ok"] = bool(entry.get("ok"))
+                break
+
     basename = path.name
     scenes = []
     for sidx in scene_indices:
@@ -79,6 +91,8 @@ def probe_file(path: Path) -> dict:
         "likely_unstitched": bool(mosaic_info.get("likely_unstitched")),
         "mosaic_stitch_status": mosaic_info.get("mosaic_stitch_status", "unknown"),
         "mosaic_warnings": list(mosaic_info.get("mosaic_warnings") or []),
+        "read_warnings": read_warnings,
+        "channel_pixel_probe": channel_pixel_probe,
         "scene_count": len(scene_indices),
         "channel_count": len(channel_indices),
         "z_count": z_count,
