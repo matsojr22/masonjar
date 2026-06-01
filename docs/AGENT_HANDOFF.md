@@ -1,14 +1,16 @@
 # Agent session handoff
 
-Last updated: 2026-06-01 (CZI wizard probe export hotfix v2.4.8). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-01 (CZI multi-Z preview fix v2.4.9). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 ## Current release
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **2.4.8** |
-| Latest tag | `v2.4.8` (pending) |
+| `package.json` version | **2.4.9** |
+| Latest tag | `v2.4.9` (pending) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v2.4.9** — Hotfix: CZI extract no longer uses `ndarray or planes[0]` when picking a signal preview plane after multi-Z stack write (fixes `ValueError: truth value of an array is ambiguous` on first somata item). Test: `test_extract_multi_z_preview_no_truthiness_error`.
 
 **v2.4.8** — Hotfix: export `collectChannelProbeWarnings` from [`js/czi_import.js`](js/czi_import.js) so CZI wizard reprobe can render per-channel probe alerts (fixes `collectChannelProbeWarnings is not a function`). Includes v2.4.7 CZI sparse-Z + mosaic read fallbacks.
 

@@ -213,7 +213,9 @@ def extract_z_stack(
     emit_log(f"  Writing {'plane' if n_z == 1 else 'z-stack'} -> {rel} ({approx_mb:.1f} MB approx)")
 
     if preview_path is not None or role_key == ROLE_DAPI:
-        preview_plane = _preview_plane_from_stack(planes, z_indices) or planes[0]
+        preview_plane = _preview_plane_from_stack(planes, z_indices)
+        if preview_plane is None:
+            preview_plane = planes[0]
         if role_key == ROLE_DAPI:
             if bundle_root is None:
                 raise ValueError("bundle_root required for DAPI preview dual-write")

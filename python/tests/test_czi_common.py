@@ -896,3 +896,49 @@ def test_extract_sparse_z_single_plane(tmp_path: Path, monkeypatch) -> None:
     data = tifffile.imread(str(out_path))
     assert data.ndim == 2
     assert data.shape == (4, 4)
+
+
+def test_extract_multi_z_preview_no_truthiness_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Multi-Z signal extract must not use ndarray truthiness for preview pick."""
+    import numpy as np
+
+    import cv2
+    import czi_extract
+    import tifffile
+
+    monkeypatch.setattr(czi_extract, "np", np)
+    monkeypatch.setattr(czi_extract, "tiff", tifffile)
+    monkeypatch.setattr(czi_extract, "cv2", cv2)
+
+    def fake_read_plane(_czi, _scene, z, _channel):
+        # Z=1 plane is brighter so preview should not fall back to planes[0] only.
+        val = 200 if z == 1 else 10
+        return np.full((8, 8), val, dtype=np.uint8)
+
+    monkeypatch.setattr(czi_extract, "read_plane", fake_read_plane)
+
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+    out_path = bundle_root / "data" / "original_scans" / "somata" / "M553_s001.tif"
+    preview_path = bundle_root / "data" / "counting" / "_previews" / "M553_s001_somata.png"
+
+    czi_extract.extract_z_stack(
+        object(),
+        scene=0,
+        channel=0,
+        z_indices=[0, 1],
+        out_path=out_path,
+        preview_path=preview_path,
+        preview_scale=0.05,
+        slice_id="M553_s001",
+        bundle_root=bundle_root,
+        role_key="signal_somata",
+    )
+
+    assert out_path.is_file()
+    stack = tifffile.imread(str(out_path))
+    assert stack.ndim == 3
+    assert stack.shape[0] == 2
+    assert preview_path.is_file()
