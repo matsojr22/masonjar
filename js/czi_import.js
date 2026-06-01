@@ -1850,6 +1850,7 @@ module.exports = {
 	countExtractWorkItems: countExtractWorkItems,
 	primaryMaxRunRel: primaryMaxRunRel,
 	collectMosaicWarnings: collectMosaicWarnings,
+	collectChannelProbeWarnings: collectChannelProbeWarnings,
 	collectMosaicInfo: collectMosaicInfo,
 	hasLikelyUnstitchedMosaic: hasLikelyUnstitchedMosaic,
 	PREVIEWS_REL: PREVIEWS_REL,

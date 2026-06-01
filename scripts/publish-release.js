@@ -130,8 +130,8 @@ function uploadAsset(uploadUrlTemplate, token, filePath) {
 		const name = path.basename(filePath);
 		const uploadUrl = new URL(uploadUrlTemplate.replace(/\{.*$/, ""));
 		uploadUrl.searchParams.set("name", name);
-		const data = fs.readFileSync(filePath);
-		const sizeMb = Math.round(data.length / 1024 / 1024);
+		const stat = fs.statSync(filePath);
+		const sizeMb = Math.round(stat.size / 1024 / 1024);
 		console.log("Uploading " + name + " (" + sizeMb + " MB)…");
 
 		const opts = {
@@ -141,7 +141,7 @@ function uploadAsset(uploadUrlTemplate, token, filePath) {
 			headers: {
 				Authorization: "token " + token,
 				"Content-Type": "application/octet-stream",
-				"Content-Length": data.length,
+				"Content-Length": stat.size,
 				"User-Agent": "masonjar-publish-release",
 			},
 		};
@@ -161,8 +161,9 @@ function uploadAsset(uploadUrlTemplate, token, filePath) {
 			});
 		});
 		req.on("error", reject);
-		req.write(data);
-		req.end();
+		const stream = fs.createReadStream(filePath);
+		stream.on("error", reject);
+		stream.pipe(req);
 	});
 }
 
@@ -353,13 +354,10 @@ async function main() {
 			body: notesBody,
 		});
 		console.log("Updated release notes for id=" + release.id);
+		release = await githubRequest("GET", base + "/releases/" + release.id, token);
 	}
 
 	const existing = new Set((release.assets || []).map((a) => a.name));
-	const uploadUrl = release.upload_url;
-	if (!uploadUrl) {
-		throw new Error("Release has no upload_url");
-	}
 
 	for (const filePath of artifacts) {
 		const name = path.basename(filePath);
@@ -367,7 +365,13 @@ async function main() {
 			console.log("Skip existing asset:", name);
 			continue;
 		}
+		let uploadUrl = release.upload_url;
+		if (!uploadUrl) {
+			throw new Error("Release has no upload_url");
+		}
 		await uploadAsset(uploadUrl, token, filePath);
+		release = await githubRequest("GET", base + "/releases/" + release.id, token);
+		existing.add(name);
 	}
 
 	console.log("\nRelease URL: https://github.com/" + REPO + "/releases/tag/" + tag);

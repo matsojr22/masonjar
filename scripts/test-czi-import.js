@@ -520,6 +520,26 @@ function testCollectMosaicWarnings() {
 	assert.match(warnings[0].message, /ZEN/);
 }
 
+function testCollectChannelProbeWarnings() {
+	var files = [
+		{
+			basename: "sparse.czi",
+			read_warnings: ["Channel 0: sparse Z stack (1 plane with data)."],
+		},
+		{
+			basename: "bad.czi",
+			channel_pixel_probe: [{ index: 1, ok: false, error: "timeout" }],
+		},
+	];
+	var warnings = cziImport.collectChannelProbeWarnings(files);
+	assert.strictEqual(warnings.length, 2);
+	assert.strictEqual(warnings[0].basename, "sparse.czi");
+	assert.strictEqual(warnings[0].isError, false);
+	assert.strictEqual(warnings[1].basename, "bad.czi");
+	assert.strictEqual(warnings[1].isError, true);
+	assert.match(warnings[1].message, /channel 1/);
+}
+
 function testCollectMosaicInfo() {
 	var files = [
 		{
@@ -598,6 +618,7 @@ testValidateSliceOrderDuplicate();
 testCollectKeptSignalRoleKeys();
 testImportConfigPath();
 testCollectMosaicWarnings();
+testCollectChannelProbeWarnings();
 testCollectMosaicInfo();
 testHasLikelyUnstitchedMosaic();
 testCountExtractWorkItems();
