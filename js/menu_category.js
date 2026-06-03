@@ -15,9 +15,11 @@ var CATEGORIES = {
 			{ label: "Sharpen", href: "./sharpen_wizard.html" },
 			{ label: "Top-hat filter", href: "./tophat_wizard.html" },
 			{ label: "Orient slices", href: "./orient.html" },
-			{ label: "Tissue edge cleanup", href: "./tissue_cleanup_wizard.html" },
 			{ label: "DAPI cleanup", href: "./dapi_cleanup.html" },
-			{ label: "Tissue edge cleanup", href: "./tissue_cleanup_wizard.html" },
+			{
+				label: "Semi-manual tissue edge cleanup",
+				href: "./tissue_cleanup_wizard.html",
+			},
 		],
 	},
 	alignment: {

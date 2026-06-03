@@ -40,10 +40,35 @@ var applyMessage = document.getElementById("applyMessage");
 var wizardLog = document.getElementById("wizardLog");
 var summaryPanel = document.getElementById("summaryPanel");
 
+var tracePointCountEl = document.getElementById("tracePointCount");
+var traceDoneBtn = document.getElementById("traceDoneBtn");
+
+function updateTraceUi(pointCount) {
+	if (tracePointCountEl) {
+		tracePointCountEl.textContent =
+			pointCount > 0 ? pointCount + " point(s) placed" : "";
+	}
+	if (traceDoneBtn) {
+		traceDoneBtn.disabled = pointCount < 2;
+	}
+}
+
 var canvas = canvasMod.createTissueCleanupCanvas({
 	canvas: document.getElementById("tissueCanvas"),
 	viewport: document.getElementById("tissueCanvasViewport"),
+	onTraceChange: updateTraceUi,
+	onOrphansPruned: function (n) {
+		if (canvasStatus && n > 0) {
+			canvasStatus.textContent =
+				"Removed " + n + " stray pixel(s) after erasing.";
+		}
+	},
 });
+
+function edgeShrinkPx() {
+	var el = document.getElementById("edgeShrinkPx");
+	return el ? Math.max(0, Math.min(5, Number(el.value) || 2)) : 2;
+}
 
 function bundleRoot() {
 	return project.isActive() ? project.getBundleRoot() : "";
@@ -304,7 +329,11 @@ function runAutoMask() {
 	if (canvasStatus) {
 		canvasStatus.textContent = "Running auto tissue mask…";
 	}
-	ipc.send("runTissueCleanupAuto", [preview, maskOutputPath()]);
+	ipc.send("runTissueCleanupAuto", [
+		preview,
+		maskOutputPath(),
+		edgeShrinkPx(),
+	]);
 }
 
 function runGuidedMask(strokePoints) {
@@ -313,13 +342,28 @@ function runGuidedMask(strokePoints) {
 	if (!preview || !strokePoints.length || state.running) {
 		return;
 	}
+	if (strokePoints.length < 2) {
+		if (canvasStatus) {
+			canvasStatus.textContent = "Place at least two trace points.";
+		}
+		return;
+	}
 	var strokePath = path.join(draftDir(), "_stroke.json");
-	fs.writeFileSync(strokePath, JSON.stringify(strokePoints));
+	var jsonPts =
+		typeof strokePoints[0] === "number" || Array.isArray(strokePoints[0])
+			? strokePoints
+			: canvas.getTracePointsForJson();
+	fs.writeFileSync(strokePath, JSON.stringify(jsonPts));
 	state.running = true;
 	if (canvasStatus) {
 		canvasStatus.textContent = "Running trace-guided mask…";
 	}
-	ipc.send("runTissueCleanupGuided", [preview, maskOutputPath(), strokePath]);
+	ipc.send("runTissueCleanupGuided", [
+		preview,
+		maskOutputPath(),
+		strokePath,
+		edgeShrinkPx(),
+	]);
 }
 
 function buildConfirmTable() {
@@ -496,18 +540,20 @@ ipc.on("tissueCleanupAutoResult", function (_ev, payload) {
 		});
 	}
 	if (canvasStatus) {
-		canvasStatus.textContent = "Auto mask applied — adjust with eraser if needed.";
+		canvasStatus.textContent =
+			"Green = tissue to keep. Use Eraser (red) to remove mistaken green areas.";
 	}
 });
 
 ipc.on("tissueCleanupGuidedResult", function (_ev, payload) {
 	state.running = false;
 	canvas.clearTrace();
-	canvas.setMode("pan");
-	var traceDoneBtn = document.getElementById("traceDoneBtn");
+	canvas.setMode("idle");
+	updateTraceUi(0);
 	var traceAutoBtn = document.getElementById("traceAutoBtn");
 	if (traceDoneBtn) {
 		traceDoneBtn.classList.add("d-none");
+		traceDoneBtn.disabled = true;
 	}
 	if (traceAutoBtn) {
 		traceAutoBtn.classList.remove("d-none");
@@ -558,23 +604,34 @@ document.getElementById("nextSliceBtn").addEventListener("click", function () {
 });
 document.getElementById("attemptAutoBtn").addEventListener("click", runAutoMask);
 document.getElementById("traceAutoBtn").addEventListener("click", function () {
+	canvas.clearTrace();
 	canvas.setMode("trace");
 	document.getElementById("traceAutoBtn").classList.add("d-none");
-	document.getElementById("traceDoneBtn").classList.remove("d-none");
+	if (traceDoneBtn) {
+		traceDoneBtn.classList.remove("d-none");
+		traceDoneBtn.disabled = true;
+	}
+	updateTraceUi(0);
 	if (canvasStatus) {
-		canvasStatus.textContent = "Trace around tissue edge, then click Done tracing.";
+		canvasStatus.textContent =
+			"Click on the image to place points along the tissue edge. Click Done tracing when finished.";
 	}
 });
-document.getElementById("traceDoneBtn").addEventListener("click", function () {
-	var pts = canvas.getTracePoints();
-	runGuidedMask(pts);
-});
+if (traceDoneBtn) {
+	traceDoneBtn.addEventListener("click", function () {
+		runGuidedMask(canvas.getTracePointsForJson());
+	});
+}
 document.getElementById("eraserBtn").addEventListener("click", function () {
 	var btn = document.getElementById("eraserBtn");
-	var next = canvas.state.mode === "erase" ? "pan" : "erase";
+	var next = canvas.state.mode === "erase" ? "idle" : "erase";
 	canvas.setMode(next);
 	if (btn) {
 		btn.classList.toggle("active", next === "erase");
+	}
+	if (canvasStatus && next === "erase") {
+		canvasStatus.textContent =
+			"Paint over areas to remove (shown in red). Stray pixels are cleaned when you release the mouse.";
 	}
 });
 document.getElementById("eraserSize").addEventListener("input", function (ev) {

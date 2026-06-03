@@ -11,6 +11,7 @@
  * Usage:
  *   node scripts/build-release.js              # macOS Intel + ARM + Windows (local artifacts)
  *   node scripts/build-release.js --windows-only  # Windows x64 zip only
+ *   node scripts/build-release.js --macos-only    # macOS Intel + Apple Silicon DMGs only
  *   node scripts/build-release.js --local    # host OS/arch only (dev smoke)
  *   node scripts/build-release.js --no-test  # skip dev tests before packaging
  *   node scripts/build-release.js --dry-run  # print plan only
@@ -64,6 +65,21 @@ const WINDOWS_ONLY_TARGETS = [
 	},
 ];
 
+const MACOS_ONLY_TARGETS = [
+	{
+		platform: "darwin",
+		arch: "x64",
+		label: "macOS Intel",
+		githubName: "macOS (Intel)",
+	},
+	{
+		platform: "darwin",
+		arch: "arm64",
+		label: "macOS Apple Silicon",
+		githubName: "macOS (Apple Silicon)",
+	},
+];
+
 const LINUX_RELEASE_TARGETS = [
 	{
 		platform: "linux",
@@ -80,6 +96,9 @@ const LINUX_RELEASE_TARGETS = [
 ];
 
 function releaseTargets(opts) {
+	if (opts.macosOnly) {
+		return MACOS_ONLY_TARGETS.slice();
+	}
 	let targets = opts.windowsOnly ? WINDOWS_ONLY_TARGETS : DEFAULT_RELEASE_TARGETS;
 	if (opts.linux) {
 		targets = targets.concat(LINUX_RELEASE_TARGETS);
@@ -101,6 +120,7 @@ function parseArgs(argv) {
 		noTest: false,
 		linux: false,
 		windowsOnly: false,
+		macosOnly: false,
 	};
 	for (let i = 2; i < argv.length; i++) {
 		const a = argv[i];
@@ -112,6 +132,8 @@ function parseArgs(argv) {
 			opts.noTest = true;
 		} else if (a === "--linux") {
 			opts.linux = true;
+		} else if (a === "--macos-only") {
+			opts.macosOnly = true;
 		} else if (a === "--windows-only") {
 			opts.windowsOnly = true;
 		} else if (a === "--help" || a === "-h") {
@@ -119,6 +141,7 @@ function parseArgs(argv) {
 
   node scripts/build-release.js              macOS Intel + ARM + Windows (default)
   node scripts/build-release.js --windows-only   Windows x64 zip only
+  node scripts/build-release.js --macos-only     macOS Intel + Apple Silicon DMGs only
   node scripts/build-release.js --linux        Also build Linux .deb (needs dpkg/fakeroot)
   node scripts/build-release.js --local        Current machine only (dev smoke)
   node scripts/build-release.js --no-test      Skip dev tests before packaging
@@ -300,7 +323,11 @@ function main() {
 	} else {
 		console.log(
 			"\nRelease build targets" +
-				(opts.windowsOnly ? " (Windows only):" : ":"),
+				(opts.macosOnly
+					? " (macOS only):"
+					: opts.windowsOnly
+						? " (Windows only):"
+						: ":"),
 		);
 		for (const t of targets) {
 			console.log("  -", t.label, "→", t.githubName);

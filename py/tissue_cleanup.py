@@ -16,7 +16,7 @@ import tifffile as tiff
 
 from bundle_slice_paths import paths_for_slice
 from czi_common import emit_log, emit_result, load_import_config
-from tissue_mask import isolate_tissue_mask
+from tissue_mask import isolate_tissue_mask, parse_stroke_points, wizard_mask_kwargs
 
 VALID_EXTENSIONS = {".png", ".tif", ".tiff"}
 TRACE_WIDTH = 12
@@ -55,8 +55,9 @@ def bool_mask_to_keep_u8(mask: np.ndarray) -> np.ndarray:
     return (mask.astype(bool).astype(np.uint8) * 255)
 
 
-def auto_keep_mask(gray_u8: np.ndarray) -> np.ndarray:
-    return bool_mask_to_keep_u8(isolate_tissue_mask(gray_u8))
+def auto_keep_mask(gray_u8: np.ndarray, edge_shrink_px: int = 2) -> np.ndarray:
+    kw = wizard_mask_kwargs(gray_u8, edge_shrink_px=edge_shrink_px)
+    return bool_mask_to_keep_u8(isolate_tissue_mask(gray_u8, **kw))
 
 
 def _stroke_mask_from_points(
@@ -77,11 +78,15 @@ def _stroke_mask_from_points(
     return stroke
 
 
-def guided_keep_mask(gray_u8: np.ndarray, stroke_points: list[tuple[int, int]]) -> np.ndarray:
+def guided_keep_mask(
+    gray_u8: np.ndarray,
+    stroke_points: list[tuple[int, int]],
+    edge_shrink_px: int = 2,
+) -> np.ndarray:
     h, w = gray_u8.shape
     stroke = _stroke_mask_from_points((h, w), stroke_points)
     if stroke.max() == 0:
-        return auto_keep_mask(gray_u8)
+        return auto_keep_mask(gray_u8, edge_shrink_px=edge_shrink_px)
 
     ys, xs = np.where(stroke > 0)
     pad = 20
@@ -118,7 +123,8 @@ def guided_keep_mask(gray_u8: np.ndarray, stroke_points: list[tuple[int, int]]) 
         full[y0:y1, x0:x1] = fg
         return full
     except Exception:
-        local = isolate_tissue_mask(roi_gray)
+        kw = wizard_mask_kwargs(gray_u8, edge_shrink_px=edge_shrink_px)
+        local = isolate_tissue_mask(roi_gray, **kw)
         full = np.full((h, w), 255, dtype=np.uint8)
         full[y0:y1, x0:x1] = bool_mask_to_keep_u8(local)
         return full
@@ -336,7 +342,8 @@ def run_auto_preview(args) -> int:
         emit_preview_json({"ok": False, "error": "preview not found"})
         return 1
     gray = load_grayscale_u8(preview_path)
-    keep = auto_keep_mask(gray)
+    edge_shrink = int(getattr(args, "edge_shrink", 2) or 2)
+    keep = auto_keep_mask(gray, edge_shrink_px=edge_shrink)
     out_mask = _preview_mask_out_path(args, preview_path)
     out_mask.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_mask), keep)
@@ -366,11 +373,13 @@ def run_guided_preview(args) -> int:
         return 1
     with open(stroke_path, encoding="utf-8") as f:
         stroke_raw = json.load(f)
-    if isinstance(stroke_raw, dict):
-        stroke_raw = stroke_raw.get("points") or stroke_raw.get("stroke") or []
-    stroke_points = [(int(p[0]), int(p[1])) for p in stroke_raw]
+    stroke_points = parse_stroke_points(stroke_raw)
+    if not stroke_points:
+        emit_preview_json({"ok": False, "error": "no stroke points in JSON"})
+        return 1
     gray = load_grayscale_u8(preview_path)
-    keep = guided_keep_mask(gray, stroke_points)
+    edge_shrink = int(getattr(args, "edge_shrink", 2) or 2)
+    keep = guided_keep_mask(gray, stroke_points, edge_shrink_px=edge_shrink)
     out_mask = _preview_mask_out_path(args, preview_path)
     out_mask.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_mask), keep)
@@ -419,6 +428,12 @@ def main() -> int:
         help="Directory for preview mask outputs (uses _tissue_mask.png)",
     )
     parser.add_argument("--stroke-json", help="JSON list of [x,y] stroke points")
+    parser.add_argument(
+        "--edge-shrink",
+        type=int,
+        default=2,
+        help="Erode tissue mask by N px after auto/guided (wizard default 2)",
+    )
     parser.add_argument("-b", "--bundle", help="Bundle root for apply")
     parser.add_argument("-j", "--json", help="Apply config JSON path")
     args = parser.parse_args()

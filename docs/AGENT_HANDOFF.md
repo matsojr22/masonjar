@@ -1,6 +1,6 @@
 # Agent session handoff
 
-Last updated: 2026-06-02 (tissue edge cleanup wizard v2.4.11). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-03 (tissue cleanup UX + preprocess nav v3.0.0). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
 
@@ -8,11 +8,13 @@ Last updated: 2026-06-02 (tissue edge cleanup wizard v2.4.11). Use this file to 
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **2.4.11** |
-| Latest tag | `v2.4.11` (pending publish) |
-| GitHub releases | https://github.com/matsojr22/masonjar/releases |
+| `package.json` version | **3.0.0** |
+| Latest tag | `v3.0.0` |
+| GitHub releases | https://github.com/matsojr22/masonjar/releases/tag/v3.0.0 |
 
-**v2.4.11** — **Tissue edge cleanup wizard**: [`pages/tissue_cleanup_wizard.html`](../pages/tissue_cleanup_wizard.html), [`js/tissue_cleanup_wizard.js`](../js/tissue_cleanup_wizard.js), [`js/tissue_cleanup_canvas.js`](../js/tissue_cleanup_canvas.js), [`py/tissue_cleanup.py`](../py/tissue_cleanup.py), [`py/bundle_slice_paths.py`](../py/bundle_slice_paths.py) (sharpen/tophat globs; shared with [`py/apply_geometry.py`](../py/apply_geometry.py)). IPC: `runTissueCleanupAuto`, `runTissueCleanupGuided`, `runTissueCleanupApply`, `killTissueCleanup`. Draft `.masonjar/tissue_cleanup_draft/`; backup `.masonjar/tissue_cleanup_backup/`; `processing.tissue_cleanup` on project JSON. Tests: `python/tests/test_tissue_mask.py`, `scripts/test-tissue-cleanup-paths.js`.
+**v3.0.0** — **Semi-manual tissue edge cleanup UX**: menu dedupe/rename/order; static canvas; green keep / red remove overlays; `parse_stroke_points` fixes trace `KeyError`; `--edge-shrink` on auto/guided; eraser orphan island prune in [`js/tissue_cleanup_canvas.js`](../js/tissue_cleanup_canvas.js). **Preprocess wizards**: [`js/preprocess_wizard.js`](../js/preprocess_wizard.js) always shows source dataset row; **Back to preprocessing** on sharpen/top-hat. Build: `node scripts/build-release.js`; publish `node scripts/publish-release.js --all-platforms`.
+
+**v2.4.11** — **Tissue edge cleanup wizard** (initial ship): [`pages/tissue_cleanup_wizard.html`](../pages/tissue_cleanup_wizard.html), [`js/tissue_cleanup_wizard.js`](../js/tissue_cleanup_wizard.js), [`js/tissue_cleanup_canvas.js`](../js/tissue_cleanup_canvas.js), [`py/tissue_cleanup.py`](../py/tissue_cleanup.py), [`py/bundle_slice_paths.py`](../py/bundle_slice_paths.py) (sharpen/tophat globs; shared with [`py/apply_geometry.py`](../py/apply_geometry.py)). IPC: `runTissueCleanupAuto`, `runTissueCleanupGuided`, `runTissueCleanupApply`, `killTissueCleanup`. Draft `.masonjar/tissue_cleanup_draft/`; backup `.masonjar/tissue_cleanup_backup/`; `processing.tissue_cleanup` on project JSON. Tests: `python/tests/test_tissue_mask.py`, `scripts/test-tissue-cleanup-paths.js`.
 
 **v2.4.10** — Cumulative orient geometry: per-slice `geometry.ops` (`rot90`, `flipX`, `flipY`) with DOMMatrix preview WYSIWYG in shared [`js/orient_geometry.js`](../js/orient_geometry.js); identical behavior in CZI wizard step 5 and menu **Orient slices**; in-place tile updates on geo clicks; [`py/apply_geometry.py`](../py/apply_geometry.py) `compose_ops_from_spec`. Tests: `scripts/test-orient-geometry.js`, `python/tests/test_apply_geometry.py`.
 

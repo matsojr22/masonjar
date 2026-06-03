@@ -20,7 +20,7 @@ from tissue_cleanup import (  # noqa: E402
     mask_is_all_keep,
     resize_keep_mask_nearest,
 )
-from tissue_mask import isolate_tissue_mask  # noqa: E402
+from tissue_mask import isolate_tissue_mask, parse_stroke_points  # noqa: E402
 
 
 def _synthetic_blob(size: int = 128) -> np.ndarray:
@@ -43,6 +43,19 @@ def test_auto_keep_mask_uint8() -> None:
     assert keep.dtype == np.uint8
     assert keep.max() == 255
     assert keep.min() == 0
+
+
+def test_parse_stroke_points_dict_and_array() -> None:
+    assert parse_stroke_points([{"x": 1, "y": 2}, {"x": 3, "y": 4}]) == [(1, 2), (3, 4)]
+    assert parse_stroke_points([[5, 6], [7, 8]]) == [(5, 6), (7, 8)]
+    assert parse_stroke_points({"points": [[0, 1]]}) == [(0, 1)]
+
+
+def test_edge_shrink_reduces_mask_area() -> None:
+    gray = _synthetic_blob(128)
+    full = isolate_tissue_mask(gray, edge_shrink_px=0)
+    shrunk = isolate_tissue_mask(gray, edge_shrink_px=3, opening_disk=4, min_object_size=64)
+    assert shrunk.sum() <= full.sum()
 
 
 def test_guided_keep_mask_with_stroke() -> None:

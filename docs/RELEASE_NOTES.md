@@ -6,6 +6,28 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.0.0
+
+**What's new**
+
+**Semi-manual tissue edge cleanup** (renamed from Tissue edge cleanup) is easier to use: click to place trace points, a fixed preview (no accidental pan/zoom), green overlay for tissue you keep and red for areas that will be removed, and a gentler **Attempt Auto** with adjustable **Edge shrink**. The eraser cleans up small stray pixels after you paint. **Sharpen** and **Top-hat filter** wizards now always show the **Source dataset** picker and a **Back to preprocessing** link. The preprocessing menu lists **DAPI cleanup** before the semi-manual tissue tool.
+
+**Changes**
+
+- Trace + Auto: fixed crash when finishing a trace; clearer click-to-trace instructions.
+- Tissue wizard: static image, green/red masks, orphan pixel cleanup after erasing.
+- Sharpen / Top-hat: source dataset row always visible; exit to preprocessing menu.
+
+**Commit subject**
+
+Improve tissue cleanup wizard and preprocess navigation for v3
+
+**Commit body**
+
+Renames the tissue edge tool, fixes trace JSON and mask UX, and makes sharpen/top-hat wizards easier to leave. Ships as Mason Jar 3.0.0 with desktop builds for macOS and Windows.
+
+---
+
 ## v2.4.11
 
 **What's new**

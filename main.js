@@ -1776,6 +1776,10 @@ ipcMain.on("runTissueCleanupAuto", function (event, data) {
     const args = ["--auto"];
     appendFlagPathArg(args, "-i", String(data[0] || ""));
     appendFlagPathArg(args, "-o", String(data[1] || ""));
+    const edgeShrink = Number(data[2]);
+    if (!Number.isNaN(edgeShrink)) {
+        args.push("--edge-shrink", String(Math.max(0, Math.min(5, edgeShrink))));
+    }
     spawnPreprocessPreview(event, "tissue_cleanup.py", args, "tissueCleanupAutoResult", "killTissueCleanup");
 });
 ipcMain.on("runTissueCleanupGuided", function (event, data) {
@@ -1783,6 +1787,10 @@ ipcMain.on("runTissueCleanupGuided", function (event, data) {
     appendFlagPathArg(args, "-i", String(data[0] || ""));
     appendFlagPathArg(args, "-o", String(data[1] || ""));
     appendFlagPathArg(args, "--stroke-json", String(data[2] || ""));
+    const edgeShrink = Number(data[3]);
+    if (!Number.isNaN(edgeShrink)) {
+        args.push("--edge-shrink", String(Math.max(0, Math.min(5, edgeShrink))));
+    }
     spawnPreprocessPreview(event, "tissue_cleanup.py", args, "tissueCleanupGuidedResult", "killTissueCleanup");
 });
 ipcMain.on("runTissueCleanupApply", function (event, data) {

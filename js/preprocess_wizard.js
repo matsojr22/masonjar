@@ -227,7 +227,20 @@ function wirePreprocessWizard(opts) {
 				sourceSelect.appendChild(opt);
 			}
 			if (sourceRow) {
-				sourceRow.classList.toggle("d-none", datasets.length <= 1);
+				sourceRow.classList.remove("d-none");
+			}
+			if (sourceSelect) {
+				sourceSelect.disabled = datasets.length <= 1;
+			}
+			var sourceHelp = document.getElementById("sourceDatasetHelp");
+			if (sourceHelp) {
+				if (datasets.length === 0) {
+					sourceHelp.textContent = "No datasets found for this branch.";
+				} else if (datasets.length === 1) {
+					sourceHelp.textContent = "Only one dataset on this branch.";
+				} else {
+					sourceHelp.textContent = "";
+				}
 			}
 			if (def) {
 				sourceSelect.value = def.rel;
@@ -584,7 +597,40 @@ function wirePreprocessWizard(opts) {
 		}
 	});
 
+	function ensurePreprocessNav() {
+		var step1 = document.getElementById("step1");
+		if (step1 && !document.getElementById("preprocessBackToMenu")) {
+			var back = document.createElement("a");
+			back.id = "preprocessBackToMenu";
+			back.className = "btn btn-outline-secondary ms-2";
+			back.href = "./menu_category.html?cat=preprocess";
+			back.textContent = "Back to preprocessing";
+			var nextBtn = document.getElementById("step1Next");
+			if (nextBtn && nextBtn.parentNode) {
+				nextBtn.parentNode.insertBefore(back, nextBtn.nextSibling);
+			} else {
+				step1.appendChild(back);
+			}
+		}
+		if (!document.getElementById("sourceDatasetHelp") && sourceRow) {
+			var help = document.createElement("p");
+			help.id = "sourceDatasetHelp";
+			help.className = "small text-muted mb-2";
+			sourceRow.parentNode.insertBefore(help, sourceRow.nextSibling);
+		}
+		var finish = document.getElementById("finishPanel");
+		if (finish && !document.getElementById("preprocessFinishBackToMenu")) {
+			var finishBack = document.createElement("a");
+			finishBack.id = "preprocessFinishBackToMenu";
+			finishBack.className = "btn btn-outline-secondary ms-2";
+			finishBack.href = "./menu_category.html?cat=preprocess";
+			finishBack.textContent = "Back to preprocessing";
+			finish.appendChild(finishBack);
+		}
+	}
+
 	wirePreviewPane();
+	ensurePreprocessNav();
 	refreshBranches();
 	if (state.currentSlice && previewImg) {
 		previewImg.src = "file://" + state.currentSlice.abs.replace(/\\/g, "/");

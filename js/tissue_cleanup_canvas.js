@@ -1,13 +1,17 @@
 "use strict";
 
 /**
- * Pan/zoom canvas editor for tissue keep masks (255 = keep, 0 = remove).
+ * Static-fit canvas editor for tissue keep masks (255 = keep, 0 = remove).
  */
 function createTissueCleanupCanvas(opts) {
 	opts = opts || {};
 	var canvas = opts.canvas;
 	var viewport = opts.viewport;
 	var ctx = canvas ? canvas.getContext("2d") : null;
+	var onTraceChange = opts.onTraceChange;
+
+	var ORPHAN_MIN_AREA = 32;
+	var ORPHAN_AREA_FRAC = 0.0002;
 
 	var state = {
 		image: null,
@@ -16,7 +20,7 @@ function createTissueCleanupCanvas(opts) {
 		scale: 1,
 		panX: 0,
 		panY: 0,
-		mode: "pan",
+		mode: "idle",
 		eraserSize: 16,
 		tracePoints: [],
 		undoStack: [],
@@ -29,7 +33,16 @@ function createTissueCleanupCanvas(opts) {
 		var rect = viewport.getBoundingClientRect();
 		var x = (clientX - rect.left - state.panX) / state.scale;
 		var y = (clientY - rect.top - state.panY) / state.scale;
-		return { x: x, y: y };
+		return {
+			x: Math.max(0, Math.min(canvas.width - 1, x)),
+			y: Math.max(0, Math.min(canvas.height - 1, y)),
+		};
+	}
+
+	function notifyTraceChange() {
+		if (typeof onTraceChange === "function") {
+			onTraceChange(state.tracePoints.length);
+		}
 	}
 
 	function resizeCanvasToImage() {
@@ -89,28 +102,39 @@ function createTissueCleanupCanvas(opts) {
 		var imgData = octx.getImageData(0, 0, overlay.width, overlay.height);
 		var data = imgData.data;
 		for (var i = 0; i < data.length; i += 4) {
-			if (data[i] < 128) {
+			if (data[i] >= 128) {
+				data[i] = 40;
+				data[i + 1] = 200;
+				data[i + 2] = 80;
+				data[i + 3] = 115;
+			} else {
 				data[i] = 255;
 				data[i + 1] = 40;
 				data[i + 2] = 40;
 				data[i + 3] = 140;
-			} else {
-				data[i + 3] = 0;
 			}
 		}
 		octx.putImageData(imgData, 0, 0);
 		ctx.drawImage(overlay, 0, 0);
-		if (state.mode === "trace" && state.tracePoints.length > 1) {
+		if (state.mode === "trace" && state.tracePoints.length > 0) {
 			ctx.strokeStyle = "#00e5ff";
+			ctx.fillStyle = "#00e5ff";
 			ctx.lineWidth = 12;
 			ctx.lineCap = "round";
 			ctx.lineJoin = "round";
-			ctx.beginPath();
-			ctx.moveTo(state.tracePoints[0].x, state.tracePoints[0].y);
-			for (var p = 1; p < state.tracePoints.length; p++) {
-				ctx.lineTo(state.tracePoints[p].x, state.tracePoints[p].y);
+			if (state.tracePoints.length === 1) {
+				var p0 = state.tracePoints[0];
+				ctx.beginPath();
+				ctx.arc(p0.x, p0.y, 6, 0, Math.PI * 2);
+				ctx.fill();
+			} else {
+				ctx.beginPath();
+				ctx.moveTo(state.tracePoints[0].x, state.tracePoints[0].y);
+				for (var p = 1; p < state.tracePoints.length; p++) {
+					ctx.lineTo(state.tracePoints[p].x, state.tracePoints[p].y);
+				}
+				ctx.stroke();
 			}
-			ctx.stroke();
 		}
 	}
 
@@ -137,6 +161,97 @@ function createTissueCleanupCanvas(opts) {
 		state.mask.getContext("2d").drawImage(snap, 0, 0);
 		draw();
 		return true;
+	}
+
+	function pruneOrphanKeepIslands() {
+		if (!state.mask) {
+			return 0;
+		}
+		var w = state.mask.width;
+		var h = state.mask.height;
+		var mctx = state.mask.getContext("2d");
+		var data = mctx.getImageData(0, 0, w, h).data;
+		var orphanMax = Math.max(
+			ORPHAN_MIN_AREA,
+			Math.floor(w * h * ORPHAN_AREA_FRAC),
+		);
+		var labels = new Int32Array(w * h);
+		var nextLabel = 1;
+		var areas = [];
+		var stack = [];
+
+		function idx(x, y) {
+			return y * w + x;
+		}
+
+		for (var y = 0; y < h; y++) {
+			for (var x = 0; x < w; x++) {
+				var i = idx(x, y);
+				if (data[i * 4] < 128 || labels[i] !== 0) {
+					continue;
+				}
+				var label = nextLabel++;
+				var area = 0;
+				stack.push(i);
+				labels[i] = label;
+				while (stack.length) {
+					var cur = stack.pop();
+					area += 1;
+					var cx = cur % w;
+					var cy = (cur / w) | 0;
+					var neighbors = [
+						[cx - 1, cy],
+						[cx + 1, cy],
+						[cx, cy - 1],
+						[cx, cy + 1],
+					];
+					for (var n = 0; n < neighbors.length; n++) {
+						var nx = neighbors[n][0];
+						var ny = neighbors[n][1];
+						if (nx < 0 || ny < 0 || nx >= w || ny >= h) {
+							continue;
+						}
+						var ni = idx(nx, ny);
+						if (labels[ni] !== 0 || data[ni * 4] < 128) {
+							continue;
+						}
+						labels[ni] = label;
+						stack.push(ni);
+					}
+				}
+				areas[label] = area;
+			}
+		}
+
+		var largest = 0;
+		var largestLabel = 0;
+		for (var li = 1; li < nextLabel; li++) {
+			if ((areas[li] || 0) > largest) {
+				largest = areas[li];
+				largestLabel = li;
+			}
+		}
+
+		var cleared = 0;
+		for (var pi = 0; pi < labels.length; pi++) {
+			var lab = labels[pi];
+			if (!lab || lab === largestLabel) {
+				continue;
+			}
+			if ((areas[lab] || 0) >= orphanMax) {
+				continue;
+			}
+			data[pi * 4] = 0;
+			data[pi * 4 + 1] = 0;
+			data[pi * 4 + 2] = 0;
+			data[pi * 4 + 3] = 255;
+			cleared += 1;
+		}
+		if (cleared) {
+			mctx.putImageData(new ImageData(data, w, h), 0, 0);
+			draw();
+		}
+		return cleared;
 	}
 
 	function loadImageUrl(url) {
@@ -244,10 +359,10 @@ function createTissueCleanupCanvas(opts) {
 		if (viewport) {
 			viewport.classList.toggle("erase-mode", mode === "erase");
 			viewport.classList.toggle("trace-mode", mode === "trace");
-			viewport.classList.toggle("panning", false);
 		}
 		if (mode !== "trace") {
 			state.tracePoints = [];
+			notifyTraceChange();
 		}
 		draw();
 	}
@@ -265,27 +380,18 @@ function createTissueCleanupCanvas(opts) {
 	}
 
 	var painting = false;
-	var panning = false;
-	var lastPanX = 0;
-	var lastPanY = 0;
 	var erasedDuringStroke = false;
 
 	function wirePointerEvents() {
 		if (!viewport) {
 			return;
 		}
-		viewport.addEventListener(
-			"wheel",
-			function (ev) {
-				ev.preventDefault();
-				var delta = ev.deltaY > 0 ? 0.9 : 1.1;
-				state.scale = Math.min(8, Math.max(0.05, state.scale * delta));
-				applyTransform();
-			},
-			{ passive: false },
-		);
 
 		viewport.addEventListener("mousedown", function (ev) {
+			if (state.mode !== "erase" && state.mode !== "trace") {
+				return;
+			}
+			ev.preventDefault();
 			var pt = imageCoords(ev.clientX, ev.clientY);
 			if (state.mode === "erase") {
 				pushUndo();
@@ -294,39 +400,29 @@ function createTissueCleanupCanvas(opts) {
 				paintErase(pt.x, pt.y);
 				return;
 			}
-			if (state.mode === "trace") {
-				state.tracePoints.push(pt);
-				draw();
-				return;
-			}
-			panning = true;
-			lastPanX = ev.clientX;
-			lastPanY = ev.clientY;
-			viewport.classList.add("panning");
+			state.tracePoints.push(pt);
+			draw();
+			notifyTraceChange();
 		});
 
 		window.addEventListener("mousemove", function (ev) {
-			if (painting && state.mode === "erase") {
-				var pt = imageCoords(ev.clientX, ev.clientY);
-				paintErase(pt.x, pt.y);
+			if (!painting || state.mode !== "erase") {
 				return;
 			}
-			if (!panning) {
-				return;
-			}
-			state.panX += ev.clientX - lastPanX;
-			state.panY += ev.clientY - lastPanY;
-			lastPanX = ev.clientX;
-			lastPanY = ev.clientY;
-			applyTransform();
+			var pt = imageCoords(ev.clientX, ev.clientY);
+			paintErase(pt.x, pt.y);
 		});
 
 		window.addEventListener("mouseup", function () {
-			painting = false;
-			panning = false;
-			if (viewport) {
-				viewport.classList.remove("panning");
+			if (painting && state.mode === "erase" && erasedDuringStroke) {
+				pushUndo();
+				var cleared = pruneOrphanKeepIslands();
+				if (cleared > 0 && typeof opts.onOrphansPruned === "function") {
+					opts.onOrphansPruned(cleared);
+				}
 			}
+			painting = false;
+			erasedDuringStroke = false;
 		});
 	}
 
@@ -348,8 +444,17 @@ function createTissueCleanupCanvas(opts) {
 		getTracePoints: function () {
 			return state.tracePoints.slice();
 		},
+		getTracePointsForJson: function () {
+			var pts = state.tracePoints;
+			var out = [];
+			for (var i = 0; i < pts.length; i++) {
+				out.push([Math.round(pts[i].x), Math.round(pts[i].y)]);
+			}
+			return out;
+		},
 		clearTrace: function () {
 			state.tracePoints = [];
+			notifyTraceChange();
 			draw();
 		},
 		setEraserSize: function (n) {

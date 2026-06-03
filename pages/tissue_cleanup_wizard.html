@@ -14,7 +14,7 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net/; font-src 'self' https://fonts.gstatic.com; img-src 'self' file: data:;"
     />
-    <title>Tissue edge cleanup — Mason Jar</title>
+    <title>Semi-manual tissue edge cleanup — Mason Jar</title>
     <style>
       #tissueCanvasViewport {
         position: relative;
@@ -25,16 +25,13 @@
         border: 1px solid var(--mj-border, #ccc);
         border-radius: 0.375rem;
         background: #1a1a1a;
-        cursor: grab;
-      }
-      #tissueCanvasViewport.panning {
-        cursor: grabbing;
+        cursor: default;
       }
       #tissueCanvasViewport.erase-mode {
         cursor: crosshair;
       }
       #tissueCanvasViewport.trace-mode {
-        cursor: cell;
+        cursor: crosshair;
       }
       #tissueCanvas {
         display: block;
@@ -47,7 +44,7 @@
   </head>
   <body class="wizard-page">
     <div class="container py-4 workspace-block text-start">
-      <h1>Tissue edge cleanup</h1>
+      <h1>Semi-manual tissue edge cleanup</h1>
       <p class="text-muted">
         Mask away neighboring-section slivers on counterstain previews before alignment. Changes are
         saved as a draft until you confirm and apply across all bundle images for each section.
@@ -75,21 +72,40 @@
         <div id="tissueCanvasViewport">
           <canvas id="tissueCanvas" width="512" height="512"></canvas>
         </div>
-        <p id="canvasStatus" class="small text-muted mt-2"></p>
+        <p id="canvasStatus" class="small text-muted mt-2">
+          Green overlay = tissue to keep; red = areas to remove. Image is fixed size (no pan/zoom).
+        </p>
+        <p id="tracePointCount" class="small text-info mb-0"></p>
 
         <div class="tool-bar d-flex flex-wrap gap-2 align-items-center mt-3 mb-3">
           <button type="button" class="btn btn-primary" id="attemptAutoBtn">Attempt Auto</button>
           <button type="button" class="btn btn-outline-primary" id="traceAutoBtn">Trace edge then Auto</button>
-          <button type="button" class="btn btn-outline-primary d-none" id="traceDoneBtn">Done tracing</button>
+          <button type="button" class="btn btn-outline-primary d-none" id="traceDoneBtn" disabled>
+            Done tracing
+          </button>
           <button type="button" class="btn btn-outline-secondary" id="eraserBtn">Eraser</button>
           <button type="button" class="btn btn-outline-secondary" id="resetSliceBtn">Reset</button>
           <button type="button" class="btn btn-outline-secondary" id="undoBtn">Undo</button>
-          <label class="ms-2 small mb-0" for="eraserSize">Brush</label>
+          <label class="ms-2 small mb-0" for="eraserSize">Eraser</label>
           <input type="range" id="eraserSize" min="4" max="48" value="16" class="form-range" style="width: 8rem" />
+          <label class="ms-2 small mb-0" for="edgeShrinkPx">Edge shrink</label>
+          <input
+            type="range"
+            id="edgeShrinkPx"
+            min="0"
+            max="5"
+            value="2"
+            class="form-range"
+            style="width: 6rem"
+            title="Pixels to erode auto mask at edges (more forgiving when higher)"
+          />
         </div>
 
         <button type="button" class="btn btn-primary" id="step1Next">Review masks</button>
-        <a class="btn btn-outline-secondary" href="./workspace_menu.html">Cancel</a>
+        <a class="btn btn-outline-secondary ms-2" href="./menu_category.html?cat=preprocess"
+          >Back to preprocessing</a
+        >
+        <a class="btn btn-outline-secondary ms-2" href="./workspace_menu.html">Cancel</a>
       </section>
 
       <section id="step2" class="wizard-panel d-none">

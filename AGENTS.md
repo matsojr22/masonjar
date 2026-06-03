@@ -134,9 +134,9 @@ Renderer scripts use `require("electron").ipcRenderer`. Main handlers are `ipcMa
 
 Some renderer files register `*Error` listeners (e.g. `alignError`, `detectError`). The main process logs Python non-zero exits to the Log (forcing the log window visible) and avoids throwing; **Isolate Regions** also emits `intensityError` with a short message after `intensityResult` when Python fails or writes zero PKLs.
 
-## Tissue edge cleanup wizard
+## Semi-manual tissue edge cleanup wizard
 
-**Menu** ([`js/menu_category.js`](js/menu_category.js)): **Tissue edge cleanup** → [`pages/tissue_cleanup_wizard.html`](pages/tissue_cleanup_wizard.html) (preprocess category, after Orient).
+**Menu** ([`js/menu_category.js`](js/menu_category.js)): **Semi-manual tissue edge cleanup** → [`pages/tissue_cleanup_wizard.html`](pages/tissue_cleanup_wizard.html) (preprocess category, after **DAPI cleanup**). Canvas: static fit (no pan/zoom); green overlay = keep, red = remove; trace uses click-to-place points (`parse_stroke_points` accepts `{x,y}` or `[x,y]`); optional **Edge shrink** 0–5 px for auto/guided (`--edge-shrink`); eraser prunes orphan keep islands on mouseup.
 
 **Flow** (4 steps): per-slice mask editor on `_previews/{sliceId}_dapi.png` (fallback `00_dapi/{sliceId}.png`) → confirm file counts → apply with progress → summary. **No disk writes** to bundle images until Apply; draft under `.masonjar/tissue_cleanup_draft/` (`state.json`, `masks/{sliceId}.png`).
 
