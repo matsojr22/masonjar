@@ -357,21 +357,44 @@ async function main() {
 		release = await githubRequest("GET", base + "/releases/" + release.id, token);
 	}
 
-	const existing = new Set((release.assets || []).map((a) => a.name));
+	const assetByName = {};
+	for (const a of release.assets || []) {
+		assetByName[a.name] = a;
+	}
 
 	for (const filePath of artifacts) {
 		const name = path.basename(filePath);
-		if (existing.has(name)) {
-			console.log("Skip existing asset:", name);
-			continue;
+		const existingAsset = assetByName[name];
+		if (existingAsset && existingAsset.id) {
+			console.log("Replacing existing asset:", name);
+			await githubRequest(
+				"DELETE",
+				base + "/releases/assets/" + existingAsset.id,
+				token,
+			);
+			release = await githubRequest("GET", base + "/releases/" + release.id, token);
+			assetByName[name] = null;
 		}
 		let uploadUrl = release.upload_url;
 		if (!uploadUrl) {
 			throw new Error("Release has no upload_url");
 		}
-		await uploadAsset(uploadUrl, token, filePath);
+		try {
+			await uploadAsset(uploadUrl, token, filePath);
+		} catch (uploadErr) {
+			if (String(uploadErr.message).indexOf("404") < 0) {
+				throw uploadErr;
+			}
+			console.log("Upload 404 — refreshing release upload_url and retrying…");
+			release = await githubRequest("GET", base + "/releases/" + release.id, token);
+			uploadUrl = release.upload_url;
+			if (!uploadUrl) {
+				throw uploadErr;
+			}
+			await uploadAsset(uploadUrl, token, filePath);
+		}
 		release = await githubRequest("GET", base + "/releases/" + release.id, token);
-		existing.add(name);
+		assetByName[name] = { name: name };
 	}
 
 	console.log("\nRelease URL: https://github.com/" + REPO + "/releases/tag/" + tag);
