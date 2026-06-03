@@ -7,7 +7,7 @@ var branding = require("./branding");
 var project = require("./project");
 var fileIndex = require("./file_index");
 var cziImport = require("./czi_import");
-var tissuePaths = require("./tissue_cleanup_paths");
+var tissuePaths = require("../js/bundle_slice_paths");
 var canvasMod = require("./tissue_cleanup_canvas");
 
 project.tryRestoreActiveProject();
@@ -154,6 +154,9 @@ function persistCurrentSlice() {
 	}
 	ensureDraftDirs();
 	canvas.exportMaskPngPath(fs, path, maskPathForSlice(sliceId));
+	var meta = state.slices[sliceId] || defaultSliceMeta();
+	meta.edited = !canvas.maskIsAllKeep();
+	state.slices[sliceId] = meta;
 	writeDraftState();
 }
 

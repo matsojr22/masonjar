@@ -1775,21 +1775,15 @@ ipcMain.on("runDapiCleanup", function (event, data) {
 ipcMain.on("runTissueCleanupAuto", function (event, data) {
     const args = ["--auto"];
     appendFlagPathArg(args, "-i", String(data[0] || ""));
-    const outDir = data[1] != null ? String(data[1]).trim() : "";
-    if (outDir.length > 0) {
-        appendFlagPathArg(args, "--output-dir", outDir);
-    }
-    spawnPreprocessPreview(event, "tissue_cleanup.py", args, "tissueCleanupPreviewResult", "killTissueCleanupPreview");
+    appendFlagPathArg(args, "-o", String(data[1] || ""));
+    spawnPreprocessPreview(event, "tissue_cleanup.py", args, "tissueCleanupAutoResult", "killTissueCleanup");
 });
 ipcMain.on("runTissueCleanupGuided", function (event, data) {
     const args = ["--guided"];
     appendFlagPathArg(args, "-i", String(data[0] || ""));
-    appendFlagPathArg(args, "--stroke-json", String(data[1] || ""));
-    const outDir = data[2] != null ? String(data[2]).trim() : "";
-    if (outDir.length > 0) {
-        appendFlagPathArg(args, "--output-dir", outDir);
-    }
-    spawnPreprocessPreview(event, "tissue_cleanup.py", args, "tissueCleanupPreviewResult", "killTissueCleanupPreview");
+    appendFlagPathArg(args, "-o", String(data[1] || ""));
+    appendFlagPathArg(args, "--stroke-json", String(data[2] || ""));
+    spawnPreprocessPreview(event, "tissue_cleanup.py", args, "tissueCleanupGuidedResult", "killTissueCleanup");
 });
 ipcMain.on("runTissueCleanupApply", function (event, data) {
     const bundleRoot = data[0] || "";

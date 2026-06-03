@@ -95,11 +95,10 @@ Renderer scripts use `require("electron").ipcRenderer`. Main handlers are `ipcMa
 | `killSharpen` | once `killSharpen` | — | |
 | `runDapiCleanup` | `runDapiCleanup` | `dapi_cleanup.py` | `dapiCleanupResult`, `updateLoad`. Args: input dir, output dir, isolate, CLAHE, saturation %, backup dir (in-place), slice list, re-backup, optional bg value. Separate `-i`/`-o` argv tokens for Windows paths with spaces. In-place mode backs up originals to `data/counting/00_dapi_backup/`; separate mode writes `data/counting/00_dapi_clean/` without touching `00_dapi`. |
 | `killDapiCleanup` | once `killDapiCleanup` | — | |
-| `runTissueCleanupAuto` | `runTissueCleanupAuto` | `tissue_cleanup.py` | `--auto -i` preview; reply `tissueCleanupPreviewResult` (`PREVIEW_JSON:` mask + composite). |
-| `runTissueCleanupGuided` | `runTissueCleanupGuided` | `tissue_cleanup.py` | `--guided -i` preview, `--stroke-json`; same preview reply. |
-| `runTissueCleanupApply` | `runTissueCleanupApply` | `tissue_cleanup.py` | `-b` bundle, `-j` `.masonjar/tissue_cleanup_apply_config.json` (separate argv tokens); `tissueCleanupApplyResult`, `updateLoad`, `LOG:`. |
-| `killTissueCleanupPreview` | once `killTissueCleanupPreview` | — | Preview auto/guided. |
-| `killTissueCleanup` | once `killTissueCleanup` | — | Apply batch. |
+| `runTissueCleanupAuto` | `runTissueCleanupAuto` | `tissue_cleanup.py` | `--auto -i` preview `-o` mask path; reply `tissueCleanupAutoResult` (`PREVIEW_JSON:` mask + composite). |
+| `runTissueCleanupGuided` | `runTissueCleanupGuided` | `tissue_cleanup.py` | `--guided -i` preview, `--stroke-json`; reply `tissueCleanupGuidedResult`. |
+| `runTissueCleanupApply` | `runTissueCleanupApply` | `tissue_cleanup.py` | `--apply -b` bundle, `-j` `.masonjar/tissue_cleanup_apply_config.json` (separate argv tokens); `tissueCleanupApplyResult`, `updateLoad`, `LOG:`. |
+| `killTissueCleanup` | once `killTissueCleanup` | — | Auto, guided preview, or apply batch. |
 | `runParcellation` | `runParcellation` | `apply_parcellation.py` | `parcellationResult`, `updateLoad`. Args: `[annodir, configJsonPath]` → `-a`, `-s` (structure_map.pkl), `-j` as separate argv tokens. Config at `{bundle}/.masonjar/parcellation_run_config.json`: `tier_id`, `st_level`, `excluded_region_ids`, optional `slice_ids`. |
 | `killParcellation` | once `killParcellation` | — | |
 | `runDetection` | `runDetection` | `find_neurons.py` | `detectResult`, `updateLoad`. Optional 10th IPC element: slice-list path (`--slice-list`). `-o` is the run output leaf directory. |

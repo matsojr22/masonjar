@@ -2018,33 +2018,27 @@ ipcMain.on("runDapiCleanup", function (event: any, data: any[]) {
 ipcMain.on("runTissueCleanupAuto", function (event: any, data: any[]) {
   const args: string[] = ["--auto"];
   appendFlagPathArg(args, "-i", String(data[0] || ""));
-  const outDir = data[1] != null ? String(data[1]).trim() : "";
-  if (outDir.length > 0) {
-    appendFlagPathArg(args, "--output-dir", outDir);
-  }
+  appendFlagPathArg(args, "-o", String(data[1] || ""));
   spawnPreprocessPreview(
     event,
     "tissue_cleanup.py",
     args,
-    "tissueCleanupPreviewResult",
-    "killTissueCleanupPreview",
+    "tissueCleanupAutoResult",
+    "killTissueCleanup",
   );
 });
 
 ipcMain.on("runTissueCleanupGuided", function (event: any, data: any[]) {
   const args: string[] = ["--guided"];
   appendFlagPathArg(args, "-i", String(data[0] || ""));
-  appendFlagPathArg(args, "--stroke-json", String(data[1] || ""));
-  const outDir = data[2] != null ? String(data[2]).trim() : "";
-  if (outDir.length > 0) {
-    appendFlagPathArg(args, "--output-dir", outDir);
-  }
+  appendFlagPathArg(args, "-o", String(data[1] || ""));
+  appendFlagPathArg(args, "--stroke-json", String(data[2] || ""));
   spawnPreprocessPreview(
     event,
     "tissue_cleanup.py",
     args,
-    "tissueCleanupPreviewResult",
-    "killTissueCleanupPreview",
+    "tissueCleanupGuidedResult",
+    "killTissueCleanup",
   );
 });
 
@@ -2473,47 +2467,6 @@ ipcMain.on("reportRendererError", function (_event: unknown, data: unknown[]) {
   const msg = String(data && data[0] != null ? data[0] : "Renderer error");
   ensureLogWindowVisible({ force: true });
   queueLogLineForUi(`Renderer: ${msg}`);
-});
-
-ipcMain.on("runTissueCleanupAuto", function (event: any, data: any[]) {
-  const args: string[] = ["--auto"];
-  appendFlagPathArg(args, "-i", String(data[0] || ""));
-  appendFlagPathArg(args, "-o", String(data[1] || ""));
-  spawnPreprocessPreview(
-    event,
-    "tissue_cleanup.py",
-    args,
-    "tissueCleanupAutoResult",
-    "killTissueCleanup",
-  );
-});
-
-ipcMain.on("runTissueCleanupGuided", function (event: any, data: any[]) {
-  const args: string[] = ["--guided"];
-  appendFlagPathArg(args, "-i", String(data[0] || ""));
-  appendFlagPathArg(args, "-o", String(data[1] || ""));
-  appendFlagPathArg(args, "--stroke-json", String(data[2] || ""));
-  spawnPreprocessPreview(
-    event,
-    "tissue_cleanup.py",
-    args,
-    "tissueCleanupGuidedResult",
-    "killTissueCleanup",
-  );
-});
-
-ipcMain.on("runTissueCleanupApply", function (event: any, data: any[]) {
-  const bundleRoot = data[0] || "";
-  const configPath = data[1] || "";
-  const applyArgs: string[] = ["--apply"];
-  appendCziPathArgs(applyArgs, bundleRoot, configPath);
-  runCziPythonScript(
-    event,
-    "tissue_cleanup.py",
-    applyArgs,
-    "killTissueCleanup",
-    "tissueCleanupApplyResult",
-  );
 });
 
 ipcMain.on("runApplyGeometry", function (event: any, data: any[]) {

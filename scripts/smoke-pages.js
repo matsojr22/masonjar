@@ -83,6 +83,13 @@ const DOM_ASSERTIONS = {
 		"sharpenEqualize",
 		"preprocessPreviewImg",
 	],
+	"tissue_cleanup_wizard.html": [
+		"step1",
+		"tissueCanvasViewport",
+		"attemptAutoBtn",
+		"step1Next",
+		"confirmTableBody",
+	],
 };
 
 const repoRoot = path.join(__dirname, "..");
