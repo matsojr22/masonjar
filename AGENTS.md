@@ -347,6 +347,8 @@ Slice IDs default to `{czi_stem}_s{scene:03d}` when multi-scene; **rename on imp
 
 ## Release builds (required for agents)
 
+**Human-facing copy:** Write [`docs/RELEASE_NOTES.md`](docs/RELEASE_NOTES.md) for the version (What's new + optional Changes) before publishing. **Never** put GitHub release text in [`docs/AGENT_HANDOFF.md`](docs/AGENT_HANDOFF.md) — handoff is for agents only. Commit messages: plain language for lab users ([`docs/COMMIT_AND_RELEASE.md`](docs/COMMIT_AND_RELEASE.md)); run `node scripts/release-message.js` for a suggested subject/body. [`scripts/publish-release.js`](scripts/publish-release.js) reads **only** `RELEASE_NOTES.md` and fails if the section is missing.
+
 When the user asks to **build**, **package**, or **cut a release**, do **not** run a single-host `electron-forge make` (e.g. only `--arch=arm64` on Apple Silicon). That produces a macOS-only DMG and **does not** work on Windows.
 
 **Always run the canonical release script:**
@@ -377,9 +379,11 @@ Optional: `--linux` on the build script adds Linux `.deb` (requires `dpkg` and `
 
 Checklist: `out/make/RELEASE-<version>.md`. Releases: [matsojr22/masonjar releases](https://github.com/matsojr22/masonjar/releases).
 
+**Release order:** (1) bump `package.json` version, (2) add `docs/RELEASE_NOTES.md` section, (3) update `docs/AGENT_HANDOFF.md` (agents), (4) commit with human subject/body (`node scripts/release-message.js`), (5) `node scripts/build-release.js`, (6) tag `v<version>`, (7) `node scripts/publish-release.js`.
+
 **Local dev package only** (not for GitHub): `node scripts/build-release.js --local` — builds for the current machine OS/arch only.
 
-Bump `version` in `package.json` before a release when appropriate. Commit `main.js` after `src/main.ts` changes.
+Commit `main.js` after `src/main.ts` changes.
 
 ## Packaging notes
 

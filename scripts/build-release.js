@@ -229,10 +229,13 @@ function writeManifest(version, targets, artifacts) {
 		"",
 		"## GitHub release checklist",
 		"",
-		"1. Tag: `v" + version + "` (must match package.json).",
-		"2. Publish to GitHub: `node scripts/publish-release.js --all-platforms` (Windows zip + both macOS DMGs).",
-		"   Windows-only upload: `node scripts/publish-release.js` (faster; smaller release page).",
-		"3. Artifacts: `masonjar-win32-x64-" + version + ".zip`, `masonjar-" + version + "-x64.dmg`, `masonjar-" + version + "-arm64.dmg`",
+		"1. Add human copy: `docs/RELEASE_NOTES.md` section `## v" + version + "` (see `docs/COMMIT_AND_RELEASE.md`).",
+		"2. Suggested commit: `node scripts/release-message.js`",
+		"3. Tag: `v" + version + "` (must match package.json).",
+		"4. Publish: `node scripts/publish-release.js` (Windows zip) or `--all-platforms` for macOS DMGs too.",
+		"5. Artifacts: `masonjar-win32-x64-" + version + ".zip`, `masonjar-" + version + "-x64.dmg`, `masonjar-" + version + "-arm64.dmg`",
+		"",
+		"_Do not use AGENT_HANDOFF.md for GitHub release text — publish reads RELEASE_NOTES.md only._",
 		"",
 		"## Targets built",
 		"",
@@ -362,9 +365,32 @@ function main() {
 
 	if (!opts.local) {
 		console.log(
-			"\nNext: tag v" +
+			"\nBefore publish: edit docs/RELEASE_NOTES.md for v" +
 				version +
-				", then `node scripts/publish-release.js` (Windows only). See out/make/RELEASE-" +
+				" (human-facing What's new).",
+		);
+		try {
+			const releaseNotes = require("./release_notes");
+			const notes = releaseNotes.readReleaseNotes(version);
+			if (notes && notes.whatsNew) {
+				console.log("  RELEASE_NOTES.md: section found for v" + version);
+			} else {
+				console.warn(
+					"  WARNING: no **What's new** for v" +
+						version +
+						" in docs/RELEASE_NOTES.md — publish will fail until you add it.",
+				);
+			}
+		} catch (e) {
+			console.warn("  Could not check RELEASE_NOTES.md:", e.message || e);
+		}
+		console.log(
+			"  Commit: node scripts/release-message.js",
+		);
+		console.log(
+			"  Then: tag v" +
+				version +
+				" → node scripts/publish-release.js. See out/make/RELEASE-" +
 				version +
 				".md",
 		);

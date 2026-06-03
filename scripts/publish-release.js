@@ -20,6 +20,7 @@ const { spawnSync } = require("child_process");
 const REPO_ROOT = path.join(__dirname, "..");
 const REPO = "matsojr22/masonjar";
 const OUT_MAKE = path.join(REPO_ROOT, "out", "make");
+const releaseNotes = require("./release_notes");
 
 function readVersion() {
 	const pkg = JSON.parse(
@@ -211,41 +212,20 @@ function findArtifacts(version, allPlatforms) {
 	return [...new Set(found)].sort();
 }
 
-function readHandoffSummary(version) {
-	const handoffPath = path.join(REPO_ROOT, "docs", "AGENT_HANDOFF.md");
-	try {
-		const text = fs.readFileSync(handoffPath, "utf8");
-		const escaped = version.replace(/\./g, "\\.");
-		const re = new RegExp(
-			"\\*\\*v" + escaped + "\\*\\* — ([^\n]+)",
-			"i",
-		);
-		const match = text.match(re);
-		if (!match) {
-			return "";
-		}
-		let summary = match[1].trim();
-		// First sentence is enough for GitHub release blurbs.
-		const dot = summary.indexOf(". ");
-		if (dot > 0) {
-			summary = summary.slice(0, dot + 1);
-		}
-		// Flatten inline markdown links [`file`](path) → file
-		summary = summary.replace(/\[(`[^`]+`)\]\([^)]+\)/g, "$1");
-		return summary;
-	} catch (_e) {
-		return "";
-	}
-}
-
-function releaseNotes(version, opts) {
+function buildGithubReleaseBody(version, opts) {
 	opts = opts || {};
 	const allPlatforms = !!opts.allPlatforms;
-	const summary = readHandoffSummary(version);
+	const notes = releaseNotes.requireReleaseNotes(version);
 	const lines = ["## Mason Jar v" + version, ""];
 
-	if (summary) {
-		lines.push("### What's new", "", summary, "");
+	lines.push("### What's new", "", notes.whatsNew, "");
+
+	if (notes.changes.length) {
+		lines.push("### Changes", "");
+		for (const bullet of notes.changes) {
+			lines.push("- " + bullet);
+		}
+		lines.push("");
 	}
 
 	lines.push("### Downloads", "");
@@ -319,6 +299,8 @@ async function main() {
 	}
 
 	if (opts.dryRun) {
+		console.log("\n--- Release notes preview ---\n");
+		console.log(buildGithubReleaseBody(version, opts));
 		console.log("\n(dry-run: no upload)");
 		return;
 	}
@@ -337,7 +319,7 @@ async function main() {
 		}
 	}
 
-	const notesBody = releaseNotes(version, opts);
+	const notesBody = buildGithubReleaseBody(version, opts);
 
 	if (!release || !release.id) {
 		release = await githubRequest("POST", base + "/releases", token, {

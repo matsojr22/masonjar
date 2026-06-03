@@ -2,6 +2,8 @@
 
 Last updated: 2026-06-02 (cumulative orient geometry v2.4.10). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
+**GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
 ## Current release
 
 | Item | Value |
