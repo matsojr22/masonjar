@@ -357,22 +357,25 @@ function renderOrientationGrid() {
 		var imgPath = previewPathForSlice(sliceId);
 		var imgSrc = fileUrlForPath(imgPath);
 		if (imgSrc) {
+			var viewport = document.createElement("div");
+			viewport.className = "czi-orient-tile-viewport";
+			if (!orientGeometry.isIdentityGeometry(geom)) {
+				viewport.style.transform = orientGeometry.geometryCssTransform(geom);
+				viewport.style.transformOrigin = "center center";
+			}
 			var img = document.createElement("img");
 			img.src = imgSrc;
 			img.alt = sliceId;
-			if (!orientGeometry.isIdentityGeometry(geom)) {
-				img.style.transform = orientGeometry.geometryCssTransform(geom);
-				img.style.transformOrigin = "center center";
-			}
 			img.onerror = function () {
 				var msg = document.createElement("p");
 				msg.className = "small text-muted";
 				msg.textContent = "No preview";
-				if (img.parentNode) {
-					img.parentNode.replaceChild(msg, img);
+				if (viewport.parentNode) {
+					viewport.parentNode.replaceChild(msg, viewport);
 				}
 			};
-			tile.appendChild(img);
+			viewport.appendChild(img);
+			tile.appendChild(viewport);
 		} else {
 			var noPrev = document.createElement("p");
 			noPrev.className = "small text-muted";
@@ -395,29 +398,21 @@ function renderOrientationGrid() {
 		tile.appendChild(btnGroup);
 		var status = document.createElement("p");
 		status.className = "small text-muted mb-0 mt-1";
-		status.textContent =
-			"rot " +
-			(geom.rotate || 0) +
-			"° flipX=" +
-			!!geom.flipX +
-			" flipY=" +
-			!!geom.flipY;
+		status.setAttribute("data-geo-status", "1");
+		status.textContent = orientGeometry.geometryStatusText(geom);
 		tile.appendChild(status);
 		grid.appendChild(tile);
 	}
 
-	grid.querySelectorAll("button[data-geo]").forEach(function (btn) {
-		btn.addEventListener("click", function (ev) {
-			var sid = ev.target.getAttribute("data-slice");
-			var action = ev.target.getAttribute("data-geo");
-			orientState.cziImport.geometry[sid] = orientGeometry.applyGeometryAction(
-				orientState.cziImport.geometry[sid],
-				action,
-			);
-			renderOrientationGrid();
+	orientGeometry.wireOrientationGridClicks(
+		grid,
+		function () {
+			return orientState.cziImport.geometry;
+		},
+		function () {
 			updateOrientPreviewBanner();
-		});
-	});
+		},
+	);
 }
 
 function finalizeGeometryAfterApply(payload) {
@@ -623,12 +618,9 @@ function init() {
 			return;
 		}
 		var first = orientState.cziImport.geometry[sliceIds[0]];
+		var copied = orientGeometry.cloneGeometry(first);
 		for (var i = 1; i < sliceIds.length; i++) {
-			orientState.cziImport.geometry[sliceIds[i]] = {
-				rotate: first.rotate,
-				flipX: first.flipX,
-				flipY: first.flipY,
-			};
+			orientState.cziImport.geometry[sliceIds[i]] = orientGeometry.cloneGeometry(copied);
 		}
 		renderOrientationGrid();
 	});

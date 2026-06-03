@@ -1399,24 +1399,27 @@ function renderOrientationGrid() {
 		titleEl.textContent = sliceId;
 		tile.appendChild(titleEl);
 		if (imgSrc) {
+			var viewport = document.createElement("div");
+			viewport.className = "czi-orient-tile-viewport";
+			if (!orientGeometry.isIdentityGeometry(geom)) {
+				viewport.style.transform = geometryCssTransform(geom);
+				viewport.style.transformOrigin = "center center";
+			}
 			var img = document.createElement("img");
 			img.src = imgSrc;
 			img.alt = sliceId;
 			img.title = imgPath;
-			if (!orientGeometry.isIdentityGeometry(geom)) {
-				img.style.transform = geometryCssTransform(geom);
-				img.style.transformOrigin = "center center";
-			}
 			img.onerror = function () {
 				var msg = document.createElement("p");
 				msg.className = "small text-muted";
 				msg.textContent = "No preview";
 				msg.title = imgPath;
-				if (img.parentNode) {
-					img.parentNode.replaceChild(msg, img);
+				if (viewport.parentNode) {
+					viewport.parentNode.replaceChild(msg, viewport);
 				}
 			};
-			tile.appendChild(img);
+			viewport.appendChild(img);
+			tile.appendChild(viewport);
 			var hint = document.createElement("p");
 			hint.className = "czi-orient-preview-hint";
 			hint.textContent = orientGeometry.orientPreviewHintText(
@@ -1446,31 +1449,21 @@ function renderOrientationGrid() {
 		tile.appendChild(btnGroup);
 		var status = document.createElement("p");
 		status.className = "small text-muted mb-0 mt-1";
-		status.textContent =
-			"rot " +
-			(geom.rotate || 0) +
-			"° flipX=" +
-			!!geom.flipX +
-			" flipY=" +
-			!!geom.flipY;
+		status.setAttribute("data-geo-status", "1");
+		status.textContent = orientGeometry.geometryStatusText(geom);
 		tile.appendChild(status);
 		grid.appendChild(tile);
 	}
 
-	grid.querySelectorAll("button[data-geo]").forEach(function (btn) {
-		btn.addEventListener("click", function (ev) {
-			var sid = ev.target.getAttribute("data-slice");
-			var action = ev.target.getAttribute("data-geo");
-			var g = wizardState.cziImport.geometry[sid];
-			if (!g) {
-				g = defaultGeometry();
-				wizardState.cziImport.geometry[sid] = g;
-			}
-			wizardState.cziImport.geometry[sid] = orientGeometry.applyGeometryAction(g, action);
-			renderOrientationGrid();
+	orientGeometry.wireOrientationGridClicks(
+		grid,
+		function () {
+			return wizardState.cziImport.geometry;
+		},
+		function () {
 			updateOrientPreviewBanner();
-		});
-	});
+		},
+	);
 }
 
 function finalizeGeometryAfterApply(payload) {
@@ -2443,12 +2436,9 @@ function bindStep5() {
 			return;
 		}
 		var first = wizardState.cziImport.geometry[ids[0]];
+		var copied = orientGeometry.cloneGeometry(first);
 		for (var i = 1; i < ids.length; i++) {
-			wizardState.cziImport.geometry[ids[i]] = {
-				rotate: first.rotate,
-				flipX: first.flipX,
-				flipY: first.flipY,
-			};
+			wizardState.cziImport.geometry[ids[i]] = orientGeometry.cloneGeometry(copied);
 		}
 		renderOrientationGrid();
 	});

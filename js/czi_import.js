@@ -3,6 +3,7 @@
 var crypto = require("crypto");
 var fs = require("fs");
 var path = require("path");
+var orientGeometry = require("./orient_geometry");
 
 var ROLE_DAPI = "dapi";
 var ROLE_SIGNAL_SOMATA = "signal_somata";
@@ -1694,8 +1695,7 @@ function findGeometryKeysWithoutPreviewFiles(bundleRoot, geometryMap, sliceIds) 
 		if (!geom) {
 			continue;
 		}
-		var rot = Number(geom.rotate) || 0;
-		if (rot % 360 === 0 && !geom.flipX && !geom.flipY) {
+		if (!orientGeometry.geometryHasPending(geom)) {
 			continue;
 		}
 		var dapiPng = dapiPreviewPath(bundleRoot, sliceId);

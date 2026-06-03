@@ -12,13 +12,34 @@ import tifffile as tiff
 REPO_PY = Path(__file__).resolve().parents[2] / "py"
 sys.path.insert(0, str(REPO_PY))
 
-from apply_geometry import apply_ops_to_array, compose_ops  # noqa: E402
+from apply_geometry import (  # noqa: E402
+    apply_ops_to_array,
+    compose_ops,
+    compose_ops_from_spec,
+    ops_from_string_list,
+)
 
 
 def test_compose_rotate_flip() -> None:
     ops = compose_ops(90, True, False)
     assert ("rotate", 90) in ops
     assert ("flip_x", True) in ops
+
+
+def test_ops_list_matches_legacy_compose() -> None:
+    arr = np.arange(24, dtype=np.uint8).reshape(4, 6)
+    legacy_ops = compose_ops(90, True, False)
+    string_ops = ops_from_string_list(["rot90", "flipX"])
+    assert string_ops == legacy_ops
+    assert np.array_equal(
+        apply_ops_to_array(arr, compose_ops_from_spec({"ops": ["rot90", "flipX"]})),
+        apply_ops_to_array(arr, legacy_ops),
+    )
+
+
+def test_compose_ops_from_spec_legacy_fallback() -> None:
+    spec = {"rotate": 90, "flipX": True, "flipY": False}
+    assert compose_ops_from_spec(spec) == compose_ops(90, True, False)
 
 
 def test_apply_ops_rot90_clockwise_non_square() -> None:
@@ -58,8 +79,8 @@ def test_collect_geometry_jobs_skips_identity(tmp_path: Path) -> None:
     bundle = tmp_path / "Brain_masonjar"
     cfg = {"channels": []}
     geometry = {
-        "A": {"rotate": 0, "flipX": False, "flipY": False},
-        "B": {"rotate": 90, "flipX": False, "flipY": False},
+        "A": {"ops": []},
+        "B": {"ops": ["rot90"]},
     }
     jobs = collect_geometry_jobs(bundle, geometry, cfg)
     assert [job[0] for job in jobs] == []

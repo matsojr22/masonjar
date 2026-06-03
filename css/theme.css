@@ -176,13 +176,21 @@ body.tool-page #parent.h-100 {
 	padding: 0.5rem;
 	background: var(--mj-surface, #fff);
 }
-.czi-orient-tile img {
+.czi-orient-tile-viewport {
+	overflow: hidden;
+	width: 100%;
+	max-height: 140px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transform-origin: center center;
+}
+.czi-orient-tile-viewport img {
 	width: 100%;
 	height: auto;
 	max-height: 140px;
 	object-fit: contain;
 	background: #111;
-	transform-origin: center center;
 }
 .czi-orient-preview-hint {
 	font-size: 0.75rem;

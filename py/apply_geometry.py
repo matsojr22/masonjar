@@ -37,6 +37,29 @@ def compose_ops(rotate: int, flip_x: bool, flip_y: bool):
     return ops
 
 
+def ops_from_string_list(op_list: list) -> list:
+    """Map JS geometry.ops entries (rot90, flipX, flipY) to internal op tuples."""
+    ops: list = []
+    for entry in op_list or []:
+        if entry == "rot90":
+            ops.append(("rotate", 90))
+        elif entry == "flipX":
+            ops.append(("flip_x", True))
+        elif entry == "flipY":
+            ops.append(("flip_y", True))
+    return ops
+
+
+def compose_ops_from_spec(spec: dict) -> list:
+    """Use ordered spec.ops when present; else legacy rotate/flip flags."""
+    if not spec:
+        return []
+    raw_ops = spec.get("ops")
+    if raw_ops:
+        return ops_from_string_list(raw_ops)
+    return compose_ops(spec.get("rotate", 0), spec.get("flipX"), spec.get("flipY"))
+
+
 def apply_ops_to_array(arr: np.ndarray, ops: list) -> np.ndarray:
     # Rotation k matches CSS clockwise in js/orient_geometry.js geometryCssTransform.
     out = arr
@@ -166,7 +189,7 @@ def collect_geometry_jobs(
     jobs: list[tuple[str, list, list[Path]]] = []
     for slice_id in sorted(geometry.keys()):
         spec = geometry[slice_id] or {}
-        ops = compose_ops(spec.get("rotate", 0), spec.get("flipX"), spec.get("flipY"))
+        ops = compose_ops_from_spec(spec)
         if not ops:
             continue
         targets = paths_for_slice(bundle_root, slice_id, cfg)

@@ -1,14 +1,16 @@
 # Agent session handoff
 
-Last updated: 2026-06-01 (CZI multi-Z preview fix v2.4.9). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-02 (cumulative orient geometry v2.4.10). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 ## Current release
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **2.4.9** |
-| Latest tag | `v2.4.9` (pending) |
-| GitHub releases | https://github.com/matsojr22/masonjar/releases |
+| `package.json` version | **2.4.10** |
+| Latest tag | `v2.4.10` |
+| GitHub releases | https://github.com/matsojr22/masonjar/releases/tag/v2.4.10 |
+
+**v2.4.10** — Cumulative orient geometry: per-slice `geometry.ops` (`rot90`, `flipX`, `flipY`) with DOMMatrix preview WYSIWYG in shared [`js/orient_geometry.js`](../js/orient_geometry.js); identical behavior in CZI wizard step 5 and menu **Orient slices**; in-place tile updates on geo clicks; [`py/apply_geometry.py`](../py/apply_geometry.py) `compose_ops_from_spec`. Tests: `scripts/test-orient-geometry.js`, `python/tests/test_apply_geometry.py`.
 
 **v2.4.9** — Hotfix: CZI extract no longer uses `ndarray or planes[0]` when picking a signal preview plane after multi-Z stack write (fixes `ValueError: truth value of an array is ambiguous` on first somata item). Test: `test_extract_multi_z_preview_no_truthiness_error`.
 

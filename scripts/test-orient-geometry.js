@@ -9,22 +9,22 @@ var orientGeometry = require("../js/orient_geometry");
 
 function testResetGeometryMap() {
 	var map = {
-		A: { rotate: 90, flipX: true, flipY: false },
-		B: { rotate: 180, flipX: false, flipY: true },
-		C: { rotate: 0, flipX: false, flipY: false },
+		A: { ops: ["rot90", "flipX"] },
+		B: { ops: ["rot90", "rot90"] },
+		C: { ops: [] },
 	};
 	var out = orientGeometry.resetGeometryMap(map, ["A", "B", "D"]);
 	assert.strictEqual(out, map);
-	assert.deepStrictEqual(out.A, { rotate: 0, flipX: false, flipY: false });
-	assert.deepStrictEqual(out.B, { rotate: 0, flipX: false, flipY: false });
-	assert.deepStrictEqual(out.C, { rotate: 0, flipX: false, flipY: false });
-	assert.strictEqual(out.D.rotate, 0);
+	assert.deepStrictEqual(out.A, { ops: [] });
+	assert.deepStrictEqual(out.B, { ops: [] });
+	assert.deepStrictEqual(out.C, { ops: [] });
+	assert.strictEqual(out.D.ops.length, 0);
 }
 
 function testCountNonIdentityAfterReset() {
 	var map = {
-		A: { rotate: 90, flipX: false, flipY: false },
-		B: { rotate: 0, flipX: true, flipY: false },
+		A: { ops: ["rot90"] },
+		B: { ops: ["flipX"] },
 	};
 	orientGeometry.resetGeometryMap(map, ["A", "B"]);
 	assert.strictEqual(orientGeometry.countNonIdentityGeometry(map, ["A", "B"]), 0);
@@ -43,33 +43,55 @@ function testOrientPreviewHintText() {
 }
 
 function testIsIdentityGeometry() {
+	assert.strictEqual(orientGeometry.isIdentityGeometry({ ops: [] }), true);
 	assert.strictEqual(
 		orientGeometry.isIdentityGeometry({ rotate: 360, flipX: false, flipY: false }),
 		true,
 	);
 	assert.strictEqual(
-		orientGeometry.isIdentityGeometry({ rotate: 90, flipX: false, flipY: false }),
+		orientGeometry.isIdentityGeometry({ ops: ["rot90"] }),
 		false,
 	);
 }
 
-function testRot90ClickContract() {
+function testLegacyToOpsMigration() {
+	assert.deepStrictEqual(orientGeometry.legacyToOps({ rotate: 90, flipX: true }), [
+		"rot90",
+		"flipX",
+	]);
+	assert.deepStrictEqual(orientGeometry.legacyToOps({ rotate: 180, flipY: true }), [
+		"rot90",
+		"rot90",
+		"flipY",
+	]);
+}
+
+function testRot90ThenFlipXAppendsOps() {
 	var geom = orientGeometry.defaultGeometry();
 	geom = orientGeometry.applyGeometryAction(geom, "rot90");
-	assert.strictEqual(geom.rotate, 90);
-	assert.strictEqual(geom.flipX, false);
-	assert.strictEqual(geom.flipY, false);
-	assert.strictEqual(
-		orientGeometry.geometryCssTransform(geom),
-		"rotate(90deg) scaleX(1) scaleY(1)",
-	);
+	geom = orientGeometry.applyGeometryAction(geom, "flipX");
+	assert.deepStrictEqual(geom.ops, ["rot90", "flipX"]);
+	assert.strictEqual(orientGeometry.isIdentityGeometry(geom), false);
+}
+
+function testGeometryCssTransformUsesMatrix() {
+	var geom = { ops: ["rot90", "flipX"] };
+	var css = orientGeometry.geometryCssTransform(geom);
+	assert.match(css, /^matrix\(/);
+}
+
+function testCloneGeometryDeepCopy() {
+	var a = { ops: ["rot90", "flipX"] };
+	var b = orientGeometry.cloneGeometry(a);
+	b.ops.push("flipY");
+	assert.deepStrictEqual(a.ops, ["rot90", "flipX"]);
 }
 
 function testOrientPostApplySummaryText() {
 	var text = orientGeometry.orientPostApplySummaryText("2026-05-21T12:00:00.000Z", 42);
 	assert.match(text, /Last applied:/);
 	assert.match(text, /42 file/);
-	assert.match(text, /rot 0/);
+	assert.match(text, /no pending edits/);
 }
 
 function testFindGeometryKeysWithoutPreviewFiles() {
@@ -79,8 +101,8 @@ function testFindGeometryKeysWithoutPreviewFiles() {
 	fs.mkdirSync(dapiDir, { recursive: true });
 	fs.writeFileSync(path.join(dapiDir, "M528_s001.png"), Buffer.from([0]));
 	var geometry = {
-		M528_s001: { rotate: 90, flipX: false, flipY: false },
-		M528_orphan: { rotate: 90, flipX: false, flipY: false },
+		M528_s001: { ops: ["rot90"] },
+		M528_orphan: { ops: ["rot90"] },
 	};
 	var orphans = cziImport.findGeometryKeysWithoutPreviewFiles(bundle, geometry, [
 		"M528_s001",
@@ -94,7 +116,10 @@ function run() {
 	testCountNonIdentityAfterReset();
 	testOrientPreviewHintText();
 	testIsIdentityGeometry();
-	testRot90ClickContract();
+	testLegacyToOpsMigration();
+	testRot90ThenFlipXAppendsOps();
+	testGeometryCssTransformUsesMatrix();
+	testCloneGeometryDeepCopy();
 	testOrientPostApplySummaryText();
 	testFindGeometryKeysWithoutPreviewFiles();
 	console.log("test-orient-geometry.js: all passed");
