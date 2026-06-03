@@ -1,0 +1,602 @@
+"use strict";
+
+var fs = require("fs");
+var path = require("path");
+var ipc = require("electron").ipcRenderer;
+var branding = require("./branding");
+var project = require("./project");
+var pipelineRun = require("./pipeline_run");
+var pipelineRuns = require("./pipeline_runs");
+var maxDatasets = require("./max_datasets");
+
+var PREVIEW_DEBOUNCE_MS = 350;
+var DEFAULT_VIEW_W = 512;
+var DEFAULT_VIEW_H = 512;
+
+function parsePreviewJsonLine(line) {
+	var idx = String(line).indexOf("PREVIEW_JSON:");
+	if (idx < 0) {
+		return null;
+	}
+	try {
+		return JSON.parse(String(line).slice(idx + "PREVIEW_JSON:".length));
+	} catch (_err) {
+		return null;
+	}
+}
+
+function listSliceImageFiles(leafAbs) {
+	if (!leafAbs || !fs.existsSync(leafAbs)) {
+		return [];
+	}
+	var re = /\.(tif|tiff|png|jpe?g)$/i;
+	var out = [];
+	try {
+		var entries = fs.readdirSync(leafAbs, { withFileTypes: true });
+		for (var i = 0; i < entries.length; i++) {
+			if (entries[i].isFile() && re.test(entries[i].name)) {
+				out.push({
+					name: entries[i].name,
+					abs: path.join(leafAbs, entries[i].name),
+				});
+			}
+		}
+	} catch (_err) {
+		return [];
+	}
+	out.sort(function (a, b) {
+		return a.name.localeCompare(b.name, undefined, { numeric: true });
+	});
+	return out;
+}
+
+function viewportRoi(state, imgW, imgH) {
+	var scale = state.scale || 1;
+	var panX = state.panX || 0;
+	var panY = state.panY || 0;
+	var vpW = state.viewW || DEFAULT_VIEW_W;
+	var vpH = state.viewH || DEFAULT_VIEW_H;
+	var x0 = Math.max(0, Math.floor(-panX / scale));
+	var y0 = Math.max(0, Math.floor(-panY / scale));
+	var x1 = Math.min(imgW, Math.ceil((vpW - panX) / scale));
+	var y1 = Math.min(imgH, Math.ceil((vpH - panY) / scale));
+	var w = Math.max(32, x1 - x0);
+	var h = Math.max(32, y1 - y0);
+	if (x0 + w > imgW) {
+		w = imgW - x0;
+	}
+	if (y0 + h > imgH) {
+		h = imgH - y0;
+	}
+	return { x: x0, y: y0, w: w, h: h };
+}
+
+/**
+ * @param {object} opts
+ * @param {string} opts.stepId - "tophat" | "sharpen"
+ * @param {string} opts.sourceStorageKey
+ * @param {string} opts.configFileName - e.g. tophat_run_config.json
+ * @param {string} opts.runIpc
+ * @param {string} opts.previewIpc
+ * @param {string} opts.resultIpc
+ * @param {string} opts.killRunIpc
+ * @param {string} opts.killPreviewIpc
+ * @param {function(): object} opts.getToolParams
+ * @param {function(object, object): object} opts.buildSlugContext
+ */
+function wirePreprocessWizard(opts) {
+	opts = opts || {};
+	var stepId = opts.stepId;
+	var state = {
+		step: 1,
+		signalBranch: "",
+		sourceDataset: null,
+		slices: [],
+		currentSlice: null,
+		scale: 1,
+		panX: 0,
+		panY: 0,
+		viewW: DEFAULT_VIEW_W,
+		viewH: DEFAULT_VIEW_H,
+		previewBusy: false,
+		running: false,
+		lastRunRel: "",
+	};
+
+	var wizardSteps = document.getElementById("wizardSteps");
+	var step1Panel = document.getElementById("step1");
+	var step2Panel = document.getElementById("step2");
+	var branchSelect = document.getElementById("signalBranchSelect");
+	var sourceSelect = document.getElementById("sourceDatasetSelect");
+	var sliceSelect = document.getElementById("sliceSelect");
+	var branchRow = document.getElementById("signalBranchRow");
+	var sourceRow = document.getElementById("sourceDatasetRow");
+	var viewport = document.getElementById("preprocessPreviewViewport");
+	var previewImg = document.getElementById("preprocessPreviewImg");
+	var previewStatus = document.getElementById("preprocessPreviewStatus");
+	var step1Next = document.getElementById("step1Next");
+	var step2Back = document.getElementById("step2Back");
+	var step2Cancel = document.getElementById("step2Cancel");
+	var processStart = document.getElementById("processStart");
+	var wizardLog = document.getElementById("wizardLog");
+	var processProgress = document.getElementById("processProgress");
+	var processMessage = document.getElementById("processMessage");
+	var setActiveCheckbox = document.getElementById("setActiveMax");
+	var finishPanel = document.getElementById("finishPanel");
+	var previewTimer = null;
+
+	pipelineRun.ensureRunModeUi("runModePanel", stepId);
+
+	function bundleRoot() {
+		return project.isActive() ? project.getBundleRoot() : "";
+	}
+
+	function savedSourceRel() {
+		try {
+			return sessionStorage.getItem(opts.sourceStorageKey) || "";
+		} catch (_err) {
+			return "";
+		}
+	}
+
+	function persistSourceRel(rel) {
+		try {
+			sessionStorage.setItem(opts.sourceStorageKey, rel || "");
+		} catch (_err) {}
+	}
+
+	function appendLog(line) {
+		if (!wizardLog) {
+			return;
+		}
+		wizardLog.textContent += line + "\n";
+		wizardLog.scrollTop = wizardLog.scrollHeight;
+	}
+
+	function setStep(n) {
+		state.step = n;
+		if (step1Panel) {
+			step1Panel.classList.toggle("d-none", n !== 1);
+		}
+		if (step2Panel) {
+			step2Panel.classList.toggle("d-none", n !== 2);
+		}
+		if (finishPanel) {
+			finishPanel.classList.toggle("d-none", n !== 3);
+		}
+		if (wizardSteps) {
+			var pills = wizardSteps.querySelectorAll("[data-step]");
+			for (var i = 0; i < pills.length; i++) {
+				var pill = pills[i];
+				var sn = Number(pill.getAttribute("data-step"));
+				pill.classList.remove("active", "disabled");
+				if (sn === n) {
+					pill.classList.add("active");
+				} else if (sn < n) {
+					pill.classList.remove("disabled");
+				} else {
+					pill.classList.add("disabled");
+				}
+			}
+		}
+	}
+
+	function refreshBranches() {
+		var root = bundleRoot();
+		var branches = root ? maxDatasets.listSignalBranches(root) : [];
+		if (branchSelect) {
+			branchSelect.innerHTML = "";
+			if (branches.length <= 1) {
+				if (branchRow) {
+					branchRow.classList.add("d-none");
+				}
+				state.signalBranch = branches[0] || "";
+			} else {
+				if (branchRow) {
+					branchRow.classList.remove("d-none");
+				}
+				for (var i = 0; i < branches.length; i++) {
+					var opt = document.createElement("option");
+					opt.value = branches[i];
+					opt.textContent = branches[i];
+					branchSelect.appendChild(opt);
+				}
+				state.signalBranch = branchSelect.value;
+			}
+		}
+		refreshSourceDatasets();
+	}
+
+	function refreshSourceDatasets() {
+		var root = bundleRoot();
+		if (!root) {
+			return;
+		}
+		var datasets = maxDatasets.listDatasetsForBranch(root, state.signalBranch);
+		var def = maxDatasets.defaultDatasetForBranch(root, state.signalBranch, {
+			preferKind: "max",
+			savedRel: savedSourceRel(),
+		});
+		if (sourceSelect) {
+			sourceSelect.innerHTML = "";
+			for (var i = 0; i < datasets.length; i++) {
+				var d = datasets[i];
+				var opt = document.createElement("option");
+				opt.value = d.rel;
+				opt.textContent = d.label;
+				sourceSelect.appendChild(opt);
+			}
+			if (sourceRow) {
+				sourceRow.classList.toggle("d-none", datasets.length <= 1);
+			}
+			if (def) {
+				sourceSelect.value = def.rel;
+			}
+		}
+		onSourceChange();
+	}
+
+	function onSourceChange() {
+		var root = bundleRoot();
+		if (!root || !sourceSelect) {
+			return;
+		}
+		var rel = sourceSelect.value;
+		persistSourceRel(rel);
+		var datasets = maxDatasets.listDatasetsForBranch(root, state.signalBranch);
+		state.sourceDataset = null;
+		for (var i = 0; i < datasets.length; i++) {
+			if (datasets[i].rel === rel) {
+				state.sourceDataset = datasets[i];
+				break;
+			}
+		}
+		state.slices = state.sourceDataset
+			? listSliceImageFiles(state.sourceDataset.abs)
+			: [];
+		if (sliceSelect) {
+			sliceSelect.innerHTML = "";
+			for (var s = 0; s < state.slices.length; s++) {
+				var o = document.createElement("option");
+				o.value = String(s);
+				o.textContent = state.slices[s].name;
+				sliceSelect.appendChild(o);
+			}
+		}
+		if (state.slices.length) {
+			state.currentSlice = state.slices[0];
+		} else {
+			state.currentSlice = null;
+		}
+		schedulePreview();
+	}
+
+	function onSliceChange() {
+		if (!sliceSelect || !state.slices.length) {
+			return;
+		}
+		var idx = Number(sliceSelect.value) || 0;
+		state.currentSlice = state.slices[idx] || state.slices[0];
+		schedulePreview();
+	}
+
+	function applyPanZoomCss() {
+		if (!previewImg) {
+			return;
+		}
+		previewImg.style.transform =
+			"translate(" +
+			state.panX +
+			"px," +
+			state.panY +
+			"px) scale(" +
+			state.scale +
+			")";
+	}
+
+	function schedulePreview() {
+		if (previewTimer) {
+			clearTimeout(previewTimer);
+		}
+		previewTimer = setTimeout(requestPreview, PREVIEW_DEBOUNCE_MS);
+	}
+
+	function requestPreview() {
+		if (!state.currentSlice || state.previewBusy || state.running) {
+			return;
+		}
+		var params = opts.getToolParams();
+		var roi = { x: 0, y: 0, w: DEFAULT_VIEW_W, h: DEFAULT_VIEW_H };
+		if (previewImg && previewImg.naturalWidth) {
+			roi = viewportRoi(state, previewImg.naturalWidth, previewImg.naturalHeight);
+		}
+		var metaDir = bundleRoot()
+			? path.join(bundleRoot(), branding.META_DIR)
+			: path.dirname(state.currentSlice.abs);
+		state.previewBusy = true;
+		if (previewStatus) {
+			previewStatus.textContent = "Updating preview…";
+		}
+		var previewPayload = {
+			previewDir: metaDir,
+		};
+		if (stepId === "tophat") {
+			previewPayload.radius = params.radius;
+			previewPayload.gamma = params.gamma;
+		} else {
+			previewPayload.radius = params.radius;
+			previewPayload.amount = params.amount;
+			previewPayload.equalize = !!params.equalize;
+		}
+		ipc.send(opts.previewIpc, [
+			state.currentSlice.abs,
+			roi.x,
+			roi.y,
+			roi.w,
+			roi.h,
+			previewPayload,
+		]);
+	}
+
+	function wirePreviewPane() {
+		if (!viewport || !previewImg) {
+			return;
+		}
+		var rect = viewport.getBoundingClientRect();
+		state.viewW = Math.max(200, Math.floor(rect.width) || DEFAULT_VIEW_W);
+		state.viewH = Math.max(200, Math.floor(rect.height) || DEFAULT_VIEW_H);
+
+		previewImg.addEventListener("load", function () {
+			schedulePreview();
+		});
+
+		viewport.addEventListener(
+			"wheel",
+			function (ev) {
+				ev.preventDefault();
+				var delta = ev.deltaY > 0 ? 0.9 : 1.1;
+				state.scale = Math.min(8, Math.max(0.1, state.scale * delta));
+				applyPanZoomCss();
+				schedulePreview();
+			},
+			{ passive: false },
+		);
+
+		var dragging = false;
+		var lastX = 0;
+		var lastY = 0;
+		viewport.addEventListener("mousedown", function (ev) {
+			dragging = true;
+			lastX = ev.clientX;
+			lastY = ev.clientY;
+		});
+		window.addEventListener("mousemove", function (ev) {
+			if (!dragging) {
+				return;
+			}
+			state.panX += ev.clientX - lastX;
+			state.panY += ev.clientY - lastY;
+			lastX = ev.clientX;
+			lastY = ev.clientY;
+			applyPanZoomCss();
+			schedulePreview();
+		});
+		window.addEventListener("mouseup", function () {
+			dragging = false;
+		});
+	}
+
+	function buildOutputPath(plan) {
+		var root = bundleRoot();
+		var outBase = maxDatasets.branchRootAbs(root, state.signalBranch);
+		var srcMeta = maxDatasets.parseSourceRunRel(
+			state.sourceDataset ? state.sourceDataset.rel : "",
+			state.signalBranch,
+		);
+		var stems = pipelineRuns.listImageSliceStems(
+			state.sourceDataset ? state.sourceDataset.abs : "",
+		);
+		var slugCtx = opts.buildSlugContext(
+			{
+				sortedStems: stems,
+				subsetCount: plan.toProcess.length,
+				sourceKind: srcMeta.source_kind,
+				sourceRunRel: srcMeta.source_run_rel,
+			},
+			opts.getToolParams(),
+		);
+		var slug = pipelineRuns.buildRunSlug(stepId, slugCtx);
+		var cfg = pipelineRuns.RUN_STEP_CONFIG[stepId];
+		return {
+			abs: pipelineRuns.resolveRunLeaf(outBase, cfg.branch, slug, false),
+			slug: slug,
+			srcMeta: srcMeta,
+		};
+	}
+
+	function writeRunConfig(outInfo, plan) {
+		var root = bundleRoot();
+		var meta = path.join(root, branding.META_DIR);
+		fs.mkdirSync(meta, { recursive: true });
+		var configPath = path.join(meta, opts.configFileName);
+		var params = opts.getToolParams();
+		var payload = {
+			input_dir: state.sourceDataset.abs,
+			output_dir: outInfo.abs,
+			source_abs: state.sourceDataset.abs,
+			output_abs: outInfo.abs,
+			signal_branch: state.signalBranch || "",
+			source_kind: outInfo.srcMeta.source_kind,
+			source_run_rel: outInfo.srcMeta.source_run_rel,
+			slice_list: plan.sliceListPath || "",
+		};
+		if (stepId === "tophat") {
+			payload.radius_px = params.radius;
+			payload.gamma = params.gamma;
+			payload.filter = params.radius;
+			payload.correction = params.gamma;
+		} else {
+			payload.radius = params.radius;
+			payload.amount = params.amount;
+			payload.equalize = !!params.equalize;
+		}
+		fs.writeFileSync(configPath, JSON.stringify(payload, null, 2));
+		return configPath;
+	}
+
+	function startProcess() {
+		if (!state.sourceDataset || !state.sourceDataset.abs) {
+			alert("Select a source dataset.");
+			return;
+		}
+		var mode = pipelineRun.getSelectedRunMode(stepId);
+		var plan = pipelineRun.preparePipelineRun(stepId, mode);
+		if (project.isActive() && !plan.toProcess.length) {
+			alert("No slices to process (subset empty or all filtered).");
+			return;
+		}
+		var outInfo = buildOutputPath(plan);
+		try {
+			fs.mkdirSync(outInfo.abs, { recursive: true });
+		} catch (err) {
+			alert("Could not create output directory: " + (err.message || err));
+			return;
+		}
+		var configPath = writeRunConfig(outInfo, plan);
+		state.lastRunRel = pipelineRuns.relFromRoleBase("max", outInfo.abs);
+		state.running = true;
+		if (wizardLog) {
+			wizardLog.textContent = "";
+		}
+		appendLog("[Wizard] Output: " + outInfo.abs);
+		appendLog("[Wizard] Config: " + configPath);
+		if (processStart) {
+			processStart.disabled = true;
+		}
+		if (step2Cancel) {
+			step2Cancel.classList.remove("d-none");
+		}
+		ipc.send(opts.runIpc, [configPath]);
+	}
+
+	function onRunFinished() {
+		state.running = false;
+		if (processStart) {
+			processStart.disabled = false;
+		}
+		if (processProgress) {
+			processProgress.style.width = "100%";
+		}
+		if (setActiveCheckbox && setActiveCheckbox.checked && state.lastRunRel) {
+			pipelineRuns.setActiveRunRel("max", state.lastRunRel);
+		}
+		if (project.isActive()) {
+			project.refreshProjectIndex().catch(function () {});
+		}
+		setStep(3);
+	}
+
+	if (branchSelect) {
+		branchSelect.addEventListener("change", function () {
+			state.signalBranch = branchSelect.value;
+			refreshSourceDatasets();
+		});
+	}
+	if (sourceSelect) {
+		sourceSelect.addEventListener("change", onSourceChange);
+	}
+	if (sliceSelect) {
+		sliceSelect.addEventListener("change", onSliceChange);
+	}
+	if (step1Next) {
+		step1Next.addEventListener("click", function () {
+			if (!state.sourceDataset) {
+				alert("No input dataset found for this branch.");
+				return;
+			}
+			setStep(2);
+		});
+	}
+	if (step2Back) {
+		step2Back.addEventListener("click", function () {
+			if (state.running) {
+				return;
+			}
+			setStep(1);
+		});
+	}
+	if (processStart) {
+		processStart.addEventListener("click", startProcess);
+	}
+	if (step2Cancel) {
+		step2Cancel.addEventListener("click", function () {
+			if (state.running) {
+				ipc.send(opts.killRunIpc, []);
+			}
+		});
+	}
+
+	var paramInputs = document.querySelectorAll("[data-preview-param]");
+	for (var p = 0; p < paramInputs.length; p++) {
+		paramInputs[p].addEventListener("input", schedulePreview);
+		paramInputs[p].addEventListener("change", schedulePreview);
+	}
+
+	var previewResultChannel =
+		opts.previewResultIpc ||
+		(opts.previewIpc === "runTophatPreview"
+			? "tophatPreviewResult"
+			: "sharpenPreviewResult");
+	ipc.on(previewResultChannel, function (_ev, payload) {
+		state.previewBusy = false;
+		var data = payload;
+		if (typeof payload === "string") {
+			data = parsePreviewJsonLine(payload);
+		}
+		if (!data || !data.ok) {
+			if (previewStatus) {
+				previewStatus.textContent = (data && data.error) || "Preview failed";
+			}
+			return;
+		}
+		if (previewImg && data.previewPath) {
+			previewImg.src = "file://" + data.previewPath.replace(/\\/g, "/");
+		}
+		if (previewStatus) {
+			previewStatus.textContent = "Filtered preview (" + data.width + "×" + data.height + " ROI)";
+		}
+	});
+
+	ipc.on(opts.resultIpc, function () {
+		onRunFinished();
+	});
+
+	ipc.on("updateLoad", function (_ev, response) {
+		if (state.step !== 2) {
+			return;
+		}
+		if (processProgress && response[0] != null) {
+			processProgress.style.width = String(response[0]) + "%";
+		}
+		if (processMessage && response[1]) {
+			processMessage.textContent = response[1];
+			appendLog(response[1]);
+		}
+	});
+
+	wirePreviewPane();
+	refreshBranches();
+	if (state.currentSlice && previewImg) {
+		previewImg.src = "file://" + state.currentSlice.abs.replace(/\\/g, "/");
+	}
+	setStep(1);
+
+	return { state: state, schedulePreview: schedulePreview, refreshBranches: refreshBranches };
+}
+
+module.exports = {
+	wirePreprocessWizard: wirePreprocessWizard,
+	viewportRoi: viewportRoi,
+	parsePreviewJsonLine: parsePreviewJsonLine,
+	listSliceImageFiles: listSliceImageFiles,
+};

@@ -85,10 +85,21 @@ Renderer scripts use `require("electron").ipcRenderer`. Main handlers are `ipcMa
 | `killCount` | once `killCount` | — | |
 | `runCollate` | `runCollate` | `collate.py` | `collateResult` |
 | `killCollate` | once `killCollate` | — | Cancel for collate (renderer must send this name) |
-| `runSharpen` | `runSharpen` | `sharpen.py` | `sharpenResult`, `updateLoad` |
+| `runSharpen` | `runSharpen` | `sharpen.py` | `sharpenResult`, `updateLoad`. Wizard: `-j` config path; legacy argv `[indir, outdir, radius, amount, equalize]`. |
+| `runSharpenPreview` | `runSharpenPreview` | `sharpen.py` | `--preview` ROI; reply `sharpenPreviewResult` `{ ok, previewPath, width, height }`. |
+| `killSharpenPreview` | once `killSharpenPreview` | — | |
+| `runTophat` | `runTophat` | `top_hat.py` | `tophatResult`, `updateLoad`. Args: `-j` config or legacy `-i/-o/-f/-c`. |
+| `runTophatPreview` | `runTophatPreview` | `top_hat.py` | Reply `tophatPreviewResult` (same JSON shape as sharpen preview). |
+| `killTophat` | once `killTophat` | — | |
+| `killTophatPreview` | once `killTophatPreview` | — | |
 | `killSharpen` | once `killSharpen` | — | |
 | `runDapiCleanup` | `runDapiCleanup` | `dapi_cleanup.py` | `dapiCleanupResult`, `updateLoad`. Args: input dir, output dir, isolate, CLAHE, saturation %, backup dir (in-place), slice list, re-backup, optional bg value. Separate `-i`/`-o` argv tokens for Windows paths with spaces. In-place mode backs up originals to `data/counting/00_dapi_backup/`; separate mode writes `data/counting/00_dapi_clean/` without touching `00_dapi`. |
 | `killDapiCleanup` | once `killDapiCleanup` | — | |
+| `runTissueCleanupAuto` | `runTissueCleanupAuto` | `tissue_cleanup.py` | `--auto -i` preview; reply `tissueCleanupPreviewResult` (`PREVIEW_JSON:` mask + composite). |
+| `runTissueCleanupGuided` | `runTissueCleanupGuided` | `tissue_cleanup.py` | `--guided -i` preview, `--stroke-json`; same preview reply. |
+| `runTissueCleanupApply` | `runTissueCleanupApply` | `tissue_cleanup.py` | `-b` bundle, `-j` `.masonjar/tissue_cleanup_apply_config.json` (separate argv tokens); `tissueCleanupApplyResult`, `updateLoad`, `LOG:`. |
+| `killTissueCleanupPreview` | once `killTissueCleanupPreview` | — | Preview auto/guided. |
+| `killTissueCleanup` | once `killTissueCleanup` | — | Apply batch. |
 | `runParcellation` | `runParcellation` | `apply_parcellation.py` | `parcellationResult`, `updateLoad`. Args: `[annodir, configJsonPath]` → `-a`, `-s` (structure_map.pkl), `-j` as separate argv tokens. Config at `{bundle}/.masonjar/parcellation_run_config.json`: `tier_id`, `st_level`, `excluded_region_ids`, optional `slice_ids`. |
 | `killParcellation` | once `killParcellation` | — | |
 | `runDetection` | `runDetection` | `find_neurons.py` | `detectResult`, `updateLoad`. Optional 10th IPC element: slice-list path (`--slice-list`). `-o` is the run output leaf directory. |
@@ -123,6 +134,28 @@ Renderer scripts use `require("electron").ipcRenderer`. Main handlers are `ipcMa
 | `batchComplete` | `{ summary, errors, cancelled }` — Step 3 summary; `summary.byProject[<path>][<step>]` carries per-job result |
 
 Some renderer files register `*Error` listeners (e.g. `alignError`, `detectError`). The main process logs Python non-zero exits to the Log (forcing the log window visible) and avoids throwing; **Isolate Regions** also emits `intensityError` with a short message after `intensityResult` when Python fails or writes zero PKLs.
+
+## Tissue edge cleanup wizard
+
+**Menu** ([`js/menu_category.js`](js/menu_category.js)): **Tissue edge cleanup** → [`pages/tissue_cleanup_wizard.html`](pages/tissue_cleanup_wizard.html) (preprocess category, after Orient).
+
+**Flow** (4 steps): per-slice mask editor on `_previews/{sliceId}_dapi.png` (fallback `00_dapi/{sliceId}.png`) → confirm file counts → apply with progress → summary. **No disk writes** to bundle images until Apply; draft under `.masonjar/tissue_cleanup_draft/` (`state.json`, `masks/{sliceId}.png`).
+
+**Tools (step 1):** Attempt Auto (`isolate_tissue_mask` in [`py/tissue_mask.py`](py/tissue_mask.py)), Trace edge then Auto (GrabCut + fallback in [`py/tissue_cleanup.py`](py/tissue_cleanup.py)), Eraser brush, Reset, optional Undo.
+
+**Apply** ([`py/tissue_cleanup.py`](py/tissue_cleanup.py) `--apply`): reads `.masonjar/tissue_cleanup_apply_config.json`; enumerates targets via [`py/bundle_slice_paths.py`](py/bundle_slice_paths.py) (includes sharpen/tophat globs under `03_max/{branch}/`); backs up to `.masonjar/tissue_cleanup_backup/`; sets `processing.tissue_cleanup` on the project JSON. **Re-run Align** after cleanup if alignment already exists.
+
+**Renderer:** [`js/tissue_cleanup_wizard.js`](js/tissue_cleanup_wizard.js), [`js/tissue_cleanup_canvas.js`](js/tissue_cleanup_canvas.js), [`js/bundle_slice_paths.js`](js/bundle_slice_paths.js) (confirm preflight counts).
+
+## Preprocess filter wizards (Sharpen + Top-hat)
+
+**Menu** ([`js/menu_category.js`](js/menu_category.js)): Sharpen → [`pages/sharpen_wizard.html`](pages/sharpen_wizard.html); **Top-hat filter** → [`pages/tophat_wizard.html`](pages/tophat_wizard.html). Legacy [`pages/sharpen.html`](pages/sharpen.html) redirects to the sharpen wizard.
+
+**Shared UI** ([`js/preprocess_wizard.js`](js/preprocess_wizard.js), [`js/max_datasets.js`](js/max_datasets.js)): signal branch, **source dataset** dropdown (max / sharpen / top-hat on that branch; **default max**), slice picker, pan/zoom preview with debounced ROI filter preview. Tools are **not required** to run in sequence; users may chain (e.g. sharpen then top-hat) by choosing any existing dataset as source.
+
+**Outputs** stay under `data/counting/03_max/{branch}/` in branch folders `max/`, `sharpen/`, or `tophat/top{R}_…/`. Config JSON in `.masonjar/` (`sharpen_run_config.json`, `tophat_run_config.json`). Optional **Set as active max task** on finish.
+
+**Downstream** ([`js/max_dataset_picker.js`](js/max_dataset_picker.js)): Cell Detection and Isolate Regions show **Intensity dataset** when multiple leaves exist; default max projection per branch.
 
 ## Isolate Regions wizard and config
 
@@ -170,7 +203,8 @@ Shared contract: [`js/pipeline_runs.js`](js/pipeline_runs.js), [`py/run_manifest
 | Step | Output role | Branch | Example leaf | Manifest writer |
 |------|-------------|--------|--------------|-----------------|
 | Max projection | `max` | `max` | `03_max/max/<slug>/` | [`py/max.py`](py/max.py) |
-| Sharpen | `max` | `sharpen` | `03_max/sharpen/<slug>/` | [`py/sharpen.py`](py/sharpen.py) |
+| Sharpen | `max` | `sharpen` | `03_max/{branch}/sharpen/<slug>/` | [`py/sharpen.py`](py/sharpen.py) — wizard [`pages/sharpen_wizard.html`](pages/sharpen_wizard.html) |
+| Top-hat filter | `max` | `tophat` | `03_max/{branch}/tophat/top{R}_<span>/` | [`py/top_hat.py`](py/top_hat.py) — wizard [`pages/tophat_wizard.html`](pages/tophat_wizard.html) |
 | Align | `slices` | `align` | `01_slices/align/<slug>/` | [`py/map.py`](py/map.py) |
 | Isolate regions | `pkls` | `intensity` | `07_pkls/intensity/<slug>/` | [`py/region.py`](py/region.py) |
 | Cell detection | `predictions` | model branch | `05_predictions/somata/<slug>/` | [`py/find_neurons.py`](py/find_neurons.py) |

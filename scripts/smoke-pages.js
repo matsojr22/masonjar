@@ -23,6 +23,9 @@ const PAGES = [
 	"credits.html",
 	"batch_wizard.html",
 	"parcellation_wizard.html",
+	"tophat_wizard.html",
+	"sharpen_wizard.html",
+	"tissue_cleanup_wizard.html",
 	"align.html",
 	"adjust.html",
 ];
@@ -64,6 +67,21 @@ const DOM_ASSERTIONS = {
 		"sliceTableBody",
 		"tierSelect",
 		"step3Start",
+	],
+	"tophat_wizard.html": [
+		"step1",
+		"signalBranchSelect",
+		"sourceDatasetSelect",
+		"tophatRadius",
+		"preprocessPreviewViewport",
+		"step1Next",
+	],
+	"sharpen_wizard.html": [
+		"step1",
+		"signalBranchSelect",
+		"sharpenRadius",
+		"sharpenEqualize",
+		"preprocessPreviewImg",
 	],
 };
 

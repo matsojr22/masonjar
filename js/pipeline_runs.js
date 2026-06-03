@@ -47,6 +47,13 @@ var RUN_STEP_CONFIG = {
 		inputRoles: ["max"],
 		scriptRoles: { indir: "max", outdir: "max" },
 	},
+	tophat: {
+		stepId: "tophat",
+		outputRole: "max",
+		branch: "tophat",
+		inputRoles: ["max"],
+		scriptRoles: { indir: "max", outdir: "max" },
+	},
 	align: {
 		stepId: "align",
 		outputRole: "slices",
@@ -273,6 +280,10 @@ function buildRunSlug(stepId, context) {
 		return sanitizeSlugPart(span + flags + subset);
 	}
 	if (stepId === "sharpen") {
+		var sharpenSrc = "";
+		if (context.sourceKind && context.sourceKind !== "max" && context.sourceRunRel) {
+			sharpenSrc = "_from_" + shortRefToken(context.sourceRunRel);
+		}
 		return sanitizeSlugPart(
 			span +
 				"_r" +
@@ -280,8 +291,21 @@ function buildRunSlug(stepId, context) {
 				"_a" +
 				decToken(context.amount) +
 				(context.equalize ? "_eq" : "") +
+				sharpenSrc +
 				subset,
 		);
+	}
+	if (stepId === "tophat") {
+		var topPrefix = "top" + String(Math.round(context.radius != null ? context.radius : 10));
+		var gammaTok = "";
+		if (context.gamma != null && Math.abs(Number(context.gamma) - 1.25) > 0.001) {
+			gammaTok = "_g" + decToken(context.gamma);
+		}
+		var topSrc = "";
+		if (context.sourceKind && context.sourceKind !== "max" && context.sourceRunRel) {
+			topSrc = "_from_" + shortRefToken(context.sourceRunRel);
+		}
+		return sanitizeSlugPart(topPrefix + "_" + span + gammaTok + topSrc + subset);
 	}
 	if (stepId === "align") {
 		var spacing = context.spacing != null ? "_sp" + String(context.spacing) : "";
@@ -675,7 +699,7 @@ function hasRunMarkers(dirPath, stepId) {
 			return true;
 		}
 		if (
-			(stepId === "max" || stepId === "sharpen") &&
+			(stepId === "max" || stepId === "sharpen" || stepId === "tophat") &&
 			(IMAGE_EXT_RE.test(n) || n.toLowerCase().indexOf(".ome.") !== -1)
 		) {
 			return true;

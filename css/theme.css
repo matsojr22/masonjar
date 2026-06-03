@@ -226,6 +226,21 @@ body.tool-page #parent.h-100 {
 	display: none !important;
 }
 
+.preprocess-preview-pane {
+	position: relative;
+	overflow: hidden;
+	min-height: 320px;
+	background: #111;
+	cursor: grab;
+}
+
+.preprocess-preview-pane img {
+	max-width: none;
+	display: block;
+	user-select: none;
+	transform-origin: top left;
+}
+
 #wizardSteps .nav-link.wizard-step-done {
 	opacity: 0.65;
 	background: transparent;
@@ -484,6 +499,24 @@ body.wizard-busy .btn-primary:not(:disabled)::after,
 
 .czi-extract-log {
 	max-height: 16rem;
+}
+
+.preprocess-preview-pane {
+	position: relative;
+	overflow: hidden;
+	min-height: 20rem;
+	max-height: 28rem;
+	background: #1a1a1a;
+}
+
+.preprocess-preview-pane img {
+	position: absolute;
+	top: 0;
+	left: 0;
+	transform-origin: top left;
+	max-width: none;
+	pointer-events: none;
+	user-select: none;
 }
 
 .wizard-log {

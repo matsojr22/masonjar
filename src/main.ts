@@ -1671,31 +1671,205 @@ ipcMain.on("runCollate", function (event: any, data: any[]) {
   });
 });
 
-// Collate
-ipcMain.on("runSharpen", function (event: any, data: any[]) {
-  let custom = [
-    String.raw`-o ${data[1]}`,
-    String.raw`-i ${data[0]}`,
-    `-r ${data[2]}`,
-    `-a ${data[3]}`,
-  ];
-  if (data[4]) {
-    custom.push(`--equalize`);
+function handlePreprocessPreviewStdout(
+  event: { sender: { send: (channel: string, payload: unknown) => void } },
+  message: string,
+  resultChannel: string
+): boolean {
+  if (!message.startsWith("PREVIEW_JSON:")) {
+    return false;
   }
-  let options = {
-    mode: "text",
+  try {
+    const payload = JSON.parse(message.slice("PREVIEW_JSON:".length));
+    event.sender.send(resultChannel, payload);
+  } catch (err) {
+    console.warn("Preview JSON parse failed:", err);
+  }
+  return true;
+}
+
+function spawnPreprocessPreview(
+  event: { sender: { send: (channel: string, payload: unknown) => void } },
+  scriptName: string,
+  args: string[],
+  resultChannel: string,
+  killChannel: string
+) {
+  const options = {
+    mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
-    args: custom,
+    args,
   };
-  let pyshell = new PythonShell("sharpen.py", options);
-  attachPythonShellKillCleanup(pyshell, "killSharpen");
-  var total: number = 0;
-  var current: number = 0;
+  const pyshell = new PythonShell(scriptName, options);
+  attachPythonShellKillCleanup(pyshell, killChannel);
   pyshell.on("message", (message: string) => {
-    if (total === 0) {
+    if (!handlePreprocessPreviewStdout(event, message, resultChannel)) {
+      console.log(message);
+    }
+  });
+  pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+    const pyFail = describePythonShellFailure(err, code, signal);
+    if (pyFail) {
+      reportPythonFailure(pyFail);
+      event.sender.send(resultChannel, { ok: false, error: pyFail });
+    }
+    ipcMain.removeAllListeners(killChannel);
+  });
+  ipcMain.once(killChannel, function () {
+    pyshell.kill();
+  });
+}
+
+ipcMain.on("runSharpenPreview", function (event: any, data: any[]) {
+  const params = (data.length > 5 && data[5]) || {};
+  const args: string[] = ["--preview"];
+  appendFlagPathArg(args, "--image", String(data[0] || ""));
+  args.push(
+    "--x",
+    String(data[1] ?? 0),
+    "--y",
+    String(data[2] ?? 0),
+    "--w",
+    String(data[3] ?? 512),
+    "--h",
+    String(data[4] ?? 512)
+  );
+  args.push("-r", String(params.radius != null ? params.radius : 3));
+  args.push("-a", String(params.amount != null ? params.amount : 2));
+  if (params.equalize) {
+    args.push("-e");
+  }
+  const previewDir =
+    params.previewDir != null ? String(params.previewDir).trim() : "";
+  if (previewDir.length > 0) {
+    appendFlagPathArg(args, "--preview-dir", previewDir);
+  }
+  spawnPreprocessPreview(
+    event,
+    "sharpen.py",
+    args,
+    "sharpenPreviewResult",
+    "killSharpenPreview"
+  );
+});
+
+ipcMain.on("runTophatPreview", function (event: any, data: any[]) {
+  const params = (data.length > 5 && data[5]) || {};
+  const args: string[] = ["--preview"];
+  appendFlagPathArg(args, "--image", String(data[0] || ""));
+  args.push(
+    "--x",
+    String(data[1] ?? 0),
+    "--y",
+    String(data[2] ?? 0),
+    "--w",
+    String(data[3] ?? 512),
+    "--h",
+    String(data[4] ?? 512)
+  );
+  args.push("-f", String(params.radius != null ? params.radius : 10));
+  args.push("-c", String(params.gamma != null ? params.gamma : 1.25));
+  const previewDir =
+    params.previewDir != null ? String(params.previewDir).trim() : "";
+  if (previewDir.length > 0) {
+    appendFlagPathArg(args, "--preview-dir", previewDir);
+  }
+  spawnPreprocessPreview(
+    event,
+    "top_hat.py",
+    args,
+    "tophatPreviewResult",
+    "killTophatPreview"
+  );
+});
+
+ipcMain.on("runTophat", function (event: any, data: any[]) {
+  const args: string[] = ["-g", "False"];
+  const first = data[0] != null ? String(data[0]).trim() : "";
+  if (first.endsWith(".json")) {
+    appendFlagPathArg(args, "-j", first);
+  } else {
+    appendFlagPathArg(args, "-i", data[0]);
+    appendFlagPathArg(args, "-o", data[1]);
+    args.push("-f", String(data[2] != null ? data[2] : 10));
+    args.push("-c", String(data[3] != null ? data[3] : 1.25));
+    if (data[4]) {
+      appendFlagPathArg(args, "--slice-list", String(data[4]));
+    }
+  }
+  const options = {
+    mode: "text" as const,
+    pythonPath: path.join(envPythonPath, pyCommand),
+    scriptPath: pyScriptsPath,
+    args,
+  };
+  const pyshell = new PythonShell("top_hat.py", options);
+  attachPythonShellKillCleanup(pyshell, "killTophat");
+  let total = 0;
+  let current = 0;
+  event.sender.send("updateLoad", [0, "Launching top-hat filter…"]);
+  pyshell.on("message", (message: string) => {
+    if (message.startsWith("PREVIEW_JSON:")) {
+      return;
+    }
+    if (total === 0 && /^\d+$/.test(message.trim())) {
       total = Number(message);
-    } else if (message == "Done!") {
+    } else if (message === "Done!") {
+      pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        const pyFail = describePythonShellFailure(err, code, signal);
+        if (pyFail) {
+          reportPythonFailure(pyFail);
+        }
+        event.sender.send("tophatResult");
+        ipcMain.removeAllListeners("killTophat");
+      });
+    } else if (total > 0) {
+      current++;
+      event.sender.send("updateLoad", [
+        Math.round((current / total) * 100),
+        message,
+      ]);
+    } else if (message.startsWith("LOG:")) {
+      event.sender.send("updateLoad", [Math.min(99, current), message]);
+    }
+  });
+  ipcMain.once("killTophat", function () {
+    pyshell.kill();
+  });
+});
+
+ipcMain.on("runSharpen", function (event: any, data: any[]) {
+  const args: string[] = [];
+  const first = data[0] != null ? String(data[0]).trim() : "";
+  if (first.endsWith(".json")) {
+    appendFlagPathArg(args, "-j", first);
+  } else {
+    appendFlagPathArg(args, "-o", data[1]);
+    appendFlagPathArg(args, "-i", data[0]);
+    args.push("-r", String(data[2]));
+    args.push("-a", String(data[3]));
+    if (data[4]) {
+      args.push("-e");
+    }
+  }
+  const options = {
+    mode: "text" as const,
+    pythonPath: path.join(envPythonPath, pyCommand),
+    scriptPath: pyScriptsPath,
+    args,
+  };
+  const pyshell = new PythonShell("sharpen.py", options);
+  attachPythonShellKillCleanup(pyshell, "killSharpen");
+  let total = 0;
+  let current = 0;
+  pyshell.on("message", (message: string) => {
+    if (message.startsWith("PREVIEW_JSON:")) {
+      return;
+    }
+    if (total === 0 && /^\d+$/.test(message.trim())) {
+      total = Number(message);
+    } else if (message === "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
@@ -1707,16 +1881,18 @@ ipcMain.on("runSharpen", function (event: any, data: any[]) {
         event.sender.send("sharpenResult");
         ipcMain.removeAllListeners("killSharpen");
       });
-    } else {
+    } else if (total > 0) {
       current++;
       event.sender.send("updateLoad", [
         Math.round((current / total) * 100),
         message,
       ]);
+    } else if (message.startsWith("LOG:")) {
+      event.sender.send("updateLoad", [Math.min(99, current), message]);
     }
   });
 
-  ipcMain.once("killSharpen", function (event: any, data: any[]) {
+  ipcMain.once("killSharpen", function () {
     pyshell.kill();
   });
 });
@@ -1834,6 +2010,116 @@ ipcMain.on("runDapiCleanup", function (event: any, data: any[]) {
   });
 
   ipcMain.once("killDapiCleanup", function (event: any, data: any[]) {
+    pyshell.kill();
+  });
+});
+
+// Tissue edge cleanup wizard
+ipcMain.on("runTissueCleanupAuto", function (event: any, data: any[]) {
+  const args: string[] = ["--auto"];
+  appendFlagPathArg(args, "-i", String(data[0] || ""));
+  const outDir = data[1] != null ? String(data[1]).trim() : "";
+  if (outDir.length > 0) {
+    appendFlagPathArg(args, "--output-dir", outDir);
+  }
+  spawnPreprocessPreview(
+    event,
+    "tissue_cleanup.py",
+    args,
+    "tissueCleanupPreviewResult",
+    "killTissueCleanupPreview",
+  );
+});
+
+ipcMain.on("runTissueCleanupGuided", function (event: any, data: any[]) {
+  const args: string[] = ["--guided"];
+  appendFlagPathArg(args, "-i", String(data[0] || ""));
+  appendFlagPathArg(args, "--stroke-json", String(data[1] || ""));
+  const outDir = data[2] != null ? String(data[2]).trim() : "";
+  if (outDir.length > 0) {
+    appendFlagPathArg(args, "--output-dir", outDir);
+  }
+  spawnPreprocessPreview(
+    event,
+    "tissue_cleanup.py",
+    args,
+    "tissueCleanupPreviewResult",
+    "killTissueCleanupPreview",
+  );
+});
+
+ipcMain.on("runTissueCleanupApply", function (event: any, data: any[]) {
+  const bundleRoot = data[0] || "";
+  const configPath = data[1] || "";
+  const args: string[] = ["--apply"];
+  appendCziPathArgs(args, bundleRoot, configPath);
+  const options = {
+    mode: "text" as const,
+    pythonPath: path.join(envPythonPath, pyCommand),
+    scriptPath: pyScriptsPath,
+    args,
+    env: pythonShellEnv(),
+  };
+  const pyshell = new PythonShell("tissue_cleanup.py", options);
+  attachPythonShellKillCleanup(pyshell, "killTissueCleanup");
+  let total = 0;
+  let current = 0;
+  let resultPayload: Record<string, unknown> | null = null;
+  event.sender.send("updateLoad", [0, "Launching tissue cleanup apply…"]);
+  pyshell.on("message", (message: string) => {
+    if (message.startsWith("LOG:")) {
+      const detail = message.slice(4);
+      queueLogLineForUi(detail);
+      event.sender.send("updateLoad", [
+        total > 0 ? Math.min(99, Math.round((current / total) * 100)) : 5,
+        detail,
+      ]);
+      return;
+    }
+    if (message.startsWith("RESULT:")) {
+      try {
+        resultPayload = JSON.parse(message.slice("RESULT:".length));
+      } catch (parseErr) {
+        console.warn("Tissue cleanup result parse failed:", parseErr);
+      }
+      return;
+    }
+    if (total === 0) {
+      const n = Number(message.trim());
+      if (!Number.isNaN(n) && n >= 0) {
+        total = n;
+        event.sender.send("updateLoad", [10, `Ready — ${n} file(s) to mask`]);
+        return;
+      }
+    }
+    if (message === "Done!") {
+      pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        const pyFail = describePythonShellFailure(err, code, signal);
+        if (pyFail) {
+          reportPythonFailure(pyFail);
+          event.sender.send("tissueCleanupApplyResult", {
+            ok: false,
+            error: pyFail,
+          });
+        } else if (resultPayload != null) {
+          event.sender.send("tissueCleanupApplyResult", resultPayload);
+        } else {
+          event.sender.send("tissueCleanupApplyResult", {
+            ok: false,
+            error: "Tissue cleanup finished without result",
+          });
+        }
+        ipcMain.removeAllListeners("killTissueCleanup");
+      });
+    } else if (total > 0) {
+      current++;
+      event.sender.send("updateLoad", [
+        Math.round((current / total) * 100),
+        message,
+      ]);
+    }
+  });
+  ipcMain.once("killTissueCleanup", function () {
     pyshell.kill();
   });
 });
@@ -2187,6 +2473,47 @@ ipcMain.on("reportRendererError", function (_event: unknown, data: unknown[]) {
   const msg = String(data && data[0] != null ? data[0] : "Renderer error");
   ensureLogWindowVisible({ force: true });
   queueLogLineForUi(`Renderer: ${msg}`);
+});
+
+ipcMain.on("runTissueCleanupAuto", function (event: any, data: any[]) {
+  const args: string[] = ["--auto"];
+  appendFlagPathArg(args, "-i", String(data[0] || ""));
+  appendFlagPathArg(args, "-o", String(data[1] || ""));
+  spawnPreprocessPreview(
+    event,
+    "tissue_cleanup.py",
+    args,
+    "tissueCleanupAutoResult",
+    "killTissueCleanup",
+  );
+});
+
+ipcMain.on("runTissueCleanupGuided", function (event: any, data: any[]) {
+  const args: string[] = ["--guided"];
+  appendFlagPathArg(args, "-i", String(data[0] || ""));
+  appendFlagPathArg(args, "-o", String(data[1] || ""));
+  appendFlagPathArg(args, "--stroke-json", String(data[2] || ""));
+  spawnPreprocessPreview(
+    event,
+    "tissue_cleanup.py",
+    args,
+    "tissueCleanupGuidedResult",
+    "killTissueCleanup",
+  );
+});
+
+ipcMain.on("runTissueCleanupApply", function (event: any, data: any[]) {
+  const bundleRoot = data[0] || "";
+  const configPath = data[1] || "";
+  const applyArgs: string[] = ["--apply"];
+  appendCziPathArgs(applyArgs, bundleRoot, configPath);
+  runCziPythonScript(
+    event,
+    "tissue_cleanup.py",
+    applyArgs,
+    "killTissueCleanup",
+    "tissueCleanupApplyResult",
+  );
 });
 
 ipcMain.on("runApplyGeometry", function (event: any, data: any[]) {

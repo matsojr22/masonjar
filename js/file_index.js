@@ -26,6 +26,7 @@ var FLAT_INDEX_ROLES = ["original_scans", "dapi"];
 var STEP_OUTPUT = {
 	max: { role: "max", step: "max" },
 	sharpen: { role: "max", step: "sharpen" },
+	tophat: { role: "max", step: "tophat" },
 	align: { role: "slices", step: "align" },
 	intensity: { role: "pkls", step: "intensity" },
 	detect: { role: "predictions", step: "detect" },

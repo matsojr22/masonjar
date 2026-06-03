@@ -6,6 +6,27 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v2.4.11
+
+**What's new**
+
+**Tissue edge cleanup** is a new wizard under Image preprocessing. Open a DAPI preview for each section, use **Attempt Auto** or **Trace edge then Auto** to build a keep mask, touch up with the **Eraser**, then confirm and **Apply**. Mason Jar backs up originals under `.masonjar/tissue_cleanup_backup/` and updates DAPI previews, orient previews, original-scan z-stacks, and max/sharpen/top-hat TIFFs for edited sections only. If you already ran **Align**, run it again after cleanup.
+
+**Changes**
+
+- New wizard: Tissue edge cleanup (4 steps: mask, confirm, apply, summary).
+- Shared bundle path list includes sharpen and top-hat outputs when masking a section.
+
+**Commit subject**
+
+Add tissue edge cleanup wizard for section masks
+
+**Commit body**
+
+New preprocess wizard masks stray tissue at scan edges on DAPI previews, then applies keep masks across bundle images with backup. Re-run Align after cleanup if alignment was already done.
+
+---
+
 ## v2.4.10
 
 **What's new**

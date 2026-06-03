@@ -53,7 +53,7 @@ def test_apply_ops_rot90_clockwise_non_square() -> None:
 
 
 def test_paths_for_slice_includes_dapi_png_not_tif(tmp_path: Path) -> None:
-    from apply_geometry import paths_for_slice
+    from bundle_slice_paths import paths_for_slice
 
     bundle = tmp_path / "Brain_masonjar"
     slice_id = "M528_s001"

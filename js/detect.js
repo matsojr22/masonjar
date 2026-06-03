@@ -9,6 +9,8 @@ var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
+var maxDatasets = require("./max_datasets");
+var maxDatasetPicker = require("./max_dataset_picker");
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
 var run = document.getElementById("run");
@@ -139,14 +141,22 @@ function buildDetectRunSlug(options) {
 	return sanitizeSlugPart(span + "_" + params + subset);
 }
 
+var datasetPicker = null;
+
 somata.addEventListener("click", function () {
 	methods.textContent = "Somata";
 	detectionMethod = "somata";
+	if (datasetPicker) {
+		datasetPicker.refresh();
+	}
 });
 
 nuclei.addEventListener("click", function () {
 	methods.textContent = "Nuclei";
 	detectionMethod = "nuclei";
+	if (datasetPicker) {
+		datasetPicker.refresh();
+	}
 });
 
 advance.addEventListener("click", function () {
@@ -313,6 +323,17 @@ ipc.on("updateLoad", function (event, response) {
 	var pct = Math.min(100, Math.max(0, Number(response[0]) || 0));
 	loadbar.style.width = String(pct) + "%";
 	loadmessage.innerHTML = response[1];
+});
+
+datasetPicker = maxDatasetPicker.wireMaxDatasetPicker({
+	storageKey: "masonjar.detect.maxDataset",
+	indirInput: indir,
+	sectionId: "detectDatasetSection",
+	branchSelectId: "detectSignalBranch",
+	datasetSelectId: "detectMaxDataset",
+	defaultBranch: function () {
+		return maxDatasets.defaultBranchForDetectMethod(detectionMethod);
+	},
 });
 
 workspace.applyPreset("detect");

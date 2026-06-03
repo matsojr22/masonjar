@@ -10,6 +10,7 @@ var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
 var branding = require("./branding");
 var parcelCtx = require("./parcellation_context");
+var maxDatasetPicker = require("./max_dataset_picker");
 
 var SETUP_KEY = "masonjar.intensity.setup";
 
@@ -86,11 +87,7 @@ configureBtn.addEventListener("click", function () {
 			}
 		}
 		if (project.isActive()) {
-			var maxLeaf = pipelineRuns.resolveActiveRunLeafAbs("max");
 			var slicesLeaf = pipelineRuns.resolveActiveRunLeafAbs("slices");
-			if (maxLeaf) {
-				indir.value = maxLeaf;
-			}
 			if (slicesLeaf) {
 				annodir.value = slicesLeaf;
 			}
@@ -161,6 +158,16 @@ if (dapidir) {
 	workspace.bindPathPicker(dapidir, "dapidir", "dapi");
 }
 
+maxDatasetPicker.wireMaxDatasetPicker({
+	storageKey: "masonjar.intensity.maxDataset",
+	indirInput: indir,
+	sectionId: "intensityDatasetSection",
+	branchSelectId: "intensitySignalBranch",
+	datasetSelectId: "intensityMaxDataset",
+	defaultBranch: function () {
+		return "somata";
+	},
+});
 
 function updateParcellationBanner() {
 	var banner = document.getElementById("parcellationBanner");

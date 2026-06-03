@@ -11,18 +11,8 @@ import cv2
 import numpy as np
 import tifffile as tiff
 
-from czi_common import (
-    CANONICAL_REL,
-    ROLE_DAPI,
-    ROLE_UNUSED,
-    branch_for_channel,
-    branch_for_role_key,
-    emit_log,
-    emit_result,
-    load_import_config,
-    meta_state_path,
-    role_key_for_channel,
-)
+from bundle_slice_paths import paths_for_slice, signal_branch_dirs_from_cfg
+from czi_common import emit_log, emit_result, load_import_config
 
 
 def compose_ops(rotate: int, flip_x: bool, flip_y: bool):
@@ -108,77 +98,6 @@ def transform_file(path: Path, ops: list) -> tuple[np.ndarray, np.ndarray]:
         raise ValueError(f"Unsupported ndim={arr.ndim} for {path.name}")
     _write_image_array(path, transformed)
     return arr, transformed
-
-
-def signal_branch_dirs_from_cfg(cfg: dict) -> set[str]:
-    branches = {"somata", "nuclei", "axons"}
-    for ch in cfg.get("channels") or []:
-        branch = branch_for_channel(ch)
-        if branch:
-            branches.add(branch)
-    return branches
-
-
-def paths_for_slice(bundle_root: Path, slice_id: str, cfg: dict) -> list[Path]:
-    paths: list[Path] = []
-    dapi_png = bundle_root / CANONICAL_REL["dapi"] / f"{slice_id}.png"
-    if dapi_png.exists():
-        paths.append(dapi_png)
-    prev_dir = bundle_root / CANONICAL_REL["previews"]
-    if prev_dir.exists():
-        for p in prev_dir.glob(f"{slice_id}_*.png"):
-            paths.append(p)
-    orig_base = bundle_root / CANONICAL_REL["original_scans"]
-    for sub in sorted(signal_branch_dirs_from_cfg(cfg)):
-        candidate = orig_base / sub / f"{slice_id}.tif"
-        if candidate.exists():
-            paths.append(candidate)
-    flat_candidate = orig_base / f"{slice_id}.tif"
-    if flat_candidate.exists():
-        paths.append(flat_candidate)
-
-    max_runs = (cfg.get("max_runs") or {}) if isinstance(cfg, dict) else {}
-    if not max_runs:
-        state_path = meta_state_path(bundle_root)
-        if state_path.exists():
-            import json
-
-            with open(state_path, encoding="utf-8") as f:
-                st = json.load(f)
-            max_runs = st.get("max_runs") or {}
-
-    role_keys = set(max_runs.keys())
-    for ch in cfg.get("channels") or []:
-        if ch.get("keep") and ch.get("role") not in (ROLE_DAPI, ROLE_UNUSED):
-            role_keys.add(role_key_for_channel(ch))
-
-    for role_key in role_keys:
-        rel = max_runs.get(role_key)
-        if rel:
-            candidate = bundle_root / CANONICAL_REL["max"] / rel / f"{slice_id}.tif"
-            if candidate.exists():
-                paths.append(candidate)
-            continue
-        branch = branch_for_role_key(role_key)
-        if not branch:
-            continue
-        max_root = bundle_root / CANONICAL_REL["max"] / branch / "max"
-        if not max_root.exists():
-            continue
-        for run_dir in sorted(max_root.iterdir()):
-            if run_dir.is_dir():
-                candidate = run_dir / f"{slice_id}.tif"
-                if candidate.exists():
-                    paths.append(candidate)
-
-    seen = set()
-    unique = []
-    for p in paths:
-        key = str(p.resolve())
-        if key not in seen:
-            seen.add(key)
-            unique.append(p)
-    return unique
 
 
 def collect_geometry_jobs(
