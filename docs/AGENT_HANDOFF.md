@@ -1,6 +1,6 @@
 # Agent session handoff
 
-Last updated: 2026-06-04 (NAS I/O fair-share v3.2.0). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-04 (import handoff + run reconcile v3.2.2). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
 
@@ -8,9 +8,11 @@ Last updated: 2026-06-04 (NAS I/O fair-share v3.2.0). Use this file to resume wo
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **3.2.1** |
-| Latest tag | `v3.2.1` |
+| `package.json` version | **3.2.2** |
+| Latest tag | `v3.2.2` (pre-release on GitHub) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v3.2.2** — **Import handoff UX**: CZI finish + workspace banner → alignment next; Completed tasks shows import outputs; max run discovery depth 3; [`reconcileProjectRunsOnOpen`](js/pipeline_runs.js) on project open. Publish script defaults to **pre-release** (`--stable` for full release).
 
 **v3.2.1** — **NAS prefix fix**: fair-share throttles UNC + `nas_path_prefixes` in shared config (mapped drives like `Z:\`); local disks not throttled.
 

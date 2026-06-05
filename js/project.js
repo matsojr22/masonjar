@@ -407,6 +407,15 @@ function openProject(bundleRoot) {
 			);
 		}
 	}
+	var reconcile = pipelineRuns.reconcileProjectRunsOnOpen(
+		bundleRoot,
+		data.roles,
+		data.processing,
+	);
+	if (reconcile.changed) {
+		data.processing.active_runs = reconcile.active_runs;
+		activeRunsMigrated = true;
+	}
 	setActiveProject(bundleRoot, data);
 	if (activeRunsMigrated) {
 		saveProjectJson();
@@ -839,7 +848,11 @@ function classifySourceLayout(sourcePath, role) {
 			}
 		}
 		if (roleStep) {
-			runs = pipelineRuns.discoverOutputRuns(sourcePath, roleStep, 2);
+			runs = pipelineRuns.discoverOutputRuns(
+				sourcePath,
+				roleStep,
+				pipelineRuns.discoveryMaxDepth(roleStep),
+			);
 		}
 		for (var i = 0; i < entries.length; i++) {
 			if (entries[i].isFile()) {

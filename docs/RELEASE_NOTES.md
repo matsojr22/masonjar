@@ -6,6 +6,24 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.2.2
+
+**What's new**
+
+After CZI import, the workspace now shows what was already produced (max projections, DAPI previews) and points you to **Atlas alignment** as the next step instead of re-running Max Projection. Opening an existing project rescans output folders once and fills in missing run selections.
+
+**Changes**
+
+- CZI wizard finish step and workspace banner explain next steps (alignment; counterstain cleanup if alignment is hard).
+- Completed tasks discovers CZI max runs at the correct folder depth and lists DAPI/preview counts from import.
+- Project open validates stored active runs against disk; clears broken slugs; auto-selects when only one run exists per role.
+
+**Commit subject**
+
+Import handoff UX and legacy run discovery on project open
+
+---
+
 ## v3.2.1
 
 **What's new**

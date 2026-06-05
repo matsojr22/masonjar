@@ -10,6 +10,7 @@
  *   node scripts/publish-release.js              # Windows zip only
  *   node scripts/publish-release.js --all-platforms  # all built artifacts for version
  *   node scripts/publish-release.js --dry-run
+ *   node scripts/publish-release.js --stable   # publish as full release (default: pre-release)
  */
 
 const fs = require("fs");
@@ -30,19 +31,24 @@ function readVersion() {
 }
 
 function parseArgs(argv) {
-	const opts = { allPlatforms: false, dryRun: false };
+	const opts = { allPlatforms: false, dryRun: false, prerelease: true };
 	for (let i = 2; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === "--all-platforms") {
 			opts.allPlatforms = true;
 		} else if (a === "--dry-run") {
 			opts.dryRun = true;
+		} else if (a === "--stable" || a === "--no-prerelease") {
+			opts.prerelease = false;
+		} else if (a === "--prerelease") {
+			opts.prerelease = true;
 		} else if (a === "--help" || a === "-h") {
 			console.log(`Publish Mason Jar GitHub release assets
 
   node scripts/publish-release.js                 Windows zip only (default)
   node scripts/publish-release.js --all-platforms  Upload every masonjar-* artifact for version
   node scripts/publish-release.js --dry-run       List files only
+  node scripts/publish-release.js --stable      Full release (default is pre-release)
 
 Requires git credential for github.com (password = PAT) or GH_TOKEN env.
 `);
@@ -285,6 +291,7 @@ async function main() {
 			? "Mode: all platforms"
 			: "Mode: Windows zip only",
 	);
+	console.log(opts.prerelease ? "Release type: pre-release" : "Release type: stable");
 
 	if (!artifacts.length) {
 		console.error(
@@ -327,13 +334,18 @@ async function main() {
 			name: "Mason Jar v" + version,
 			body: notesBody,
 			draft: false,
-			prerelease: false,
+			prerelease: opts.prerelease,
 		});
-		console.log("Created release id=" + release.id);
+		console.log(
+			"Created release id=" +
+				release.id +
+				(opts.prerelease ? " (pre-release)" : ""),
+		);
 	} else {
 		await githubRequest("PATCH", base + "/releases/" + release.id, token, {
 			name: "Mason Jar v" + version,
 			body: notesBody,
+			prerelease: opts.prerelease,
 		});
 		console.log("Updated release notes for id=" + release.id);
 		release = await githubRequest("GET", base + "/releases/" + release.id, token);

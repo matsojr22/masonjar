@@ -393,6 +393,28 @@
           lines also appear in the application log window.
         </p>
         <pre id="finishLog" class="wizard-log czi-extract-log small text-muted mb-3"></pre>
+        <div id="importHandoffPanel" class="alert alert-info text-start d-none mb-3">
+          <h3 class="h6 mb-2">What&apos;s already done</h3>
+          <ul id="importHandoffDoneList" class="small mb-3"></ul>
+          <h3 class="h6 mb-2">Next step</h3>
+          <p class="small mb-2">
+            Continue with <strong>Atlas alignment</strong> using the counterstain previews in
+            <code>00_dapi</code>. You do <strong>not</strong> need to run Max Projection again
+            unless you add new z-stacks.
+          </p>
+          <p class="small text-muted mb-3">
+            If alignment is difficult, revisit counterstain cleanup under Image preprocessing:
+            DAPI cleanup, semi-manual tissue edge cleanup, or Orient slices.
+          </p>
+          <div class="d-flex flex-wrap gap-2 mb-3">
+            <a class="btn btn-primary btn-sm" id="handoffAlign" href="./menu_category.html?cat=alignment"
+              >Start atlas alignment</a
+            >
+            <a class="btn btn-outline-secondary btn-sm" id="handoffPreprocess" href="./menu_category.html?cat=preprocess"
+              >Preprocess tools</a
+            >
+          </div>
+        </div>
         <button type="button" class="btn btn-outline-secondary d-none me-2" id="reviewOrientation">
           Review orientation
         </button>

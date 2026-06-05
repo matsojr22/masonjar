@@ -6,6 +6,7 @@ var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
+var importHandoff = require("./import_handoff");
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
 var run = document.getElementById("run");
@@ -92,6 +93,30 @@ ipc.on("updateLoad", function (event, response) {
 	loadmessage.innerHTML = response[1];
 });
 
+function renderMaxImportHandoffAlert() {
+	var alertEl = document.getElementById("maxImportHandoffAlert");
+	if (!alertEl) {
+		return;
+	}
+	if (!project.isActive() || !importHandoff.isMaxFromCziImport(project.getBundleRoot(), project.getProject())) {
+		alertEl.classList.add("d-none");
+		alertEl.innerHTML = "";
+		return;
+	}
+	var handoff = importHandoff.getImportHandoffState(
+		project.getBundleRoot(),
+		project.getProject(),
+	);
+	alertEl.classList.remove("d-none");
+	alertEl.innerHTML =
+		"<strong>Max projection already completed during CZI import</strong> (" +
+		(handoff.maxRunLabel || "active run") +
+		"). You usually do not need to run this step again unless you add new z-stacks. " +
+		'Next step: <a href="./menu_category.html?cat=alignment">Atlas alignment</a>. ' +
+		'If alignment is difficult, try <a href="./menu_category.html?cat=preprocess">counterstain cleanup tools</a>.';
+}
+
 workspace.applyPreset("max");
 workspace.bindPathPicker(indir, "indir", "originalScans");
 workspace.bindPathPicker(outdir, "outdir", "max");
+renderMaxImportHandoffAlert();

@@ -5,6 +5,16 @@ var fileIndex = require("./file_index");
 var pipelineRuns = require("./pipeline_runs");
 var activeRunControls = require("./active_run_controls");
 var dialogs = require("./dialogs");
+var importHandoff = require("./import_handoff");
+
+var ROLE_DISPLAY_LABELS = {
+	max: "Max projection",
+	slices: "Atlas alignment",
+	predictions: "Cell detection",
+	pkls: "Isolate regions",
+	quantification: "Quantification",
+	dual: "Dual-channel export",
+};
 
 function sectionNumberFromSliceId(sliceId) {
 	var m = String(sliceId).match(/_s(\d+)/i);
@@ -96,6 +106,98 @@ function renderStepFailures() {
 	section.classList.remove("d-none");
 }
 
+function appendReadOnlyImportRow(container, label, detail) {
+	var row = document.createElement("div");
+	row.className = "row align-items-center mb-2";
+	var labelCol = document.createElement("div");
+	labelCol.className = "col-4 col-sm-3 text-start small";
+	labelCol.textContent = label;
+	var detailCol = document.createElement("div");
+	detailCol.className = "col text-start small text-muted";
+	detailCol.textContent = detail;
+	row.appendChild(labelCol);
+	row.appendChild(detailCol);
+	container.appendChild(row);
+}
+
+function renderImportInputRows(container, bundleRoot, proj) {
+	var czi = proj.settings && proj.settings.czi_import;
+	if (!czi) {
+		return;
+	}
+	var handoff = importHandoff.getImportHandoffState(bundleRoot, proj);
+	if (!handoff.fromCziImport || handoff.dapiCount === 0) {
+		return;
+	}
+	var sub = document.createElement("h3");
+	sub.className = "h6 text-muted mb-2 mt-3";
+	sub.textContent = "From CZI import";
+	container.appendChild(sub);
+	appendReadOnlyImportRow(
+		container,
+		"Counterstain (DAPI)",
+		handoff.dapiCount + " PNG preview(s) in 00_dapi",
+	);
+	if (handoff.previewCount > 0) {
+		appendReadOnlyImportRow(
+			container,
+			"Orient previews",
+			handoff.previewCount + " PNG preview(s) in _previews",
+		);
+	}
+	if (handoff.geometryAppliedAt) {
+		appendReadOnlyImportRow(
+			container,
+			"Orient applied",
+			handoff.geometryAppliedAt,
+		);
+	}
+}
+
+function renderImportNextStepsBanner() {
+	var banner = document.getElementById("importNextStepsBanner");
+	if (!banner) {
+		return;
+	}
+	if (!project.isActive()) {
+		banner.classList.add("d-none");
+		banner.innerHTML = "";
+		return;
+	}
+	var bundleRoot = project.getBundleRoot();
+	var proj = project.getProject();
+	if (!importHandoff.shouldShowImportNextSteps(proj, null, bundleRoot)) {
+		banner.classList.add("d-none");
+		banner.innerHTML = "";
+		return;
+	}
+	var handoff = importHandoff.getImportHandoffState(bundleRoot, proj);
+	banner.classList.remove("d-none");
+	banner.className =
+		"menu-pipeline-section mb-4 workspace-block text-start alert alert-info";
+	banner.innerHTML =
+		'<h2 class="h6 mb-2">Next step: atlas alignment</h2>' +
+		'<p class="small mb-2">CZI import already produced max projections, DAPI previews (' +
+		handoff.dapiCount +
+		"), and orient previews (" +
+		handoff.previewCount +
+		'). You do <strong>not</strong> need to run Max Projection again unless you add new z-stacks.</p>' +
+		'<p class="small mb-2">Continue with <strong>Align Sections</strong> using the counterstain channel in <code>00_dapi</code>.</p>' +
+		'<p class="small text-muted mb-3">If alignment is difficult, revisit counterstain cleanup under Image preprocessing: DAPI cleanup, semi-manual tissue edge cleanup, or Orient slices.</p>' +
+		'<div class="d-flex flex-wrap gap-2">' +
+		'<a class="btn btn-primary btn-sm" href="./menu_category.html?cat=alignment">Start atlas alignment</a>' +
+		'<a class="btn btn-outline-secondary btn-sm" href="./menu_category.html?cat=preprocess">Preprocess tools</a>' +
+		'<button type="button" class="btn btn-link btn-sm" id="dismissImportHandoff">Dismiss</button>' +
+		"</div>";
+	var dismissBtn = document.getElementById("dismissImportHandoff");
+	if (dismissBtn) {
+		dismissBtn.addEventListener("click", function () {
+			importHandoff.dismissHandoff(bundleRoot);
+			renderImportNextStepsBanner();
+		});
+	}
+}
+
 function bindActiveRunControls(containerId) {
 	var container = document.getElementById(containerId);
 	if (!container || !project.isActive()) {
@@ -111,29 +213,53 @@ function bindActiveRunControls(containerId) {
 	heading.textContent = "Completed tasks (project)";
 	container.appendChild(heading);
 
+	var bundleRoot = project.getBundleRoot();
+	var proj = project.getProject();
+	var hasRows = false;
+
 	for (var i = 0; i < pipelineRuns.OUTPUT_ROLES.length; i++) {
 		(function (role) {
-			project.ensureDefaultActiveRunForRole(role);
 			var choices = project.listRunChoicesForRole(role);
 			if (!choices.length) {
 				return;
 			}
+			hasRows = true;
 			var row = document.createElement("div");
 			row.className = "row align-items-center mb-2";
 			var labelCol = document.createElement("div");
 			labelCol.className = "col-4 col-sm-3 text-start small";
-			labelCol.textContent = role;
+			labelCol.textContent = ROLE_DISPLAY_LABELS[role] || role;
 			var selectCol = document.createElement("div");
 			selectCol.className = "col d-flex align-items-center";
 			var select = document.createElement("select");
 			select.className = "form-select form-select-sm active-run-select flex-grow-1";
 			select.dataset.role = role;
 			var active = pipelineRuns.getActiveRunRelForRole(role);
+			var hasActive = false;
+			for (var c = 0; c < choices.length; c++) {
+				if (choices[c].rel === active) {
+					hasActive = true;
+					break;
+				}
+			}
+			if (!hasActive) {
+				var placeholder = document.createElement("option");
+				placeholder.value = "";
+				placeholder.textContent = "— select run —";
+				placeholder.selected = true;
+				placeholder.disabled = true;
+				select.appendChild(placeholder);
+			}
 			for (var c = 0; c < choices.length; c++) {
 				var opt = document.createElement("option");
 				opt.value = choices[c].rel;
-				opt.textContent = choices[c].label || choices[c].rel || "(flat)";
-				if (choices[c].rel === active) {
+				opt.textContent = importHandoff.formatChoiceLabel(
+					role,
+					choices[c].rel,
+					proj,
+					bundleRoot,
+				) || choices[c].label || choices[c].rel || "(flat)";
+				if (choices[c].rel === active && hasActive) {
 					opt.selected = true;
 				}
 				select.appendChild(opt);
@@ -147,6 +273,7 @@ function bindActiveRunControls(containerId) {
 				activeRunControls.attachRunDeleteButton(select, role, {
 					onDeleted: function () {
 						bindActiveRunControls(containerId);
+						renderImportNextStepsBanner();
 					},
 				}),
 			);
@@ -154,6 +281,11 @@ function bindActiveRunControls(containerId) {
 			row.appendChild(selectCol);
 			container.appendChild(row);
 		})(pipelineRuns.OUTPUT_ROLES[i]);
+	}
+
+	renderImportInputRows(container, bundleRoot, proj);
+	if (!hasRows && !(proj.settings && proj.settings.czi_import)) {
+		container.classList.add("d-none");
 	}
 }
 
@@ -188,6 +320,7 @@ function bindProjectFileControls(options) {
 		addFilesBtn.classList.remove("d-none");
 	}
 
+	renderImportNextStepsBanner();
 	bindActiveRunControls("projectActiveRunsSection");
 	renderStepFailures();
 
@@ -317,4 +450,5 @@ module.exports = {
 	bindActiveRunControls: bindActiveRunControls,
 	populateSubsetList: populateSubsetList,
 	renderStepFailures: renderStepFailures,
+	renderImportNextStepsBanner: renderImportNextStepsBanner,
 };

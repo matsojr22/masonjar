@@ -7,6 +7,7 @@ var pageInit = require("./page_init");
 var project = require("./project");
 var pipelineRuns = require("./pipeline_runs");
 var cziImport = require("./czi_import");
+var importHandoff = require("./import_handoff");
 var orientGeometry = require("./orient_geometry");
 var branding = require("./branding");
 
@@ -128,6 +129,7 @@ function setFinishNavDisabled(disabled) {
 	var hub = qs("finishHub");
 	var openBtn = qs("openWorkspace");
 	var reviewBtn = qs("reviewOrientation");
+	var handoffPanel = qs("importHandoffPanel");
 	if (hub) {
 		hub.classList.toggle("d-none", disabled);
 	}
@@ -137,6 +139,42 @@ function setFinishNavDisabled(disabled) {
 	if (reviewBtn) {
 		reviewBtn.classList.toggle("d-none", disabled);
 	}
+	if (handoffPanel) {
+		handoffPanel.classList.toggle("d-none", disabled);
+	}
+}
+
+function populateImportHandoffPanel() {
+	var panel = qs("importHandoffPanel");
+	var list = qs("importHandoffDoneList");
+	if (!panel || !list || !wizardState.bundleRoot) {
+		return;
+	}
+	var proj = project.getProject() || {
+		settings: { czi_import: wizardState.cziImport },
+		processing: project.defaultProcessing(),
+	};
+	var handoff = importHandoff.getImportHandoffState(wizardState.bundleRoot, proj);
+	list.innerHTML = "";
+	var items = [];
+	if (handoff.maxRunLabel) {
+		items.push("Max projection — " + handoff.maxRunLabel);
+	}
+	if (handoff.dapiCount > 0) {
+		items.push("Counterstain (DAPI) — " + handoff.dapiCount + " PNG preview(s) in 00_dapi");
+	}
+	if (handoff.previewCount > 0) {
+		items.push("Orient previews — " + handoff.previewCount + " PNG(s) in _previews");
+	}
+	if (handoff.geometryAppliedAt) {
+		items.push("Orientation applied — " + handoff.geometryAppliedAt);
+	}
+	for (var i = 0; i < items.length; i++) {
+		var li = document.createElement("li");
+		li.textContent = items[i];
+		list.appendChild(li);
+	}
+	panel.classList.remove("d-none");
 }
 
 function verboseFinishLog(msg) {
@@ -2223,6 +2261,7 @@ async function finishWizard(geometryPayload) {
 	if (status) {
 		status.textContent = summary;
 	}
+	populateImportHandoffPanel();
 	setFinishNavDisabled(false);
 }
 

@@ -53,6 +53,29 @@ function testDiscoverOutputRuns() {
 	helpers.rmDir(base);
 }
 
+function testDiscoverCziMaxRunDepth() {
+	var bundle = helpers.tmpDir("mj-czi-max-");
+	var roles = { max: "data/counting/03_max" };
+	var runDir = path.join(bundle, roles.max, "somata", "max", "M528_s001-M528_s002");
+	fs.mkdirSync(runDir, { recursive: true });
+	fs.writeFileSync(path.join(runDir, "M528_s001.tif"), "x");
+	fs.mkdirSync(path.join(bundle, ".masonjar"), { recursive: true });
+	project.setActiveProject(bundle, {
+		name: "test",
+		roles: roles,
+		processing: { active_runs: pipelineRuns.defaultActiveRuns() },
+	});
+	var choices = pipelineRuns.listRunChoicesForRole("max");
+	assert.ok(
+		choices.some(function (c) {
+			return c.rel === "somata/max/M528_s001-M528_s002";
+		}),
+		"CZI nested max run should be discovered at depth 3",
+	);
+	project.clearActiveProject();
+	helpers.rmDir(bundle);
+}
+
 function testActiveRunScoping() {
 	var bundle = helpers.tmpDir("mj-scope-");
 	var roles = {
@@ -84,6 +107,86 @@ function testActiveRunScoping() {
 			assert.ok(report.matchedSliceIds.indexOf("M528_s028") < 0);
 			helpers.rmDir(bundle);
 		});
+}
+
+function testReconcileCziMaxSingleRun() {
+	var bundle = helpers.tmpDir("mj-recon-czi-");
+	var roles = { max: "data/counting/03_max" };
+	var maxRel = "somata/max/M528_s001-M528_s002";
+	var runDir = path.join(bundle, roles.max, maxRel);
+	fs.mkdirSync(runDir, { recursive: true });
+	fs.writeFileSync(path.join(runDir, "M528_s001.tif"), "x");
+	var processing = {
+		active_runs: pipelineRuns.defaultActiveRuns(),
+	};
+	var result = pipelineRuns.reconcileProjectRunsOnOpen(bundle, roles, processing);
+	assert.strictEqual(result.changed, true);
+	assert.strictEqual(result.active_runs.max, maxRel);
+	helpers.rmDir(bundle);
+}
+
+function testReconcileClearsStaleActiveWithMultipleRuns() {
+	var bundle = helpers.tmpDir("mj-recon-stale-");
+	var roles = { max: "data/counting/03_max" };
+	var runA = path.join(bundle, roles.max, "max", "run_a");
+	var runB = path.join(bundle, roles.max, "max", "run_b");
+	fs.mkdirSync(runA, { recursive: true });
+	fs.mkdirSync(runB, { recursive: true });
+	fs.writeFileSync(path.join(runA, "M528_s001.tif"), "x");
+	fs.writeFileSync(path.join(runB, "M528_s002.tif"), "x");
+	var processing = {
+		active_runs: Object.assign(pipelineRuns.defaultActiveRuns(), {
+			max: "max/deleted_run",
+		}),
+	};
+	var result = pipelineRuns.reconcileProjectRunsOnOpen(bundle, roles, processing);
+	assert.strictEqual(result.changed, true);
+	assert.strictEqual(result.active_runs.max, "");
+	var choices = pipelineRuns.discoverRunChoicesForBundle(bundle, roles, "max");
+	assert.ok(choices.length >= 2);
+	helpers.rmDir(bundle);
+}
+
+function testReconcileKeepsValidActive() {
+	var bundle = helpers.tmpDir("mj-recon-keep-");
+	var roles = { slices: "data/counting/01_slices" };
+	var runDir = path.join(bundle, roles.slices, "align", "run_a");
+	fs.mkdirSync(runDir, { recursive: true });
+	fs.writeFileSync(path.join(runDir, "Annotation_M528_s001.pkl"), "x");
+	var processing = {
+		active_runs: Object.assign(pipelineRuns.defaultActiveRuns(), {
+			slices: "align/run_a",
+		}),
+	};
+	var result = pipelineRuns.reconcileProjectRunsOnOpen(bundle, roles, processing);
+	assert.strictEqual(result.changed, false);
+	assert.strictEqual(result.active_runs.slices, "align/run_a");
+	helpers.rmDir(bundle);
+}
+
+function testReconcileFlatLegacyMax() {
+	var bundle = helpers.tmpDir("mj-recon-flat-");
+	var roles = { max: "data/counting/03_max" };
+	var maxDir = path.join(bundle, roles.max);
+	fs.mkdirSync(maxDir, { recursive: true });
+	fs.writeFileSync(path.join(maxDir, "M528_s001.tif"), "x");
+	var processing = {
+		active_runs: pipelineRuns.defaultActiveRuns(),
+	};
+	var result = pipelineRuns.reconcileProjectRunsOnOpen(bundle, roles, processing);
+	assert.strictEqual(result.active_runs.max, "");
+	var choices = pipelineRuns.discoverRunChoicesForBundle(bundle, roles, "max");
+	assert.ok(
+		choices.some(function (c) {
+			return c.rel === "";
+		}),
+		"flat legacy max at role root should be discovered",
+	);
+	assert.ok(
+		pipelineRuns.isStoredActiveRunValid(bundle, roles, "max", ""),
+		"flat legacy max is valid when markers are at role root",
+	);
+	helpers.rmDir(bundle);
 }
 
 function testMigrateActivePredictionRun() {
@@ -180,6 +283,11 @@ var tests = [
 	testBuildRunSlugStability,
 	testResolveRunLeaf,
 	testDiscoverOutputRuns,
+	testDiscoverCziMaxRunDepth,
+	testReconcileCziMaxSingleRun,
+	testReconcileClearsStaleActiveWithMultipleRuns,
+	testReconcileKeepsValidActive,
+	testReconcileFlatLegacyMax,
 	testMigrateActivePredictionRun,
 	testDedupeBranchRunRel,
 	testActiveRunScoping,

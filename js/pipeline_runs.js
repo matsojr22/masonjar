@@ -588,7 +588,7 @@ function resolveActiveBranchLeafAbsForBundle(
 		}
 	}
 	var stepId = STEP_BY_OUTPUT_ROLE[role];
-	var runs = discoverOutputRuns(base, stepId, 2);
+	var runs = discoverOutputRuns(base, stepId, discoveryMaxDepth(stepId));
 	for (var i = 0; i < runs.length; i++) {
 		var rel = runs[i].rel;
 		if (rel === branch || rel.indexOf(branch + "/") === 0) {
@@ -719,8 +719,15 @@ function hasRunMarkers(dirPath, stepId) {
 	return false;
 }
 
+function discoveryMaxDepth(stepId) {
+	if (stepId === "max" || stepId === "sharpen" || stepId === "tophat") {
+		return 3;
+	}
+	return 2;
+}
+
 function discoverOutputRuns(roleDir, stepId, maxDepth) {
-	maxDepth = maxDepth == null ? 2 : maxDepth;
+	maxDepth = maxDepth == null ? discoveryMaxDepth(stepId) : maxDepth;
 	var cfg = RUN_STEP_CONFIG[stepId];
 	if (!cfg || !roleDir || !fs.existsSync(roleDir)) {
 		return [];
@@ -793,7 +800,87 @@ function listRunChoicesForRole(role) {
 	if (!base) {
 		return [];
 	}
-	return discoverOutputRuns(base, stepId, 2);
+	var choices = discoverOutputRuns(base, stepId, discoveryMaxDepth(stepId));
+	var active = getActiveRunRelForRole(role);
+	if (!active) {
+		return choices;
+	}
+	for (var i = 0; i < choices.length; i++) {
+		if (choices[i].rel === active) {
+			return choices;
+		}
+	}
+	var leaf = resolveRunLeaf(base, stepId, active, false);
+	if (leaf && fs.existsSync(leaf) && hasRunMarkers(leaf, stepId)) {
+		choices = choices.slice();
+		choices.unshift({
+			rel: active,
+			label: active,
+			mtime: 0,
+		});
+	}
+	return choices;
+}
+
+function discoverRunChoicesForBundle(bundleRoot, roles, role) {
+	var stepId = STEP_BY_OUTPUT_ROLE[role];
+	if (!stepId) {
+		return [];
+	}
+	var base = resolveRoleBaseAbsForBundle(bundleRoot, roles, role);
+	if (!base) {
+		return [];
+	}
+	return discoverOutputRuns(base, stepId, discoveryMaxDepth(stepId));
+}
+
+function activeRunLeafAbsForBundle(bundleRoot, roles, role, activeRel) {
+	var base = resolveRoleBaseAbsForBundle(bundleRoot, roles, role);
+	if (!base) {
+		return "";
+	}
+	activeRel = normalizeRelPath(activeRel);
+	if (!activeRel) {
+		return base;
+	}
+	return path.join(base, activeRel.split("/").join(path.sep));
+}
+
+function isStoredActiveRunValid(bundleRoot, roles, role, activeRel) {
+	var stepId = STEP_BY_OUTPUT_ROLE[role];
+	if (!stepId) {
+		return false;
+	}
+	var leaf = activeRunLeafAbsForBundle(bundleRoot, roles, role, activeRel);
+	if (!leaf || !fs.existsSync(leaf)) {
+		return false;
+	}
+	return hasRunMarkers(leaf, stepId);
+}
+
+function reconcileProjectRunsOnOpen(bundleRoot, roles, processing) {
+	var runs = migrateActiveRuns(processing || null);
+	var changed = false;
+	for (var i = 0; i < OUTPUT_ROLES.length; i++) {
+		var role = OUTPUT_ROLES[i];
+		var choices = discoverRunChoicesForBundle(bundleRoot, roles, role);
+		var active = normalizeRelPath(runs[role] || "");
+		if (active) {
+			if (!isStoredActiveRunValid(bundleRoot, roles, role, active)) {
+				runs[role] = "";
+				changed = true;
+				active = "";
+			}
+		}
+		if (!active && choices.length === 1) {
+			var sole = normalizeRelPath(choices[0].rel);
+			if (runs[role] !== sole) {
+				runs[role] = sole;
+				changed = true;
+			}
+		}
+	}
+	return { active_runs: runs, changed: changed };
 }
 
 function ensureDefaultActiveRunForRole(role) {
@@ -816,7 +903,7 @@ function buildRunsCatalog(bundleRoot, roles) {
 		var stepId = STEP_BY_OUTPUT_ROLE[role];
 		var rel = roles[role] || CANONICAL_ROLES[role];
 		var dir = path.isAbsolute(rel) ? rel : path.join(bundleRoot, rel);
-		catalog.roles[role] = discoverOutputRuns(dir, stepId, 2);
+		catalog.roles[role] = discoverOutputRuns(dir, stepId, discoveryMaxDepth(stepId));
 	}
 	return catalog;
 }
@@ -1064,6 +1151,7 @@ module.exports = {
 	buildRunSlug: buildRunSlug,
 	resolveRunLeaf: resolveRunLeaf,
 	dedupeBranchRunRel: dedupeBranchRunRel,
+	discoveryMaxDepth: discoveryMaxDepth,
 	discoverOutputRuns: discoverOutputRuns,
 	defaultActiveRuns: defaultActiveRuns,
 	migrateActiveRuns: migrateActiveRuns,
@@ -1085,6 +1173,9 @@ module.exports = {
 	listRunChoicesForRole: listRunChoicesForRole,
 	listImageSliceStems: listImageSliceStems,
 	ensureDefaultActiveRunForRole: ensureDefaultActiveRunForRole,
+	discoverRunChoicesForBundle: discoverRunChoicesForBundle,
+	isStoredActiveRunValid: isStoredActiveRunValid,
+	reconcileProjectRunsOnOpen: reconcileProjectRunsOnOpen,
 	buildRunsCatalog: buildRunsCatalog,
 	writeRunsCatalog: writeRunsCatalog,
 	computeFinalOutputPath: computeFinalOutputPath,
