@@ -8,9 +8,11 @@ Last updated: 2026-06-04 (NAS I/O fair-share v3.2.0). Use this file to resume wo
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **3.2.0** |
-| Latest tag | `v3.2.0` (pending publish) |
+| `package.json` version | **3.2.1** |
+| Latest tag | `v3.2.1` |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v3.2.1** — **NAS prefix fix**: fair-share throttles UNC + `nas_path_prefixes` in shared config (mapped drives like `Z:\`); local disks not throttled.
 
 **v3.2.0** — **NAS bandwidth fair-share** for multi-instance / multi-user compute servers: [`src/io_fairshare.ts`](../src/io_fairshare.ts), [`py/io_fairshare.py`](../py/io_fairshare.py), `pipeline_io_bootstrap` in heavy `py/` scripts. Coordinator `%ProgramData%\MasonJar\io-fairshare\` (Windows). IPC `getIoFairshareStatus`, `saveIoFairshareUserConfig`. UI [`js/io_fairshare_settings.js`](../js/io_fairshare_settings.js) on start hub. Docs [`docs/LAB_NETWORK.md`](LAB_NETWORK.md). Tests: `scripts/test-io-fairshare.js`, `python/tests/test_io_fairshare.py`.
 
