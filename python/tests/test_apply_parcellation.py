@@ -12,7 +12,12 @@ _PY_DIR = _REPO_ROOT / "py"
 if str(_PY_DIR) not in sys.path:
     sys.path.insert(0, str(_PY_DIR))
 
-from annotation_exclusion import apply_exclusion, expand_excluded_ids  # noqa: E402
+from annotation_exclusion import (  # noqa: E402
+    apply_exclusion,
+    apply_inclusion,
+    expand_excluded_ids,
+    expand_included_ids,
+)
 from apply_parcellation import (  # noqa: E402
     apply_parcellation_batch,
     apply_parcellation_to_slice,
@@ -60,6 +65,19 @@ def test_apply_exclusion_zeros_pixels():
     assert out[0, 0] == 0
     assert out[1, 0] == 0
     assert out[0, 1] == 200
+
+
+def test_apply_inclusion_keeps_only_selected(structure_map, catalog):
+    visp4 = catalog["by_acronym"]["VISp4"]["id"]
+    visl4 = catalog["by_acronym"]["VISl4"]["id"]
+    arr = np.array([[visp4, visl4], [visl4, visp4]], dtype=np.uint32)
+    inc_set = expand_included_ids(structure_map, [visp4])
+    out, n = apply_inclusion(arr, inc_set)
+    assert n == 2
+    assert out[0, 1] == 0
+    assert out[1, 0] == 0
+    assert out[0, 0] == visp4
+    assert out[1, 1] == visp4
 
 
 def test_apply_slice_isolated(align_dir, catalog, structure_map):

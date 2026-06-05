@@ -20,7 +20,11 @@ from tissue_cleanup import (  # noqa: E402
     mask_is_all_keep,
     resize_keep_mask_nearest,
 )
-from tissue_mask import isolate_tissue_mask, parse_stroke_points  # noqa: E402
+from tissue_mask import (  # noqa: E402
+    ensure_keep_mask_polarity,
+    isolate_tissue_mask,
+    parse_stroke_points,
+)
 
 
 def _synthetic_blob(size: int = 128) -> np.ndarray:
@@ -35,6 +39,16 @@ def test_isolate_tissue_mask_finds_dark_blob() -> None:
     assert mask.shape == gray.shape
     assert mask[gray < 100].mean() > 0.9
     assert mask[gray > 200].mean() < 0.1
+
+
+def test_ensure_keep_mask_polarity_inverts_when_background_marked_keep() -> None:
+    gray = _synthetic_blob()
+    wrong = np.zeros_like(gray, dtype=np.uint8)
+    wrong[gray < 100] = 0
+    wrong[gray >= 100] = 255
+    fixed = ensure_keep_mask_polarity(gray, wrong)
+    assert int(fixed[gray < 100].mean()) >= 200
+    assert int(fixed[gray > 200].mean()) < 50
 
 
 def test_auto_keep_mask_uint8() -> None:

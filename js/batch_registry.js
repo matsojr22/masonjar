@@ -160,7 +160,7 @@ var DEFAULT_PARAMS = {
 		tierId: "areas",
 		stLevel: null,
 		ccfAdvanced: false,
-		excludedRegionIds: [],
+		includedRegionIds: [],
 	},
 	max: { dendrites: false, cells: false },
 	sharpen: { radius: 1, amount: 1, equalize: false },
@@ -179,7 +179,7 @@ var DEFAULT_PARAMS = {
 		selectedRegionIds: [],
 		includeLayers: false,
 	},
-	count: { layerinfo: false },
+	count: {},
 	dual: {},
 	collate: { name: "collated", regions: "" },
 };

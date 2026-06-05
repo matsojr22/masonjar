@@ -270,7 +270,7 @@ async function loadCurrentSlice() {
 		}
 		return;
 	}
-	canvas.setMode("pan");
+	canvas.setMode("idle");
 	if (canvasStatus) {
 		canvasStatus.textContent = "Loading " + path.basename(preview) + "…";
 	}
@@ -279,8 +279,15 @@ async function loadCurrentSlice() {
 	if (!state.slices[sliceId]) {
 		state.slices[sliceId] = defaultSliceMeta();
 	}
+	var meta = state.slices[sliceId];
+	var hasMaskFile = fs.existsSync(maskPathForSlice(sliceId));
+	canvas.setSliceUntouched(meta.method === "untouched");
+	canvas.setMaskVisible(hasMaskFile && meta.method !== "untouched");
 	if (canvasStatus) {
-		canvasStatus.textContent = preview;
+		canvasStatus.textContent =
+			meta.method === "untouched" && !hasMaskFile
+				? "Green = keep; red = remove (overlay appears after you edit the mask)."
+				: preview;
 	}
 	updateSliceUi();
 	writeDraftState();
@@ -528,6 +535,8 @@ ipc.on("tissueCleanupAutoResult", function (_ev, payload) {
 		}
 		return;
 	}
+	canvas.setMaskVisible(true);
+	canvas.setSliceUntouched(false);
 	if (payload.maskBase64) {
 		canvas.loadMaskFromBase64(payload.maskBase64).then(function () {
 			markSliceEdited("auto");
@@ -541,7 +550,7 @@ ipc.on("tissueCleanupAutoResult", function (_ev, payload) {
 	}
 	if (canvasStatus) {
 		canvasStatus.textContent =
-			"Green = tissue to keep. Use Eraser (red) to remove mistaken green areas.";
+			"Green = keep; red = remove. Use Eraser to paint red remove regions.";
 	}
 });
 
@@ -568,11 +577,14 @@ ipc.on("tissueCleanupGuidedResult", function (_ev, payload) {
 	var done = payload.maskBase64
 		? canvas.loadMaskFromBase64(payload.maskBase64)
 		: canvas.loadMaskFromFile(fs, path, payload.maskPath);
+	canvas.setMaskVisible(true);
+	canvas.setSliceUntouched(false);
 	Promise.resolve(done).then(function () {
 		markSliceEdited("trace_auto");
 		persistCurrentSlice();
 		if (canvasStatus) {
-			canvasStatus.textContent = "Trace-guided mask applied.";
+			canvasStatus.textContent =
+				"Green = keep; red = remove. Trace-guided mask applied.";
 		}
 	});
 });

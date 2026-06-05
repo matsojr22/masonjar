@@ -9,9 +9,12 @@ var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
 var maxDatasets = require("./max_datasets");
 
-var PREVIEW_DEBOUNCE_MS = 350;
+var IDLE_PREVIEW_MS = 5000;
 var DEFAULT_VIEW_W = 512;
 var DEFAULT_VIEW_H = 512;
+
+/** When false, param/pan/wheel/load never auto-schedule filter preview (manual button only). */
+var AUTO_PREVIEW_ON_INTERACTION = false;
 
 function parsePreviewJsonLine(line) {
 	var idx = String(line).indexOf("PREVIEW_JSON:");
@@ -50,6 +53,58 @@ function listSliceImageFiles(leafAbs) {
 	return out;
 }
 
+function sliceStemFromName(name) {
+	var base = path.basename(name);
+	var dot = base.indexOf(".");
+	return dot >= 0 ? base.slice(0, dot) : base;
+}
+
+function findLowResPreviewAbs(bundleRoot, sliceName) {
+	if (!bundleRoot) {
+		return "";
+	}
+	var stem = sliceStemFromName(sliceName);
+	var prevDir = path.join(bundleRoot, "data", "counting", "_previews");
+	if (!fs.existsSync(prevDir)) {
+		return "";
+	}
+	try {
+		var entries = fs.readdirSync(prevDir);
+		for (var i = 0; i < entries.length; i++) {
+			if (
+				entries[i].toLowerCase().endsWith(".png") &&
+				entries[i].indexOf(stem) === 0
+			) {
+				return path.join(prevDir, entries[i]);
+			}
+		}
+	} catch (_err) {
+		return "";
+	}
+	return "";
+}
+
+function applyDisplayWindow(imgData, minVal, maxVal) {
+	var data = imgData.data;
+	var lo = Math.max(0, Math.min(255, Number(minVal) || 0));
+	var hi = Math.max(lo + 1, Math.min(255, Number(maxVal) || 255));
+	var span = hi - lo;
+	for (var i = 0; i < data.length; i += 4) {
+		var gray = data[i];
+		var out = Math.round(((gray - lo) / span) * 255);
+		if (out < 0) {
+			out = 0;
+		}
+		if (out > 255) {
+			out = 255;
+		}
+		data[i] = out;
+		data[i + 1] = out;
+		data[i + 2] = out;
+	}
+	return imgData;
+}
+
 function viewportRoi(state, imgW, imgH) {
 	var scale = state.scale || 1;
 	var panX = state.panX || 0;
@@ -69,6 +124,10 @@ function viewportRoi(state, imgW, imgH) {
 		h = imgH - y0;
 	}
 	return { x: x0, y: y0, w: w, h: h };
+}
+
+function shouldSchedulePreviewOnInteraction() {
+	return AUTO_PREVIEW_ON_INTERACTION;
 }
 
 /**
@@ -93,11 +152,17 @@ function wirePreprocessWizard(opts) {
 		sourceDataset: null,
 		slices: [],
 		currentSlice: null,
+		baseAbs: "",
+		baseNaturalW: 0,
+		baseNaturalH: 0,
+		showingFiltered: false,
 		scale: 1,
 		panX: 0,
 		panY: 0,
 		viewW: DEFAULT_VIEW_W,
 		viewH: DEFAULT_VIEW_H,
+		displayMin: 0,
+		displayMax: 255,
 		previewBusy: false,
 		running: false,
 		lastRunRel: "",
@@ -114,6 +179,10 @@ function wirePreprocessWizard(opts) {
 	var viewport = document.getElementById("preprocessPreviewViewport");
 	var previewImg = document.getElementById("preprocessPreviewImg");
 	var previewStatus = document.getElementById("preprocessPreviewStatus");
+	var previewFilterBtn = document.getElementById("previewFilterBtn");
+	var displayMinInput = document.getElementById("displayMin");
+	var displayMaxInput = document.getElementById("displayMax");
+	var autoRefreshAfterPan = document.getElementById("autoRefreshAfterPan");
 	var step1Next = document.getElementById("step1Next");
 	var step2Back = document.getElementById("step2Back");
 	var step2Cancel = document.getElementById("step2Cancel");
@@ -123,7 +192,8 @@ function wirePreprocessWizard(opts) {
 	var processMessage = document.getElementById("processMessage");
 	var setActiveCheckbox = document.getElementById("setActiveMax");
 	var finishPanel = document.getElementById("finishPanel");
-	var previewTimer = null;
+	var idlePreviewTimer = null;
+	var baseBitmap = null;
 
 	pipelineRun.ensureRunModeUi("runModePanel", stepId);
 
@@ -179,6 +249,81 @@ function wirePreprocessWizard(opts) {
 				}
 			}
 		}
+	}
+
+	function readDisplayWindow() {
+		if (displayMinInput) {
+			state.displayMin = Math.max(0, Math.min(255, Number(displayMinInput.value) || 0));
+		}
+		if (displayMaxInput) {
+			state.displayMax = Math.max(
+				state.displayMin + 1,
+				Math.min(255, Number(displayMaxInput.value) || 255),
+			);
+		}
+	}
+
+	function renderBasePreview() {
+		if (!previewImg || !baseBitmap) {
+			return;
+		}
+		readDisplayWindow();
+		var canvas = document.createElement("canvas");
+		canvas.width = baseBitmap.width;
+		canvas.height = baseBitmap.height;
+		var ctx = canvas.getContext("2d");
+		ctx.drawImage(baseBitmap, 0, 0);
+		var imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+		applyDisplayWindow(imgData, state.displayMin, state.displayMax);
+		ctx.putImageData(imgData, 0, 0);
+		previewImg.src = canvas.toDataURL("image/png");
+		state.showingFiltered = false;
+	}
+
+	function loadBaseSliceImage() {
+		if (!state.currentSlice || !previewImg) {
+			return;
+		}
+		var root = bundleRoot();
+		var lowRes = findLowResPreviewAbs(root, state.currentSlice.name);
+		state.baseAbs = lowRes || state.currentSlice.abs;
+		state.showingFiltered = false;
+		state.scale = 1;
+		state.panX = 0;
+		state.panY = 0;
+		applyPanZoomCss();
+		if (previewStatus) {
+			previewStatus.textContent =
+				"Pan/zoom the image, adjust display levels, then click Preview filter.";
+		}
+		var img = new Image();
+		img.onload = function () {
+			baseBitmap = img;
+			state.baseNaturalW = img.naturalWidth;
+			state.baseNaturalH = img.naturalHeight;
+			renderBasePreview();
+		};
+		img.onerror = function () {
+			if (previewStatus) {
+				previewStatus.textContent = "Could not load slice image.";
+			}
+		};
+		img.src = "file://" + state.baseAbs.replace(/\\/g, "/") + "?t=" + Date.now();
+	}
+
+	function cancelIdlePreview() {
+		if (idlePreviewTimer) {
+			clearTimeout(idlePreviewTimer);
+			idlePreviewTimer = null;
+		}
+	}
+
+	function scheduleIdlePreview() {
+		cancelIdlePreview();
+		if (!autoRefreshAfterPan || !autoRefreshAfterPan.checked) {
+			return;
+		}
+		idlePreviewTimer = setTimeout(requestPreview, IDLE_PREVIEW_MS);
 	}
 
 	function refreshBranches() {
@@ -281,7 +426,8 @@ function wirePreprocessWizard(opts) {
 		} else {
 			state.currentSlice = null;
 		}
-		schedulePreview();
+		cancelIdlePreview();
+		loadBaseSliceImage();
 	}
 
 	function onSliceChange() {
@@ -290,7 +436,8 @@ function wirePreprocessWizard(opts) {
 		}
 		var idx = Number(sliceSelect.value) || 0;
 		state.currentSlice = state.slices[idx] || state.slices[0];
-		schedulePreview();
+		cancelIdlePreview();
+		loadBaseSliceImage();
 	}
 
 	function applyPanZoomCss() {
@@ -307,22 +454,15 @@ function wirePreprocessWizard(opts) {
 			")";
 	}
 
-	function schedulePreview() {
-		if (previewTimer) {
-			clearTimeout(previewTimer);
-		}
-		previewTimer = setTimeout(requestPreview, PREVIEW_DEBOUNCE_MS);
-	}
-
 	function requestPreview() {
+		cancelIdlePreview();
 		if (!state.currentSlice || state.previewBusy || state.running) {
 			return;
 		}
 		var params = opts.getToolParams();
-		var roi = { x: 0, y: 0, w: DEFAULT_VIEW_W, h: DEFAULT_VIEW_H };
-		if (previewImg && previewImg.naturalWidth) {
-			roi = viewportRoi(state, previewImg.naturalWidth, previewImg.naturalHeight);
-		}
+		var imgW = state.baseNaturalW || previewImg.naturalWidth || DEFAULT_VIEW_W;
+		var imgH = state.baseNaturalH || previewImg.naturalHeight || DEFAULT_VIEW_H;
+		var roi = viewportRoi(state, imgW, imgH);
 		var metaDir = bundleRoot()
 			? path.join(bundleRoot(), branding.META_DIR)
 			: path.dirname(state.currentSlice.abs);
@@ -359,10 +499,6 @@ function wirePreprocessWizard(opts) {
 		state.viewW = Math.max(200, Math.floor(rect.width) || DEFAULT_VIEW_W);
 		state.viewH = Math.max(200, Math.floor(rect.height) || DEFAULT_VIEW_H);
 
-		previewImg.addEventListener("load", function () {
-			schedulePreview();
-		});
-
 		viewport.addEventListener(
 			"wheel",
 			function (ev) {
@@ -370,7 +506,6 @@ function wirePreprocessWizard(opts) {
 				var delta = ev.deltaY > 0 ? 0.9 : 1.1;
 				state.scale = Math.min(8, Math.max(0.1, state.scale * delta));
 				applyPanZoomCss();
-				schedulePreview();
 			},
 			{ passive: false },
 		);
@@ -392,9 +527,11 @@ function wirePreprocessWizard(opts) {
 			lastX = ev.clientX;
 			lastY = ev.clientY;
 			applyPanZoomCss();
-			schedulePreview();
 		});
 		window.addEventListener("mouseup", function () {
+			if (dragging) {
+				scheduleIdlePreview();
+			}
 			dragging = false;
 		});
 	}
@@ -521,6 +658,15 @@ function wirePreprocessWizard(opts) {
 	if (sliceSelect) {
 		sliceSelect.addEventListener("change", onSliceChange);
 	}
+	if (previewFilterBtn) {
+		previewFilterBtn.addEventListener("click", requestPreview);
+	}
+	if (displayMinInput) {
+		displayMinInput.addEventListener("input", renderBasePreview);
+	}
+	if (displayMaxInput) {
+		displayMaxInput.addEventListener("input", renderBasePreview);
+	}
 	if (step1Next) {
 		step1Next.addEventListener("click", function () {
 			if (!state.sourceDataset) {
@@ -551,8 +697,12 @@ function wirePreprocessWizard(opts) {
 
 	var paramInputs = document.querySelectorAll("[data-preview-param]");
 	for (var p = 0; p < paramInputs.length; p++) {
-		paramInputs[p].addEventListener("input", schedulePreview);
-		paramInputs[p].addEventListener("change", schedulePreview);
+		paramInputs[p].addEventListener("input", function () {
+			if (state.showingFiltered && previewStatus) {
+				previewStatus.textContent =
+					"Parameters changed — click Preview filter to refresh.";
+			}
+		});
 	}
 
 	var previewResultChannel =
@@ -573,10 +723,12 @@ function wirePreprocessWizard(opts) {
 			return;
 		}
 		if (previewImg && data.previewPath) {
+			state.showingFiltered = true;
 			previewImg.src = "file://" + data.previewPath.replace(/\\/g, "/");
 		}
 		if (previewStatus) {
-			previewStatus.textContent = "Filtered preview (" + data.width + "×" + data.height + " ROI)";
+			previewStatus.textContent =
+				"Filtered preview (" + data.width + "×" + data.height + " ROI)";
 		}
 	});
 
@@ -632,12 +784,14 @@ function wirePreprocessWizard(opts) {
 	wirePreviewPane();
 	ensurePreprocessNav();
 	refreshBranches();
-	if (state.currentSlice && previewImg) {
-		previewImg.src = "file://" + state.currentSlice.abs.replace(/\\/g, "/");
-	}
 	setStep(1);
 
-	return { state: state, schedulePreview: schedulePreview, refreshBranches: refreshBranches };
+	return {
+		state: state,
+		requestPreview: requestPreview,
+		refreshBranches: refreshBranches,
+		loadBaseSliceImage: loadBaseSliceImage,
+	};
 }
 
 module.exports = {
@@ -645,4 +799,7 @@ module.exports = {
 	viewportRoi: viewportRoi,
 	parsePreviewJsonLine: parsePreviewJsonLine,
 	listSliceImageFiles: listSliceImageFiles,
+	applyDisplayWindow: applyDisplayWindow,
+	shouldSchedulePreviewOnInteraction: shouldSchedulePreviewOnInteraction,
+	findLowResPreviewAbs: findLowResPreviewAbs,
 };

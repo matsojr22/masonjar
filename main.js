@@ -1387,10 +1387,7 @@ ipcMain.on("runCount", function (event, data) {
         `-o ${data[2]}`,
         `-m ${structPath}`,
     ];
-    if (data[3]) {
-        custom_args.push(`--layers`);
-    }
-    appendSliceListArg(custom_args, data, 4);
+    appendSliceListArg(custom_args, data, 3);
     let options = {
         mode: "text",
         pythonPath: path.join(envPythonPath, pyCommand),

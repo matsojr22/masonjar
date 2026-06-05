@@ -64,7 +64,7 @@ var state = {
 		useDapi: false,
 	},
 	parcellation: {
-		excludedRegionIds: [],
+		includedRegionIds: [],
 		ccfAdvanced: false,
 	},
 	parcelAvailableHighlight: null,
@@ -340,12 +340,8 @@ function renderParamSection(stepId, body, params) {
 		return;
 	}
 	if (stepId === "count") {
-		body.innerHTML = fieldRow(
-			"Include layer info",
-			'<input type="checkbox" class="form-check-input" id="count-layerinfo" ' +
-				(params.layerinfo ? "checked" : "") +
-				" />",
-		);
+		body.innerHTML =
+			'<p class="small text-muted mb-0">No parameters. Use parcellation to control region resolution before counting.</p>';
 		return;
 	}
 	if (stepId === "dual") {
@@ -1010,8 +1006,6 @@ function collectParamsFromUi() {
 				qs("detect-multichannel") && qs("detect-multichannel").checked
 			);
 			next.customModel = qs("detect-customModel").value || "";
-		} else if (stepId === "count") {
-			next.layerinfo = !!(qs("count-layerinfo") && qs("count-layerinfo").checked);
 		} else if (stepId === "intensity") {
 			var hem = qs("intensity-hemisphere") ? qs("intensity-hemisphere").value : "whole";
 			next.wholeSlice = hem === "whole";

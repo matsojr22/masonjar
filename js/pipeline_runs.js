@@ -326,9 +326,8 @@ function buildRunSlug(stepId, context) {
 	if (stepId === "count") {
 		var predRef = shortRefToken(context.predictionRunRel);
 		var sliceRef = shortRefToken(context.slicesRunRel);
-		var layer = context.layerinfo ? "_layers" : "";
 		return sanitizeSlugPart(
-			"p_" + predRef + "_s_" + sliceRef + layer + subset,
+			"p_" + predRef + "_s_" + sliceRef + subset,
 		);
 	}
 	if (stepId === "collate") {

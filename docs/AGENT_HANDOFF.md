@@ -1,6 +1,6 @@
 # Agent session handoff
 
-Last updated: 2026-06-03 (tissue cleanup UX + preprocess nav v3.0.0). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-03 (viewer/preprocess/tissue UX v3.1.0). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
 
@@ -8,9 +8,11 @@ Last updated: 2026-06-03 (tissue cleanup UX + preprocess nav v3.0.0). Use this f
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **3.0.0** |
-| Latest tag | `v3.0.0` |
-| GitHub releases | https://github.com/matsojr22/masonjar/releases/tag/v3.0.0 |
+| `package.json` version | **3.1.0** |
+| Latest tag | `v3.1.0` (pending publish) |
+| GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v3.1.0** — **Viewer/preprocess UX**: Sharpen/top-hat manual **Preview filter**, display min/max, pan-only base ([`js/preprocess_wizard.js`](../js/preprocess_wizard.js)). **Adjust**: QSplitter parcellation drawer, background channel combo + `00_dapi` fallback ([`py/adjust_channels.py`](../py/adjust_channels.py)), paint search box; bulk parcellation removed from single-section viewer. **Parcellation (bulk)**: included-region dual list ([`js/region_dual_list.js`](../js/region_dual_list.js), `included_region_ids`, [`py/annotation_exclusion.py`](../py/annotation_exclusion.py) `apply_inclusion`). **Count**: removed Save layer info. **Tissue cleanup**: mask overlay hidden until edit; `ensure_keep_mask_polarity` on auto/guided.
 
 **v3.0.0** — **Semi-manual tissue edge cleanup UX**: menu dedupe/rename/order; static canvas; green keep / red remove overlays; `parse_stroke_points` fixes trace `KeyError`; `--edge-shrink` on auto/guided; eraser orphan island prune in [`js/tissue_cleanup_canvas.js`](../js/tissue_cleanup_canvas.js). **Preprocess wizards**: [`js/preprocess_wizard.js`](../js/preprocess_wizard.js) always shows source dataset row; **Back to preprocessing** on sharpen/top-hat. Build: `node scripts/build-release.js`; publish `node scripts/publish-release.js --all-platforms`.
 

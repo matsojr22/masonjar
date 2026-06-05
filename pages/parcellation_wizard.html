@@ -96,7 +96,7 @@
             <select id="levelSelect" class="form-select form-select-sm d-none" aria-label="CCFv3 raw depth"></select>
           </div>
           <div class="col-md-8">
-            <label class="form-label" for="regionSearch">Search regions to exclude</label>
+            <label class="form-label" for="regionSearch">Search available</label>
             <input type="search" class="form-control form-control-sm" id="regionSearch" placeholder="acronym or name" />
           </div>
         </div>
@@ -110,12 +110,14 @@
             <div id="availableList" class="region-list-panel"></div>
           </div>
           <div class="d-flex flex-column justify-content-center gap-2">
-            <button type="button" class="btn btn-sm btn-primary" id="addExclude">Exclude →</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="removeExclude">← Remove</button>
+            <button type="button" class="btn btn-sm btn-primary" id="addInclude">Add →</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="removeInclude">← Remove</button>
+            <button type="button" class="btn btn-sm btn-outline-primary" id="addAllInclude">Add all</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" id="removeAllInclude">Remove all</button>
           </div>
           <div>
-            <div class="small fw-bold mb-1">Excluded after rollup</div>
-            <div id="excludedList" class="region-list-panel"></div>
+            <div class="small fw-bold mb-1">Included regions</div>
+            <div id="includedList" class="region-list-panel"></div>
           </div>
         </div>
         <button type="button" class="btn btn-outline-secondary" id="step2Back">Back</button>
@@ -132,8 +134,8 @@
           <dd class="col-sm-9" id="reviewTarget"></dd>
           <dt class="col-sm-3">Sections</dt>
           <dd class="col-sm-9" id="reviewSlices"></dd>
-          <dt class="col-sm-3">Excluded</dt>
-          <dd class="col-sm-9" id="reviewExcluded"></dd>
+          <dt class="col-sm-3">Included</dt>
+          <dd class="col-sm-9" id="reviewIncluded"></dd>
         </dl>
         <button type="button" class="btn btn-outline-secondary" id="step3Back">Back</button>
         <button type="button" class="btn btn-primary" id="step3Start">Start</button>

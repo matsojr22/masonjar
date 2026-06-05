@@ -13,7 +13,12 @@ from typing import Any
 
 import numpy as np
 
-from annotation_exclusion import apply_exclusion, expand_excluded_ids
+from annotation_exclusion import (
+    apply_exclusion,
+    apply_inclusion,
+    expand_excluded_ids,
+    expand_included_ids,
+)
 from annotation_relabel import (
     FULL_DETAIL_TIER,
     clear_slice_parcellation,
@@ -70,8 +75,9 @@ def _is_noop(
     tier_id: str | None,
     st_level: int | None,
     excluded_region_ids: list[int] | None,
+    included_region_ids: list[int] | None = None,
 ) -> bool:
-    if excluded_region_ids:
+    if excluded_region_ids or included_region_ids:
         return False
     return tier_id == FULL_DETAIL_TIER or (tier_id is None and st_level is None)
 
@@ -83,6 +89,7 @@ def apply_parcellation_to_slice(
     tier_id: str | None,
     st_level: int | None,
     excluded_region_ids: list[int] | None,
+    included_region_ids: list[int] | None = None,
     structure_map: dict,
     catalog: dict[str, Any],
     dry_run: bool = False,
@@ -92,7 +99,7 @@ def apply_parcellation_to_slice(
     annotation_dir = Path(annotation_dir).resolve()
     pkl_path = _annotation_pkl_path(annotation_dir, slice_id)
 
-    if _is_noop(tier_id, st_level, excluded_region_ids):
+    if _is_noop(tier_id, st_level, excluded_region_ids, included_region_ids):
         return SliceParcellationResult(slice_id=slice_id, ok=True)
 
     try:
@@ -126,8 +133,13 @@ def apply_parcellation_to_slice(
             unknown_ids = []
             pixels_changed = 0
 
-        ex_set = expand_excluded_ids(structure_map, excluded_region_ids)
-        label, excluded_pixels = apply_exclusion(label, ex_set)
+        excluded_pixels = 0
+        if included_region_ids:
+            inc_set = expand_included_ids(structure_map, included_region_ids)
+            label, excluded_pixels = apply_inclusion(label, inc_set)
+        elif excluded_region_ids:
+            ex_set = expand_excluded_ids(structure_map, excluded_region_ids)
+            label, excluded_pixels = apply_exclusion(label, ex_set)
 
         if dry_run:
             return SliceParcellationResult(
@@ -142,7 +154,11 @@ def apply_parcellation_to_slice(
         if not dry_run:
             if write_disk:
                 _write_annotation_pkl(pkl_path, label)
-            if tier_id == FULL_DETAIL_TIER and not excluded_region_ids:
+            if (
+                tier_id == FULL_DETAIL_TIER
+                and not excluded_region_ids
+                and not included_region_ids
+            ):
                 clear_slice_parcellation(annotation_dir, slice_id)
             else:
                 from annotation_relabel import load_parcellation_meta, save_parcellation_meta
@@ -153,6 +169,7 @@ def apply_parcellation_to_slice(
                     "tier_id": tier_id,
                     "st_level": st_level,
                     "excluded_region_ids": excluded_region_ids or [],
+                    "included_region_ids": included_region_ids or [],
                     "applied_at": datetime.now(timezone.utc).isoformat(),
                 }
                 save_parcellation_meta(annotation_dir, meta)
@@ -213,6 +230,7 @@ def apply_parcellation_batch(
     tier_id: str | None,
     st_level: int | None,
     excluded_region_ids: list[int] | None,
+    included_region_ids: list[int] | None = None,
     structure_map: dict,
     catalog: dict[str, Any],
     dry_run: bool = False,
@@ -226,6 +244,7 @@ def apply_parcellation_batch(
             tier_id=tier_id,
             st_level=st_level,
             excluded_region_ids=excluded_region_ids,
+            included_region_ids=included_region_ids,
             structure_map=structure_map,
             catalog=catalog,
             dry_run=dry_run,
@@ -297,11 +316,15 @@ def main(argv: list[str] | None = None) -> int:
     st_level = cfg.get("st_level")
     if st_level is not None:
         st_level = int(st_level)
+    included = cfg.get("included_region_ids") or []
+    included = [int(x) for x in included]
     excluded = cfg.get("excluded_region_ids") or []
     excluded = [int(x) for x in excluded]
+    if included:
+        excluded = []
 
-    if _is_noop(tier_id, st_level, excluded):
-        print("LOG: parcellation skipped (full detail, no exclusions)", flush=True)
+    if _is_noop(tier_id, st_level, excluded, included):
+        print("LOG: parcellation skipped (full detail, no region filter)", flush=True)
         print("Done!", flush=True)
         return 0
 
@@ -316,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
             tier_id=tier_id,
             st_level=st_level,
             excluded_region_ids=excluded,
+            included_region_ids=included or None,
             structure_map=structure_map,
             catalog=catalog,
             write_disk=True,

@@ -59,6 +59,22 @@ def isolate_tissue_mask(
     return tissue.astype(bool)
 
 
+def ensure_keep_mask_polarity(gray_u8: np.ndarray, keep_u8: np.ndarray) -> np.ndarray:
+    """Ensure keep mask (255 = tissue) matches brighter tissue in gray image."""
+    keep = keep_u8.astype(np.uint8)
+    if keep.size == 0:
+        return keep
+    on = keep >= 128
+    off = ~on
+    if not on.any() or not off.any():
+        return keep
+    mean_on = float(np.mean(gray_u8[on]))
+    mean_off = float(np.mean(gray_u8[off]))
+    if mean_on > mean_off:
+        return (255 - keep).astype(np.uint8)
+    return keep
+
+
 def wizard_mask_kwargs(gray_u8: np.ndarray, edge_shrink_px: int = 2) -> dict:
     """Defaults for tissue cleanup wizard auto/guided paths."""
     h, w = gray_u8.shape

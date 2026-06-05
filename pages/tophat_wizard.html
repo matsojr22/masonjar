@@ -73,13 +73,32 @@
                 data-preview-param
               />
             </div>
+            <div class="mb-2">
+              <label class="form-label" for="displayMin">Display min (0–255)</label>
+              <input type="range" class="form-range" id="displayMin" min="0" max="255" value="0" />
+            </div>
+            <div class="mb-2">
+              <label class="form-label" for="displayMax">Display max (0–255)</label>
+              <input type="range" class="form-range" id="displayMax" min="0" max="255" value="255" />
+            </div>
+            <button type="button" class="btn btn-outline-primary mb-2" id="previewFilterBtn">
+              Preview filter
+            </button>
+            <div class="form-check mb-2">
+              <input class="form-check-input" type="checkbox" id="autoRefreshAfterPan" />
+              <label class="form-check-label" for="autoRefreshAfterPan">
+                Auto-refresh filter after pan (5 s idle)
+              </label>
+            </div>
             <button type="button" class="btn btn-primary" id="step1Next">Next — Process</button>
           </div>
           <div class="col-md-8">
             <div id="preprocessPreviewViewport" class="preprocess-preview-pane border rounded">
               <img id="preprocessPreviewImg" alt="slice preview" draggable="false" />
             </div>
-            <p id="preprocessPreviewStatus" class="small text-muted mt-2">Pan (drag) and scroll to zoom.</p>
+            <p id="preprocessPreviewStatus" class="small text-muted mt-2">
+              Pan/zoom the image, adjust display levels, then click Preview filter.
+            </p>
           </div>
         </div>
       </div>

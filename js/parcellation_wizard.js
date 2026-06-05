@@ -9,6 +9,7 @@ var pipelineRuns = require("./pipeline_runs");
 var structureCatalog = require("./structure_catalog");
 var atlasStyle = require("./atlas_region_style");
 var wizardBusy = require("./wizard_busy");
+var regionDualList = require("./region_dual_list");
 
 var PLAN_KEY = "masonjar.parcellationPlan";
 var CONFIG_FILENAME = "parcellation_run_config.json";
@@ -18,9 +19,8 @@ var catalog = null;
 var wizardStep = 1;
 var sliceIds = [];
 var selectedSliceIds = {};
-var excludedRegionIds = [];
-var availableHighlight = null;
-var excludedHighlight = null;
+var includedRegionIds = [];
+var regionList = null;
 var ccfAdvanced = false;
 var tierId = "areas";
 var stLevel = 6;
@@ -75,7 +75,7 @@ function savePlan() {
 		tierId: tierId,
 		stLevel: stLevel,
 		ccfAdvanced: ccfAdvanced,
-		excludedRegionIds: excludedRegionIds.slice(),
+		includedRegionIds: includedRegionIds.slice(),
 		selectedSliceIds: Object.keys(selectedSliceIds).filter(function (k) {
 			return selectedSliceIds[k];
 		}),
@@ -91,7 +91,7 @@ function loadPlan() {
 		tierId = plan.tierId || "areas";
 		stLevel = plan.stLevel != null ? plan.stLevel : 6;
 		ccfAdvanced = !!plan.ccfAdvanced;
-		excludedRegionIds = (plan.excludedRegionIds || []).slice();
+		includedRegionIds = (plan.includedRegionIds || plan.excludedRegionIds || []).slice();
 		if (plan.selectedSliceIds) {
 			for (var i = 0; i < plan.selectedSliceIds.length; i++) {
 				selectedSliceIds[plan.selectedSliceIds[i]] = true;
@@ -220,7 +220,7 @@ function initTierPicker() {
 		tierSel.dataset.populated = "1";
 		tierSel.addEventListener("change", function () {
 			tierId = tierSel.value;
-			renderAvailableRegions();
+			if (regionList) regionList.render();
 		});
 	}
 	if (levelSel && !levelSel.dataset.populated) {
@@ -235,7 +235,7 @@ function initTierPicker() {
 		levelSel.dataset.populated = "1";
 		levelSel.addEventListener("change", function () {
 			stLevel = parseInt(levelSel.value, 10);
-			renderAvailableRegions();
+			if (regionList) regionList.render();
 		});
 	}
 	var adv = qs("ccfAdvancedToggle");
@@ -246,7 +246,7 @@ function initTierPicker() {
 			ccfAdvanced = adv.checked;
 			tierSel.classList.toggle("d-none", ccfAdvanced);
 			levelSel.classList.toggle("d-none", !ccfAdvanced);
-			renderAvailableRegions();
+			if (regionList) regionList.render();
 		});
 		tierSel.classList.toggle("d-none", ccfAdvanced);
 		levelSel.classList.toggle("d-none", !ccfAdvanced);
@@ -254,24 +254,39 @@ function initTierPicker() {
 	var search = qs("regionSearch");
 	if (search && !search.dataset.bound) {
 		search.dataset.bound = "1";
-		search.addEventListener("input", renderAvailableRegions);
-	}
-	var addBtn = qs("addExclude");
-	if (addBtn && !addBtn.dataset.bound) {
-		addBtn.dataset.bound = "1";
-		addBtn.addEventListener("click", function () {
-			if (availableHighlight != null) addExcluded(availableHighlight);
+		search.addEventListener("input", function () {
+			if (regionList) {
+				regionList.setSearchQuery(search.value);
+			}
 		});
 	}
-	var remBtn = qs("removeExclude");
-	if (remBtn && !remBtn.dataset.bound) {
-		remBtn.dataset.bound = "1";
-		remBtn.addEventListener("click", function () {
-			if (excludedHighlight != null) removeExcluded(excludedHighlight);
+	if (!regionList) {
+		regionList = regionDualList.createRegionDualList({
+			availablePanel: qs("availableList"),
+			includedPanel: qs("includedList"),
+			addBtn: qs("addInclude"),
+			removeBtn: qs("removeInclude"),
+			addAllBtn: qs("addAllInclude"),
+			removeAllBtn: qs("removeAllInclude"),
+			listAvailableRegions: regionsForPicker,
+			getRegionById: function (id) {
+				return catalog && catalog.byId ? catalog.byId[id] : null;
+			},
+			rowStyle: function (node) {
+				return atlasStyle.rowStyleForRegion(node, catalog.byId);
+			},
+			onIncludedChange: function (ids) {
+				includedRegionIds = ids.slice();
+				savePlan();
+			},
+			initialIncludedIds: includedRegionIds,
 		});
+	} else {
+		regionList.setIncludedIds(includedRegionIds);
+		if (search) {
+			regionList.setSearchQuery(search.value);
+		}
 	}
-	renderAvailableRegions();
-	renderExcludedRegions();
 }
 
 function regionsForPicker(search) {
@@ -279,78 +294,6 @@ function regionsForPicker(search) {
 		return structureCatalog.listRegionsAtLevel(stLevel, search, catalog);
 	}
 	return structureCatalog.listRegionsForTier(tierId, search, catalog);
-}
-
-function renderAvailableRegions() {
-	var panel = qs("availableList");
-	if (!panel || !catalog) return;
-	var search = qs("regionSearch") ? qs("regionSearch").value : "";
-	var regions = regionsForPicker(search);
-	var excluded = {};
-	for (var i = 0; i < excludedRegionIds.length; i++) {
-		excluded[excludedRegionIds[i]] = true;
-	}
-	panel.innerHTML = "";
-	for (var r = 0; r < regions.length; r++) {
-		var node = regions[r];
-		if (excluded[node.id]) continue;
-		var row = document.createElement("div");
-		row.className = "region-picker-row";
-		if (availableHighlight === node.id) row.classList.add("selected-row");
-		var style = atlasStyle.rowStyleForRegion(node, catalog.byId);
-		row.style.borderLeftColor = style.borderLeftColor;
-		var sw = document.createElement("span");
-		sw.className = "region-swatch";
-		sw.style.backgroundColor = style.swatchColor;
-		row.appendChild(sw);
-		row.appendChild(document.createTextNode(node.acronym + " — " + node.name));
-		row.addEventListener("click", (function (id) {
-			return function () {
-				availableHighlight = id;
-				renderAvailableRegions();
-			};
-		})(node.id));
-		panel.appendChild(row);
-	}
-}
-
-function renderExcludedRegions() {
-	var panel = qs("excludedList");
-	if (!panel || !catalog) return;
-	panel.innerHTML = "";
-	for (var i = 0; i < excludedRegionIds.length; i++) {
-		var id = excludedRegionIds[i];
-		var node = catalog.byId[id];
-		if (!node) continue;
-		var row = document.createElement("div");
-		row.className = "region-picker-row";
-		if (excludedHighlight === id) row.classList.add("selected-row");
-		row.textContent = node.acronym + " — " + node.name;
-		row.addEventListener("click", (function (rid) {
-			return function () {
-				excludedHighlight = rid;
-				renderExcludedRegions();
-			};
-		})(id));
-		panel.appendChild(row);
-	}
-}
-
-function addExcluded(id) {
-	if (excludedRegionIds.indexOf(id) >= 0) return;
-	excludedRegionIds.push(id);
-	savePlan();
-	renderAvailableRegions();
-	renderExcludedRegions();
-}
-
-function removeExcluded(id) {
-	excludedRegionIds = excludedRegionIds.filter(function (x) {
-		return x !== id;
-	});
-	savePlan();
-	renderAvailableRegions();
-	renderExcludedRegions();
 }
 
 function selectedSlices() {
@@ -371,8 +314,7 @@ function targetLabel() {
 
 function isPlanValid() {
 	if (ccfAdvanced) return true;
-	if (tierId !== "full") return true;
-	return excludedRegionIds.length > 0;
+	return tierId !== "full";
 }
 
 function fillReview() {
@@ -383,10 +325,10 @@ function fillReview() {
 			selected.length + " section(s): " + selected.slice(0, 5).join(", ") +
 			(selected.length > 5 ? " …" : "");
 	}
-	if (qs("reviewExcluded")) {
-		qs("reviewExcluded").textContent = excludedRegionIds.length
-			? excludedRegionIds.length + " region(s)"
-			: "None";
+	if (qs("reviewIncluded")) {
+		qs("reviewIncluded").textContent = includedRegionIds.length
+			? includedRegionIds.length + " region(s) included"
+			: "All regions (no inclusion filter)";
 	}
 }
 
@@ -399,7 +341,7 @@ function writeConfig(annodir) {
 		annotation_dir: annodir,
 		tier_id: ccfAdvanced ? null : tierId,
 		st_level: ccfAdvanced ? stLevel : null,
-		excluded_region_ids: excludedRegionIds.slice(),
+		included_region_ids: includedRegionIds.slice(),
 		slice_ids: selectedSlices(),
 	};
 	fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
@@ -451,7 +393,7 @@ function startRun() {
 		return;
 	}
 	if (!isPlanValid()) {
-		alert("Choose a coarser hierarchy or add excluded regions.");
+		alert("Choose a coarser hierarchy than full detail.");
 		return;
 	}
 	savePlan();
@@ -553,7 +495,7 @@ function bindUi() {
 	if (qs("step2Next")) {
 		qs("step2Next").addEventListener("click", function () {
 			if (!isPlanValid()) {
-				alert("Choose a coarser hierarchy or add excluded regions.");
+				alert("Choose a coarser hierarchy than full detail.");
 				return;
 			}
 			fillReview();

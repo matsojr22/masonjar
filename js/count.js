@@ -17,7 +17,6 @@ var annodir = document.getElementById("annodir");
 var outdir = document.getElementById("outdir");
 var loadbar = document.getElementById("loadbar");
 var loadmessage = document.getElementById("loadmessage");
-var layerinfo = document.getElementById("layerinfo");
 var back = document.getElementById("back");
 var predictionRunRow = document.getElementById("predictionRunRow");
 var predictionRunSelect = document.getElementById("predictionRunSelect");
@@ -130,7 +129,6 @@ run.addEventListener("click", function () {
 		var slug = pipelineRuns.buildRunSlug("count", {
 			predictionRunRel: predRel,
 			slicesRunRel: slicesRel,
-			layerinfo: layerinfo.checked,
 			subsetCount: plan.toProcess.length,
 		});
 		var useFlat = flatOutput && flatOutput.checked;
@@ -151,12 +149,10 @@ run.addEventListener("click", function () {
 		if (plan.summary && loadmessage) {
 			loadmessage.innerHTML = plan.summary;
 		}
-		var should_layer = layerinfo.checked;
 		ipc.send("runCount", [
 			preddir.value,
 			annodir.value,
 			finalOut,
-			should_layer,
 			plan.sliceListPath || "",
 		]);
 	}

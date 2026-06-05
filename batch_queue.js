@@ -710,7 +710,6 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
         const slug = buildRunSlug("count", {
             predictionRunRel: predRunRel,
             slicesRunRel,
-            layerinfo: !!params.layerinfo,
         });
         const base = (0, batch_paths_1.resolveRolePath)(proj.path, roles, "quantification");
         const finalOut = resolveRunLeaf(base, "count", slug);
@@ -725,9 +724,6 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
             "-m",
             structPath,
         ];
-        if (params.layerinfo) {
-            args.push("--layers");
-        }
         if (sliceListPath) {
             args.push("--slice-list", sliceListPath);
         }

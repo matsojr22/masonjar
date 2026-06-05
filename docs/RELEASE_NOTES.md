@@ -6,6 +6,30 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.1.0
+
+**What's new**
+
+Sharpen and Top-hat wizards are faster and easier to tune: pan and zoom stay responsive, display min/max sliders help you see faint tissue, and you click **Preview filter** when you want to see the filtered result. The Viewer/Editor gives images more room with a collapsible parcellation drawer, a background-channel dropdown (including pipeline DAPI when previews are missing), and a search box for paint-brush regions. Bulk parcellation now uses an **Included regions** list with multi-select. Count Brain no longer has the confusing **Save layer info** checkbox — use parcellation instead. Tissue edge cleanup only shows green/red overlays after you start editing a mask.
+
+**Changes**
+
+- Preprocess wizards: manual filter preview, optional auto-refresh after pan, display window sliders.
+- Viewer/Editor: QSplitter parcellation drawer, channel combo, region search; bulk parcellation removed from single-section view.
+- Parcellation (bulk): include-region dual list; `included_region_ids` in config.
+- Count: removed layer-info option from UI and batch.
+- Tissue cleanup: mask overlay hidden until edit; auto mask polarity fix.
+
+**Commit subject**
+
+Sharpen and Adjust UX improvements plus parcellation include list for v3.1
+
+**Commit body**
+
+Mason Jar 3.1.0 makes preprocess previews manual and fast, reworks the Adjust layout, switches bulk parcellation to included regions, drops Count layer info, and fixes tissue mask overlay semantics.
+
+---
+
 ## v3.0.0
 
 **What's new**

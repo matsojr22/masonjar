@@ -17,6 +17,8 @@ function createTissueCleanupCanvas(opts) {
 		image: null,
 		imageUrl: "",
 		mask: null,
+		maskVisible: false,
+		sliceUntouched: true,
 		scale: 1,
 		panX: 0,
 		panY: 0,
@@ -94,6 +96,32 @@ function createTissueCleanupCanvas(opts) {
 		}
 		ctx.clearRect(0, 0, canvas.width, canvas.height);
 		ctx.drawImage(state.image, 0, 0);
+		if (
+			!state.maskVisible ||
+			(state.sliceUntouched && maskIsAllKeep())
+		) {
+			if (state.mode === "trace" && state.tracePoints.length > 0) {
+				ctx.strokeStyle = "#00e5ff";
+				ctx.fillStyle = "#00e5ff";
+				ctx.lineWidth = 12;
+				ctx.lineCap = "round";
+				ctx.lineJoin = "round";
+				if (state.tracePoints.length === 1) {
+					var tp0 = state.tracePoints[0];
+					ctx.beginPath();
+					ctx.arc(tp0.x, tp0.y, 6, 0, Math.PI * 2);
+					ctx.fill();
+				} else {
+					ctx.beginPath();
+					ctx.moveTo(state.tracePoints[0].x, state.tracePoints[0].y);
+					for (var tp = 1; tp < state.tracePoints.length; tp++) {
+						ctx.lineTo(state.tracePoints[tp].x, state.tracePoints[tp].y);
+					}
+					ctx.stroke();
+				}
+			}
+			return;
+		}
 		var overlay = document.createElement("canvas");
 		overlay.width = canvas.width;
 		overlay.height = canvas.height;
@@ -299,6 +327,18 @@ function createTissueCleanupCanvas(opts) {
 		var mctx = state.mask.getContext("2d");
 		mctx.fillStyle = "#ffffff";
 		mctx.fillRect(0, 0, state.mask.width, state.mask.height);
+		state.maskVisible = false;
+		state.sliceUntouched = true;
+		draw();
+	}
+
+	function setMaskVisible(visible) {
+		state.maskVisible = !!visible;
+		draw();
+	}
+
+	function setSliceUntouched(untouched) {
+		state.sliceUntouched = !!untouched;
 		draw();
 	}
 
@@ -397,6 +437,8 @@ function createTissueCleanupCanvas(opts) {
 				pushUndo();
 				erasedDuringStroke = true;
 				painting = true;
+				state.maskVisible = true;
+				state.sliceUntouched = false;
 				paintErase(pt.x, pt.y);
 				return;
 			}
@@ -437,6 +479,8 @@ function createTissueCleanupCanvas(opts) {
 		loadMaskFromFile: loadMaskFromFile,
 		exportMaskPngPath: exportMaskPngPath,
 		resetMaskAllKeep: resetMaskAllKeep,
+		setMaskVisible: setMaskVisible,
+		setSliceUntouched: setSliceUntouched,
 		maskIsAllKeep: maskIsAllKeep,
 		setMode: setMode,
 		undo: undo,

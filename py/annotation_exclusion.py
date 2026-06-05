@@ -46,3 +46,34 @@ def apply_exclusion(
     if excluded_pixels:
         out[mask] = np.uint32(0)
     return out, excluded_pixels
+
+
+def expand_included_ids(
+    structure_map: dict,
+    included_region_ids: list[int] | None,
+    *,
+    descendants: bool = True,
+) -> set[int]:
+    """Return atlas ids to keep (included roots plus optional descendants)."""
+    return expand_excluded_ids(
+        structure_map,
+        included_region_ids,
+        descendants=descendants,
+    )
+
+
+def apply_inclusion(
+    label_array: np.ndarray,
+    included_ids: set[int] | list[int],
+) -> tuple[np.ndarray, int]:
+    """Zero pixels **not** in *included_ids*; return (array, zeroed_pixel_count)."""
+    arr = np.asarray(label_array, dtype=np.uint32)
+    if not included_ids:
+        return arr.copy(), 0
+    keep_set = {int(x) for x in included_ids}
+    out = arr.copy()
+    mask = ~np.isin(out, list(keep_set))
+    zeroed_pixels = int(np.count_nonzero(mask & (out != 0)))
+    if np.any(mask):
+        out[mask] = np.uint32(0)
+    return out, zeroed_pixels

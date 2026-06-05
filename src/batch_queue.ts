@@ -614,11 +614,8 @@ function preflightJob(
     const stLevel = ccfAdvanced
       ? (pParams.stLevel != null ? Number(pParams.stLevel) : 6)
       : null;
-    const excluded = (pParams.excludedRegionIds as number[]) || [];
-    if (!ccfAdvanced && tierId === "full" && excluded.length === 0) {
-      return { skip: true, reason: "no parcellation change" };
-    }
-    if (ccfAdvanced && stLevel == null && excluded.length === 0) {
+    const included = (pParams.includedRegionIds as number[]) || [];
+    if (!ccfAdvanced && tierId === "full" && included.length === 0) {
       return { skip: true, reason: "no parcellation change" };
     }
   }
@@ -934,7 +931,6 @@ function buildJob(
     const slug = buildRunSlug("count", {
       predictionRunRel: predRunRel,
       slicesRunRel,
-      layerinfo: !!params.layerinfo,
     });
     const base = resolveRolePath(proj.path, roles, "quantification");
     const finalOut = resolveRunLeaf(base, "count", slug);
@@ -949,9 +945,6 @@ function buildJob(
       "-m",
       structPath,
     ];
-    if (params.layerinfo) {
-      args.push("--layers");
-    }
     if (sliceListPath) {
       args.push("--slice-list", sliceListPath);
     }
@@ -1124,7 +1117,7 @@ function buildJob(
       st_level: pParams.ccfAdvanced
         ? (pParams.stLevel != null ? Number(pParams.stLevel) : 6)
         : null,
-      excluded_region_ids: pParams.excludedRegionIds || [],
+      included_region_ids: pParams.includedRegionIds || [],
       slice_ids: null,
     };
     const metaPath = ensureMetaDir(proj.path);

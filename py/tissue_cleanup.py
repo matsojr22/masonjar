@@ -16,7 +16,12 @@ import tifffile as tiff
 
 from bundle_slice_paths import paths_for_slice
 from czi_common import emit_log, emit_result, load_import_config
-from tissue_mask import isolate_tissue_mask, parse_stroke_points, wizard_mask_kwargs
+from tissue_mask import (
+    ensure_keep_mask_polarity,
+    isolate_tissue_mask,
+    parse_stroke_points,
+    wizard_mask_kwargs,
+)
 
 VALID_EXTENSIONS = {".png", ".tif", ".tiff"}
 TRACE_WIDTH = 12
@@ -344,6 +349,7 @@ def run_auto_preview(args) -> int:
     gray = load_grayscale_u8(preview_path)
     edge_shrink = int(getattr(args, "edge_shrink", 2) or 2)
     keep = auto_keep_mask(gray, edge_shrink_px=edge_shrink)
+    keep = ensure_keep_mask_polarity(gray, keep)
     out_mask = _preview_mask_out_path(args, preview_path)
     out_mask.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_mask), keep)
@@ -380,6 +386,7 @@ def run_guided_preview(args) -> int:
     gray = load_grayscale_u8(preview_path)
     edge_shrink = int(getattr(args, "edge_shrink", 2) or 2)
     keep = guided_keep_mask(gray, stroke_points, edge_shrink_px=edge_shrink)
+    keep = ensure_keep_mask_polarity(gray, keep)
     out_mask = _preview_mask_out_path(args, preview_path)
     out_mask.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_mask), keep)

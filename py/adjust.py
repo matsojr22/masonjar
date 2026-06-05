@@ -19,12 +19,12 @@ from qtpy.QtWidgets import (
     QMessageBox,
     QLineEdit,
     QListWidget,
-    QButtonGroup,
     QComboBox,
     QCompleter,
     QGroupBox,
-    QListWidget,
     QListWidgetItem,
+    QSplitter,
+    QFrame,
 )
 from qtpy.QtGui import QImage, QPixmap, QPainter, QColor
 from qtpy.QtCore import Qt, QPoint, QEvent
@@ -190,13 +190,31 @@ class AnnotationViewer(QMainWindow):
 
         channel_row = QHBoxLayout()
         channel_row.addWidget(QLabel("Background channel:", self))
-        self.channel_buttons_container = QHBoxLayout()
-        channel_row.addLayout(self.channel_buttons_container)
+        self.channel_combo = QComboBox(self)
+        self.channel_combo.setMinimumWidth(220)
+        self.channel_combo.currentIndexChanged.connect(self._on_channel_combo_changed)
+        channel_row.addWidget(self.channel_combo)
         channel_row.addStretch()
-        self.channel_button_group = QButtonGroup(self)
-        self.channel_button_group.setExclusive(True)
-        self.channel_button_group.idClicked.connect(self._on_channel_selected)
         ui_layout.addLayout(channel_row)
+
+        paint_title = QLabel("Paint brush — atlas region to draw", self)
+        font = paint_title.font()
+        font.setBold(True)
+        paint_title.setFont(font)
+        ui_layout.addWidget(paint_title)
+
+        search_row = QHBoxLayout()
+        search_row.addWidget(QLabel("Search:", self))
+        self.area_search_box = QLineEdit(self)
+        self.area_search_box.setPlaceholderText("Acronym or region name")
+        search_completer = QCompleter(self)
+        search_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        search_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.area_search_box.setCompleter(search_completer)
+        self.area_search_box.textEdited.connect(self._on_area_search_box_edited)
+        search_completer.activated.connect(self._on_area_search_completer_activated)
+        search_row.addWidget(self.area_search_box)
+        ui_layout.addLayout(search_row)
 
         paint_row = QHBoxLayout()
         paint_row.addWidget(QLabel("Hierarchy:", self))
@@ -237,16 +255,24 @@ class AnnotationViewer(QMainWindow):
         self.ccf_advanced_help.setVisible(False)
         ui_layout.addWidget(self.ccf_advanced_help)
         self.paint_hint_label = QLabel(
-            "Select area for brush; right-click slice still picks existing labels.",
+            "Search or pick a region; right-click the atlas image to pick from the slice.",
             self,
         )
         self.paint_hint_label.setWordWrap(True)
         ui_layout.addWidget(self.paint_hint_label)
         self._init_paint_region_controls()
-        self._init_parcellation_controls(ui_layout)
 
-        # images
-        image_layout = QHBoxLayout()
+        self.controls_dock = QWidget(self)
+        controls_dock_layout = QVBoxLayout()
+        controls_dock_layout.setContentsMargins(0, 0, 0, 0)
+        self._init_parcellation_controls(controls_dock_layout)
+        self.controls_dock.setLayout(controls_dock_layout)
+
+        self.parcel_drawer_toggle = QPushButton("▼ Parcellation tools", self)
+        self.parcel_drawer_toggle.setFlat(True)
+        self.parcel_drawer_toggle.clicked.connect(self._toggle_parcel_drawer)
+        self.parcel_drawer_collapsed = False
+
         self.img_view = QGraphicsView(self)
         self.anno_view = QGraphicsView(self)
         self.anno_scene = QGraphicsScene(self)
@@ -256,7 +282,7 @@ class AnnotationViewer(QMainWindow):
         self.img_pixmap = QPixmap()
         self.img_view.setScene(self.img_scene)
         self._update_section_labels()
-        self.rebuild_channel_buttons()
+        self.rebuild_channel_combo()
 
         self.is_drawing = False
         self.last_draw_point = None
@@ -267,10 +293,21 @@ class AnnotationViewer(QMainWindow):
             Qt.WidgetAttribute.WA_AcceptTouchEvents, False
         )
 
+        image_layout = QHBoxLayout()
         image_layout.addWidget(self.img_view)
         image_layout.addWidget(self.anno_view)
+        self.image_panel = QWidget(self)
+        self.image_panel.setLayout(image_layout)
 
-        ui_layout.addLayout(image_layout)
+        self.main_splitter = QSplitter(Qt.Orientation.Vertical, self)
+        self.main_splitter.addWidget(self.controls_dock)
+        self.main_splitter.addWidget(self.image_panel)
+        self.main_splitter.setStretchFactor(0, 1)
+        self.main_splitter.setStretchFactor(1, 3)
+        self.main_splitter.setSizes([280, 720])
+
+        ui_layout.addWidget(self.parcel_drawer_toggle)
+        ui_layout.addWidget(self.main_splitter)
         # Loading labels
         # Bottom widget for controls
         controls_layout = QVBoxLayout()
@@ -386,36 +423,97 @@ class AnnotationViewer(QMainWindow):
         )
         self.setWindowTitle(f"Adjustment Viewer — {slice_id}")
 
-    def rebuild_channel_buttons(self):
-        """Rebuild channel buttons for the current slice."""
-        while self.channel_buttons_container.count():
-            item = self.channel_buttons_container.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        for button in list(self.channel_button_group.buttons()):
-            self.channel_button_group.removeButton(button)
+    def rebuild_channel_combo(self):
+        """Rebuild background channel combo for the current slice."""
+        self.channel_combo.blockSignals(True)
+        self.channel_combo.clear()
 
         _, _, slice_id = self.pairs[self.current_index]
         self.channel_sources = lowres_channels_for_slice(
             self.images_dir, slice_id, self.previews_dir
         )
 
-        default_id = 0
-        for i, (name, _) in enumerate(self.channel_sources):
-            btn = QPushButton(name, self)
-            btn.setCheckable(True)
-            self.channel_button_group.addButton(btn, i)
-            self.channel_buttons_container.addWidget(btn)
-            if name == "DAPI":
-                default_id = i
-
         if not self.channel_sources:
+            self.channel_combo.addItem("No preview channels found", None)
+            self.channel_combo.setEnabled(False)
+            self.channel_combo.blockSignals(False)
+            self.status_bar.showMessage(
+                "No preview channels — add _previews PNGs or 00_dapi PNG for this slice."
+            )
             return
 
-        self.channel_button_group.button(default_id).setChecked(True)
-        name, path = self.channel_sources[default_id]
+        default_index = 0
+        self.channel_combo.setEnabled(True)
+        for i, (name, path) in enumerate(self.channel_sources):
+            self.channel_combo.addItem(name, str(path))
+            if name in ("DAPI", "DAPI (pipeline)", "Dapi"):
+                default_index = i
+
+        self.channel_combo.setCurrentIndex(default_index)
+        self.channel_combo.blockSignals(False)
+        name, path = self.channel_sources[default_index]
         self.switch_channel(path, name)
+
+    def _on_channel_combo_changed(self, index: int):
+        if index < 0 or index >= len(self.channel_sources):
+            return
+        name, path = self.channel_sources[index]
+        self.switch_channel(path, name)
+
+    def _toggle_parcel_drawer(self):
+        self.parcel_drawer_collapsed = not self.parcel_drawer_collapsed
+        if self.parcel_drawer_collapsed:
+            self._parcellation_saved_sizes = self.main_splitter.sizes()
+            self.controls_dock.setVisible(False)
+            self.parcel_drawer_toggle.setText("▶ Parcellation tools")
+            total = sum(self.main_splitter.sizes()) or 1
+            self.main_splitter.setSizes([0, total])
+        else:
+            self.controls_dock.setVisible(True)
+            self.parcel_drawer_toggle.setText("▼ Parcellation tools")
+            saved = getattr(self, "_parcellation_saved_sizes", None)
+            self.main_splitter.setSizes(saved if saved else [280, 720])
+
+    def _flatten_catalog_regions(self, query: str = "") -> list[dict]:
+        if not self.catalog:
+            return []
+        q = query.strip().lower()
+        out: list[dict] = []
+        for node in self.catalog.get("byId", {}).values():
+            if not node:
+                continue
+            hay = f"{node.get('acronym', '')} {node.get('name', '')}".lower()
+            if not q or q in hay:
+                out.append(node)
+        out.sort(key=lambda n: str(n.get("acronym", "")))
+        return out
+
+    def _refresh_search_completer(self, query: str = ""):
+        completer = self.area_search_box.completer()
+        if completer is None:
+            return
+        regions = self._flatten_catalog_regions(query)
+        strings = [self._region_display_text(n) for n in regions[:500]]
+        from qtpy.QtCore import QStringListModel
+
+        completer.setModel(QStringListModel(strings))
+
+    def _on_area_search_box_edited(self, text: str):
+        self._refresh_search_completer(text)
+        if self.catalog:
+            self._rebuild_area_combo(text)
+
+    def _on_area_search_completer_activated(self, text: str):
+        if not self.catalog:
+            return
+        for node in self._flatten_catalog_regions():
+            if self._region_display_text(node) == text:
+                self._sync_area_combo_to_region(node["id"])
+                self.set_paint_region(node["id"])
+                self.area_search_box.blockSignals(True)
+                self.area_search_box.setText(text)
+                self.area_search_box.blockSignals(False)
+                break
 
     def _init_paint_region_controls(self):
         """Populate hierarchy/area combos from the CCF catalog."""
@@ -655,19 +753,6 @@ class AnnotationViewer(QMainWindow):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        bulk_row = QHBoxLayout()
-        self.parcel_select_all = QCheckBox("Select all sections", self)
-        self.parcel_select_all.toggled.connect(self._on_parcel_select_all)
-        bulk_row.addWidget(self.parcel_select_all)
-        self.parcel_confirm_each = QCheckBox("Confirm each section", self)
-        bulk_row.addWidget(self.parcel_confirm_each)
-        bulk_row.addStretch()
-        layout.addLayout(bulk_row)
-
-        self.parcel_slice_list = QListWidget(self)
-        self.parcel_slice_list.setMaximumHeight(120)
-        layout.addWidget(self.parcel_slice_list)
-
         exclude_row = QHBoxLayout()
         self.parcel_exclude_button = QPushButton("Exclude selected area", self)
         self.parcel_exclude_button.setToolTip(
@@ -684,17 +769,6 @@ class AnnotationViewer(QMainWindow):
         self.parcel_exclude_list = QListWidget(self)
         self.parcel_exclude_list.setMaximumHeight(80)
         layout.addWidget(self.parcel_exclude_list)
-
-        bulk_btn_row = QHBoxLayout()
-        self.parcel_apply_selected_button = QPushButton(
-            "Apply to selected sections…", self
-        )
-        self.parcel_apply_selected_button.clicked.connect(
-            self.apply_parcellation_to_selected
-        )
-        bulk_btn_row.addWidget(self.parcel_apply_selected_button)
-        bulk_btn_row.addStretch()
-        layout.addLayout(bulk_btn_row)
 
         group.setLayout(layout)
         ui_layout.addWidget(group)
@@ -735,34 +809,7 @@ class AnnotationViewer(QMainWindow):
         self.parcel_level_combo.setCurrentIndex(default_level_index)
         self.parcel_level_combo.blockSignals(False)
 
-        self._populate_parcel_slice_list()
         self._sync_parcellation_ui_from_metadata()
-
-    def _populate_parcel_slice_list(self):
-        self.parcel_slice_list.blockSignals(True)
-        self.parcel_slice_list.clear()
-        current_sid = self._current_slice_id()
-        for i, (_, _, slice_id) in enumerate(self.pairs):
-            item = QListWidgetItem(f"{slice_id} ({i + 1}/{len(self.pairs)})")
-            item.setData(Qt.ItemDataRole.UserRole, slice_id)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            checked = Qt.CheckState.Checked if slice_id == current_sid else Qt.CheckState.Unchecked
-            item.setCheckState(checked)
-            self.parcel_slice_list.addItem(item)
-        self.parcel_slice_list.blockSignals(False)
-
-    def _on_parcel_select_all(self, checked: bool):
-        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
-        for i in range(self.parcel_slice_list.count()):
-            self.parcel_slice_list.item(i).setCheckState(state)
-
-    def _checked_slice_ids(self) -> list[str]:
-        out: list[str] = []
-        for i in range(self.parcel_slice_list.count()):
-            item = self.parcel_slice_list.item(i)
-            if item.checkState() == Qt.CheckState.Checked:
-                out.append(str(item.data(Qt.ItemDataRole.UserRole)))
-        return out
 
     def _parcel_excluded_region_ids(self) -> list[int]:
         return list(self.parcel_excluded_ids)
@@ -1036,35 +1083,6 @@ class AnnotationViewer(QMainWindow):
         self._update_parcellation_labels()
         return True
 
-    def _set_parcel_bulk_busy(self, busy: bool) -> None:
-        widgets = [
-            self.parcel_tier_combo,
-            self.parcel_level_combo,
-            self.parcel_ccf_advanced_toggle,
-            self.parcel_preview_toggle,
-            self.parcel_apply_button,
-            self.parcel_restore_button,
-            self.parcel_select_all,
-            self.parcel_confirm_each,
-            self.parcel_slice_list,
-            self.parcel_exclude_button,
-            self.parcel_clear_exclude_button,
-            self.parcel_exclude_list,
-            self.parcel_apply_selected_button,
-            self.tier_combo,
-            self.level_combo,
-            self.area_combo,
-            self.brush_slider,
-            self.convert_button,
-            self.refresh_button,
-        ]
-        for widget in widgets:
-            if widget is not None:
-                widget.setEnabled(not busy)
-        if busy:
-            self.status_bar.showMessage("Applying parcellation to selected sections…")
-        QApplication.processEvents()
-
     def apply_parcellation(self):
         tier_id, st_level = self._parcel_target()
         if tier_id == FULL_DETAIL_TIER and not self._parcel_excluded_region_ids():
@@ -1079,97 +1097,6 @@ class AnnotationViewer(QMainWindow):
             st_level=st_level,
             update_metadata=True,
             write_disk=False,
-        )
-
-    def apply_parcellation_to_selected(self):
-        tier_id, st_level = self._parcel_target()
-        if tier_id == FULL_DETAIL_TIER and not self._parcel_excluded_region_ids():
-            QMessageBox.information(
-                self,
-                "Full detail",
-                "Choose a coarser parcellation target or add excludes.",
-            )
-            return
-        selected = self._checked_slice_ids()
-        if not selected:
-            QMessageBox.warning(self, "No sections", "Select at least one section.")
-            return
-
-        target_label = parcellation_target_label(
-            self.catalog,
-            tier_id=tier_id,
-            st_level=st_level,
-            ccf_advanced=self.parcel_ccf_advanced,
-        )
-        preview = ", ".join(selected[:5])
-        if len(selected) > 5:
-            preview += f", … and {len(selected) - 5} more"
-        dialog = QMessageBox(self)
-        dialog.setIcon(QMessageBox.Icon.Warning)
-        dialog.setWindowTitle("Apply parcellation")
-        dialog.setText(f"Apply parcellation to {len(selected)} sections?")
-        unsaved = (
-            "\n\nYou have unsaved brush strokes on the current section."
-            if self.was_changed
-            else ""
-        )
-        dialog.setInformativeText(
-            f"Target: {target_label}. Sections: {preview}.\n"
-            "Manual brush adjustments on selected sections will be reverted."
-            f"{unsaved}\n\nUnchecked sections are not changed."
-        )
-        dialog.setStandardButtons(
-            QMessageBox.StandardButton.Apply | QMessageBox.StandardButton.Cancel
-        )
-        if dialog.exec() != QMessageBox.StandardButton.Apply:
-            return
-
-        self._set_parcel_bulk_busy(True)
-        self.parcel_preview = False
-        self.parcel_preview_toggle.setChecked(False)
-        self.parcel_preview_array = None
-
-        ok_count = 0
-        fail_count = 0
-        confirm_each = self.parcel_confirm_each.isChecked()
-        try:
-            for i, sid in enumerate(selected):
-                self.status_bar.showMessage(
-                    f"Parcellation {i + 1}/{len(selected)}: {sid}"
-                )
-                QApplication.processEvents()
-                if confirm_each:
-                    if not self._confirm_parcellation_apply(sid, target_label):
-                        continue
-                result = apply_parcellation_to_slice(
-                    self.annotation_dir,
-                    sid,
-                    tier_id=tier_id,
-                    st_level=st_level,
-                    excluded_region_ids=self._parcel_excluded_region_ids() or None,
-                    structure_map=self.structure_map,
-                    catalog=self.catalog,
-                    write_disk=True,
-                )
-                if result.ok:
-                    ok_count += 1
-                else:
-                    fail_count += 1
-        finally:
-            self._set_parcel_bulk_busy(False)
-
-        current_sid = self._current_slice_id()
-        if current_sid in selected:
-            pkl_path = self.annotation_dir / f"Annotation_{current_sid}.pkl"
-            if pkl_path.is_file():
-                with pkl_path.open("rb") as f:
-                    self.current_label = pickle.load(f)
-                self.was_changed = False
-                self.show_image_with_overlay()
-
-        self._sync_parcellation_ui_from_metadata()
-        self.status_bar.showMessage(
-            f"Bulk parcellation: {ok_count} ok, {fail_count} failed"
         )
 
     def restore_fine_parcellation(self):
@@ -1221,12 +1148,6 @@ class AnnotationViewer(QMainWindow):
         self.parcel_preview_array = None
         self._sync_parcellation_ui_from_metadata()
         self.show_image_with_overlay()
-
-    def _on_channel_selected(self, button_id: int):
-        if button_id < 0 or button_id >= len(self.channel_sources):
-            return
-        name, path = self.channel_sources[button_id]
-        self.switch_channel(path, name)
 
     def switch_channel(self, path, display_name):
         """Load a low-res background image and refresh the annotation overlay."""
@@ -1416,8 +1337,7 @@ class AnnotationViewer(QMainWindow):
             self.was_changed = False
             self._update_section_labels()
             self._sync_parcellation_ui_from_metadata()
-            self.rebuild_channel_buttons()
-            self._populate_parcel_slice_list()
+            self.rebuild_channel_combo()
             self.show_image_with_overlay()
 
     def next_image(self):
@@ -1438,8 +1358,7 @@ class AnnotationViewer(QMainWindow):
             self.was_changed = False
             self._update_section_labels()
             self._sync_parcellation_ui_from_metadata()
-            self.rebuild_channel_buttons()
-            self._populate_parcel_slice_list()
+            self.rebuild_channel_combo()
             self.show_image_with_overlay()
 
     def view_to_image_coordinates(self, view, point):
