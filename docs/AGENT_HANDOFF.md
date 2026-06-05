@@ -1,6 +1,6 @@
 # Agent session handoff
 
-Last updated: 2026-06-05 (Settings → Network v3.2.3). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-05 (Viewer/Editor UX v3.2.4). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
 
@@ -8,9 +8,11 @@ Last updated: 2026-06-05 (Settings → Network v3.2.3). Use this file to resume 
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **3.2.3** |
-| Latest tag | `v3.2.3` (pre-release on GitHub) |
+| `package.json` version | **3.2.4** |
+| Latest tag | `v3.2.4` (pre-release on GitHub, pending publish) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v3.2.4** — **Viewer/Editor UX**: [`py/adjust.py`](../py/adjust.py) compact toolbars + paint-target strip + brush cursor; `resolve_label_color` overlay fix; stroke-end/undo/refresh full recolor; floatable **Parcellation** `QDockWidget`; preview excludes; metadata exclude reload. Tests: `python/tests/test_adjust_brush_overlay.py`.
 
 **v3.2.3** — **Settings → Network**: moved fair-share UI off start hub; [`pages/settings.html`](../pages/settings.html) + [`pages/settings_network.html`](../pages/settings_network.html); **Select network drives…** multi-picker → `normalizeNasPathPrefix` / `mergeNasPathPrefixes` → shared `config.json` `nas_path_prefixes`; status fields `nas_path_prefixes`, `shared_config_path`, `shared_link_mbps`; IPC `showOpenNetworkLocationsDialog`, `ioFairshareSharedConfigError`. Docs [`docs/LAB_NETWORK.md`](LAB_NETWORK.md). Tests/smoke extended.
 

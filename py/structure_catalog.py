@@ -432,3 +432,44 @@ def list_regions_at_level(
 
 def get_region(region_id: int, catalog: dict[str, Any]) -> dict[str, Any] | None:
     return catalog["by_id"].get(int(region_id))
+
+
+def _structure_map_entry(structure_map: dict, atlas_id: int) -> dict[str, Any] | None:
+    """Lookup structure_map entry tolerating int / uint32 keys."""
+    import numpy as np
+
+    for key in (int(atlas_id), np.uint32(int(atlas_id))):
+        if key in structure_map:
+            return structure_map[key]
+    return None
+
+
+def _hex_triplet_to_rgb(hex_value: str) -> tuple[int, int, int]:
+    hex_str = str(hex_value or "").lstrip("#")
+    if len(hex_str) != 6:
+        return (128, 128, 128)
+    return (
+        int(hex_str[0:2], 16),
+        int(hex_str[2:4], 16),
+        int(hex_str[4:6], 16),
+    )
+
+
+def resolve_label_color(
+    label_id: int,
+    structure_map: dict,
+    catalog: dict[str, Any] | None = None,
+) -> tuple[int, int, int]:
+    """RGB triplet for overlay painting; structure_map first, then catalog hex."""
+    lid = int(label_id)
+    if lid == 0:
+        return (0, 0, 0)
+    info = _structure_map_entry(structure_map, lid)
+    if info and info.get("color"):
+        c = info["color"]
+        return (int(c[0]), int(c[1]), int(c[2]))
+    if catalog:
+        node = get_region(lid, catalog)
+        if node and node.get("color_hex_triplet"):
+            return _hex_triplet_to_rgb(node["color_hex_triplet"])
+    return (128, 128, 128)

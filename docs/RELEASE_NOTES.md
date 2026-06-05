@@ -6,6 +6,24 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.2.4
+
+**What's new**
+
+Viewer/Editor (Adjust) is easier to use: a compact paint toolbar, always-visible paint target, working refresh after brush strokes, and parcellation in a detachable side panel.
+
+**Changes**
+
+- Brush strokes show correct atlas colors when you finish painting, refresh, or undo.
+- Paint-target strip shows region name, color, tier, and adjustment state; brush cursor ring when painting is enabled.
+- Parcellation opens in a floatable dock (toggle **Parcellation…**); rollup preview respects exclude list.
+
+**Commit subject**
+
+Viewer/Editor brush overlay fix and compact parcellation dock
+
+---
+
 ## v3.2.3
 
 **What's new**

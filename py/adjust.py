@@ -8,6 +8,7 @@ from qtpy.QtWidgets import (
     QMainWindow,
     QGraphicsView,
     QGraphicsScene,
+    QGraphicsEllipseItem,
     QVBoxLayout,
     QPushButton,
     QHBoxLayout,
@@ -23,10 +24,12 @@ from qtpy.QtWidgets import (
     QCompleter,
     QGroupBox,
     QListWidgetItem,
-    QSplitter,
     QFrame,
+    QToolBar,
+    QDockWidget,
+    QSizePolicy,
 )
-from qtpy.QtGui import QImage, QPixmap, QPainter, QColor
+from qtpy.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QBrush
 from qtpy.QtCore import Qt, QPoint, QEvent
 from slice_atlas import add_outlines
 from adjust_channels import (
@@ -37,6 +40,7 @@ from slice_index import build_adjust_pairs
 from structure_catalog import (
     CCF_ADVANCED_HELP,
     FULL_DETAIL_TIER,
+    _structure_map_entry,
     format_ccf_level_label,
     get_region,
     list_ccf_levels,
@@ -44,7 +48,9 @@ from structure_catalog import (
     list_regions_for_tier,
     list_tiers,
     load_catalog,
+    resolve_label_color,
 )
+from annotation_exclusion import expand_excluded_ids, apply_exclusion
 from apply_parcellation import (
     apply_parcellation_to_slice,
     restore_slice_from_backup,
@@ -163,6 +169,8 @@ class AnnotationViewer(QMainWindow):
         self.selected_region_id = None
         self.selected_region_name = "None"
         self._overlay_ready = False
+        self._img_pixmap_item = None
+        self._anno_pixmap_item = None
 
         self.annotation_dir = Path(pairs[0][1]).parent
         self.parcel_ccf_advanced = False
@@ -182,105 +190,69 @@ class AnnotationViewer(QMainWindow):
         self.initUI()
 
     def initUI(self):
-        ui_layout = QVBoxLayout()
-
         self.section_info_label = QLabel("", self)
         self.section_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ui_layout.addWidget(self.section_info_label)
 
-        channel_row = QHBoxLayout()
-        channel_row.addWidget(QLabel("Background channel:", self))
-        self.channel_combo = QComboBox(self)
-        self.channel_combo.setMinimumWidth(220)
-        self.channel_combo.currentIndexChanged.connect(self._on_channel_combo_changed)
-        channel_row.addWidget(self.channel_combo)
-        channel_row.addStretch()
-        ui_layout.addLayout(channel_row)
-
-        paint_title = QLabel("Paint brush — atlas region to draw", self)
-        font = paint_title.font()
-        font.setBold(True)
-        paint_title.setFont(font)
-        ui_layout.addWidget(paint_title)
-
-        search_row = QHBoxLayout()
-        search_row.addWidget(QLabel("Search:", self))
+        # --- Paint region controls (wired into toolbars below) ---
         self.area_search_box = QLineEdit(self)
         self.area_search_box.setPlaceholderText("Acronym or region name")
+        self.area_search_box.setToolTip("Search atlas regions by acronym or name")
         search_completer = QCompleter(self)
         search_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         search_completer.setFilterMode(Qt.MatchFlag.MatchContains)
         self.area_search_box.setCompleter(search_completer)
         self.area_search_box.textEdited.connect(self._on_area_search_box_edited)
         search_completer.activated.connect(self._on_area_search_completer_activated)
-        search_row.addWidget(self.area_search_box)
-        ui_layout.addLayout(search_row)
 
-        paint_row = QHBoxLayout()
-        paint_row.addWidget(QLabel("Hierarchy:", self))
         self.tier_combo = QComboBox(self)
+        self.tier_combo.setToolTip("Semantic hierarchy tier for region picker")
         self.tier_combo.currentIndexChanged.connect(self._on_tier_changed)
-        paint_row.addWidget(self.tier_combo)
         self.level_combo = QComboBox(self)
+        self.level_combo.setToolTip("CCFv3 structure level (advanced mode)")
         self.level_combo.currentIndexChanged.connect(self._on_level_changed)
         self.level_combo.setVisible(False)
-        paint_row.addWidget(self.level_combo)
-        paint_row.addWidget(QLabel("Area:", self))
         self.area_combo = QComboBox(self)
         self.area_combo.setEditable(True)
         self.area_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.area_combo.setMinimumWidth(280)
+        self.area_combo.setMinimumWidth(220)
+        self.area_combo.setToolTip("Atlas region to paint with the brush")
         area_completer = self.area_combo.completer()
         area_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         area_completer.setFilterMode(Qt.MatchFlag.MatchContains)
         self.area_combo.lineEdit().textChanged.connect(self._on_area_search_changed)
         self.area_combo.activated.connect(self._on_area_activated)
-        paint_row.addWidget(self.area_combo)
-        paint_row.addStretch()
-        ui_layout.addLayout(paint_row)
-        toggle_row = QHBoxLayout()
-        self.ccf_advanced_toggle = QCheckBox(
-            "Advanced — show CCFv3 raw depths", self
-        )
+        self.ccf_advanced_toggle = QCheckBox("CCFv3 depths", self)
         self.ccf_advanced_toggle.setChecked(False)
+        self.ccf_advanced_toggle.setToolTip(CCF_ADVANCED_HELP)
         self.ccf_advanced_toggle.toggled.connect(self._on_ccf_advanced_toggled)
-        toggle_row.addWidget(self.ccf_advanced_toggle)
-        toggle_row.addStretch()
-        ui_layout.addLayout(toggle_row)
-        self.ccf_advanced_help = QLabel(CCF_ADVANCED_HELP, self)
-        self.ccf_advanced_help.setWordWrap(True)
-        font = self.ccf_advanced_help.font()
-        font.setItalic(True)
-        self.ccf_advanced_help.setFont(font)
-        self.ccf_advanced_help.setVisible(False)
-        ui_layout.addWidget(self.ccf_advanced_help)
-        self.paint_hint_label = QLabel(
-            "Search or pick a region; right-click the atlas image to pick from the slice.",
-            self,
-        )
-        self.paint_hint_label.setWordWrap(True)
-        ui_layout.addWidget(self.paint_hint_label)
         self._init_paint_region_controls()
 
-        self.controls_dock = QWidget(self)
-        controls_dock_layout = QVBoxLayout()
-        controls_dock_layout.setContentsMargins(0, 0, 0, 0)
-        self._init_parcellation_controls(controls_dock_layout)
-        self.controls_dock.setLayout(controls_dock_layout)
-
-        self.parcel_drawer_toggle = QPushButton("▼ Parcellation tools", self)
-        self.parcel_drawer_toggle.setFlat(True)
-        self.parcel_drawer_toggle.clicked.connect(self._toggle_parcel_drawer)
-        self.parcel_drawer_collapsed = False
-
+        # --- Image views (central widget) ---
         self.img_view = QGraphicsView(self)
         self.anno_view = QGraphicsView(self)
         self.anno_scene = QGraphicsScene(self)
         self.anno_view.setScene(self.anno_scene)
-
         self.img_scene = QGraphicsScene(self)
         self.img_pixmap = QPixmap()
         self.img_view.setScene(self.img_scene)
+
+        self._brush_cursor_img = QGraphicsEllipseItem()
+        self._brush_cursor_img.setZValue(1000)
+        self._brush_cursor_img.setVisible(False)
+        self.img_scene.addItem(self._brush_cursor_img)
+        self._brush_cursor_anno = QGraphicsEllipseItem()
+        self._brush_cursor_anno.setZValue(1000)
+        self._brush_cursor_anno.setVisible(False)
+        self.anno_scene.addItem(self._brush_cursor_anno)
+
+        image_layout = QHBoxLayout()
+        image_layout.setContentsMargins(0, 0, 0, 0)
+        image_layout.addWidget(self.img_view)
+        image_layout.addWidget(self.anno_view)
+        self.image_panel = QWidget(self)
+        self.image_panel.setLayout(image_layout)
+        self.setCentralWidget(self.image_panel)
+
         self._update_section_labels()
         self.rebuild_channel_combo()
 
@@ -293,73 +265,90 @@ class AnnotationViewer(QMainWindow):
             Qt.WidgetAttribute.WA_AcceptTouchEvents, False
         )
 
-        image_layout = QHBoxLayout()
-        image_layout.addWidget(self.img_view)
-        image_layout.addWidget(self.anno_view)
-        self.image_panel = QWidget(self)
-        self.image_panel.setLayout(image_layout)
+        # --- Parcellation dock ---
+        self.parcel_dock = QDockWidget("Parcellation", self)
+        self.parcel_dock.setObjectName("ParcellationDock")
+        self.parcel_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+        parcel_inner = QWidget(self)
+        parcel_layout = QVBoxLayout()
+        parcel_layout.setContentsMargins(4, 4, 4, 4)
+        self._init_parcellation_controls(parcel_layout)
+        parcel_inner.setLayout(parcel_layout)
+        self.parcel_dock.setWidget(parcel_inner)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.parcel_dock)
 
-        self.main_splitter = QSplitter(Qt.Orientation.Vertical, self)
-        self.main_splitter.addWidget(self.controls_dock)
-        self.main_splitter.addWidget(self.image_panel)
-        self.main_splitter.setStretchFactor(0, 1)
-        self.main_splitter.setStretchFactor(1, 3)
-        self.main_splitter.setSizes([280, 720])
+        # --- Toolbars ---
+        info_toolbar = QToolBar("Section", self)
+        info_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, info_toolbar)
+        info_toolbar.addWidget(self.section_info_label)
 
-        ui_layout.addWidget(self.parcel_drawer_toggle)
-        ui_layout.addWidget(self.main_splitter)
-        # Loading labels
-        # Bottom widget for controls
-        controls_layout = QVBoxLayout()
-        # Buttons for nav
-        nav_layout = QHBoxLayout()
+        paint_toolbar = QToolBar("Paint", self)
+        paint_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, paint_toolbar)
+        paint_toolbar.addWidget(QLabel("Search:", self))
+        paint_toolbar.addWidget(self.area_search_box)
+        paint_toolbar.addSeparator()
+        paint_toolbar.addWidget(QLabel("Tier:", self))
+        paint_toolbar.addWidget(self.tier_combo)
+        paint_toolbar.addWidget(self.level_combo)
+        paint_toolbar.addWidget(QLabel("Area:", self))
+        paint_toolbar.addWidget(self.area_combo)
+        paint_toolbar.addWidget(self.ccf_advanced_toggle)
+
+        controls_toolbar = QToolBar("Controls", self)
+        controls_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, controls_toolbar)
+
+        self.channel_combo = QComboBox(self)
+        self.channel_combo.setMinimumWidth(180)
+        self.channel_combo.currentIndexChanged.connect(self._on_channel_combo_changed)
+        controls_toolbar.addWidget(QLabel("Channel:", self))
+        controls_toolbar.addWidget(self.channel_combo)
+
         self.prev_button = QPushButton("Previous", self)
         self.prev_button.clicked.connect(self.prev_image)
         self.next_button = QPushButton("Next", self)
         self.next_button.clicked.connect(self.next_image)
-        nav_layout.addWidget(self.prev_button)
-        nav_layout.addWidget(self.next_button)
-        controls_layout.addLayout(nav_layout)
-        # Slider for opacity
-        opacity_layout = QHBoxLayout()
+        controls_toolbar.addWidget(self.prev_button)
+        controls_toolbar.addWidget(self.next_button)
+        controls_toolbar.addSeparator()
+
         self.overlay_toggle = QPushButton("Toggle Overlay", self)
         self.overlay_toggle.clicked.connect(self.toggle_overlay)
-        opacity_layout.addWidget(self.overlay_toggle)
-        self.opacity_slider = QSlider(Qt.Horizontal)
+        controls_toolbar.addWidget(self.overlay_toggle)
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(0, 255)
         self.opacity_slider.setValue(self.opacity)
+        self.opacity_slider.setMaximumWidth(120)
         self.opacity_slider.valueChanged.connect(self.update_opacity)
         self.opacity_label = QLabel("Opacity", self)
-        opacity_layout.addWidget(self.opacity_label)
-        opacity_layout.addWidget(self.opacity_slider)
-        # slider for zoom level
-        zoom_layout = QHBoxLayout()
+        controls_toolbar.addWidget(self.opacity_label)
+        controls_toolbar.addWidget(self.opacity_slider)
+
         self.zoom_label = QLabel(f"Zoom {self.zoom_level}%", self)
-        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
         self.zoom_slider.setRange(100, 1000)
         self.zoom_slider.setValue(self.zoom_level)
+        self.zoom_slider.setMaximumWidth(120)
         self.zoom_slider.valueChanged.connect(self.update_zoom)
-        zoom_layout.addWidget(self.zoom_label)
-        zoom_layout.addWidget(self.zoom_slider)
-        controls_layout.addLayout(zoom_layout)
-        # slider for brush size
-        brush_layout = QHBoxLayout()
-        self.brush_label = QLabel(f"Brush Size {self.brush_size}", self)
-        self.brush_slider = QSlider(Qt.Horizontal)
+        controls_toolbar.addWidget(self.zoom_label)
+        controls_toolbar.addWidget(self.zoom_slider)
+
+        self.brush_label = QLabel(f"Brush {self.brush_size}", self)
+        self.brush_slider = QSlider(Qt.Orientation.Horizontal)
         self.brush_slider.setRange(1, 10)
         self.brush_slider.setValue(self.brush_size)
+        self.brush_slider.setMaximumWidth(80)
         self.brush_slider.valueChanged.connect(self.update_brush)
-        brush_layout.addWidget(self.brush_label)
-        brush_layout.addWidget(self.brush_slider)
-        controls_layout.addLayout(brush_layout)
-        adjustment_layout = QHBoxLayout()
-        self.allow_adjustment = QCheckBox("Allow Adjustment", self)
-        self.allow_adjustment.setChecked(False)
-        self.convert_button = QPushButton("Quick: layers → functional areas", self)
-        self.convert_button.setToolTip(
-            "Roll cortical layers up to functional areas on this section only."
-        )
-        self.convert_button.clicked.connect(self.convert_to_parents)
+        controls_toolbar.addWidget(self.brush_label)
+        controls_toolbar.addWidget(self.brush_slider)
+        controls_toolbar.addSeparator()
+
         self.refresh_button = QPushButton("Refresh drawings", self)
         self.refresh_button.setToolTip(
             "Redraw annotation overlay from current edits "
@@ -368,36 +357,67 @@ class AnnotationViewer(QMainWindow):
         self.refresh_button.clicked.connect(self.refresh_drawings)
         self.undo_button = QPushButton("Undo", self)
         self.undo_button.clicked.connect(self.undo_last_delta)
-
         self.save_button = QPushButton("Save", self)
         self.save_button.clicked.connect(self.save_changes)
-        adjustment_layout.addWidget(self.refresh_button)
-        adjustment_layout.addWidget(self.undo_button)
-        adjustment_layout.addWidget(self.save_button)
-        adjustment_layout.addWidget(self.convert_button)
-        adjustment_layout.addWidget(self.allow_adjustment)
+        self.allow_adjustment = QCheckBox("Allow Adjustment", self)
+        self.allow_adjustment.setChecked(False)
+        self.allow_adjustment.stateChanged.connect(
+            lambda _state: self._update_paint_target_strip()
+        )
+        controls_toolbar.addWidget(self.refresh_button)
+        controls_toolbar.addWidget(self.undo_button)
+        controls_toolbar.addWidget(self.save_button)
+        controls_toolbar.addWidget(self.allow_adjustment)
 
-        controls_layout.addLayout(opacity_layout)
-        controls_layout.addLayout(adjustment_layout)
+        dock_toolbar = QToolBar("Dock", self)
+        dock_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, dock_toolbar)
+        self.parcel_dock_button = QPushButton("Parcellation", self)
+        self.parcel_dock_button.setCheckable(True)
+        self.parcel_dock_button.setChecked(True)
+        self.parcel_dock_button.clicked.connect(self._toggle_parcel_dock)
+        dock_toolbar.addWidget(self.parcel_dock_button)
+        self.parcel_dock.visibilityChanged.connect(self._on_parcel_dock_visibility)
 
-        ui_layout.addLayout(controls_layout)
+        # --- Paint target strip ---
+        target_toolbar = QToolBar("Target", self)
+        target_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, target_toolbar)
+        self.paint_swatch = QLabel(self)
+        self.paint_swatch.setFixedSize(18, 18)
+        self.paint_swatch.setFrameShape(QFrame.Shape.Box)
+        self.paint_target_name = QLabel("None", self)
+        self.paint_tier_context = QLabel("", self)
+        self.paint_adjust_badge = QLabel("OFF", self)
+        self.paint_brush_size_label = QLabel(f"Brush {self.brush_size}px", self)
+        target_toolbar.addWidget(QLabel("Paint:", self))
+        target_toolbar.addWidget(self.paint_swatch)
+        target_toolbar.addWidget(self.paint_target_name)
+        target_toolbar.addSeparator()
+        target_toolbar.addWidget(self.paint_tier_context)
+        target_toolbar.addSeparator()
+        target_toolbar.addWidget(self.paint_adjust_badge)
+        target_toolbar.addWidget(self.paint_brush_size_label)
 
-        # Status bar for displaying region information
+        # Status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
 
-        # Set an event filter to track mouse movements on the annotation view
         self.anno_view.setMouseTracking(True)
         self.anno_view.viewport().installEventFilter(self)
-
         self.img_view.setMouseTracking(True)
         self.img_view.viewport().installEventFilter(self)
 
-        container = QWidget()
-        container.setLayout(ui_layout)
-        self.setCentralWidget(container)
-
+        self._update_paint_target_strip()
         self.show_image_with_overlay()
+
+    def _toggle_parcel_dock(self):
+        self.parcel_dock.setVisible(self.parcel_dock_button.isChecked())
+
+    def _on_parcel_dock_visibility(self, visible: bool):
+        self.parcel_dock_button.blockSignals(True)
+        self.parcel_dock_button.setChecked(visible)
+        self.parcel_dock_button.blockSignals(False)
 
     def _update_section_labels(self):
         """Primary slice id, section ordinal, and file basenames."""
@@ -460,19 +480,88 @@ class AnnotationViewer(QMainWindow):
         name, path = self.channel_sources[index]
         self.switch_channel(path, name)
 
-    def _toggle_parcel_drawer(self):
-        self.parcel_drawer_collapsed = not self.parcel_drawer_collapsed
-        if self.parcel_drawer_collapsed:
-            self._parcellation_saved_sizes = self.main_splitter.sizes()
-            self.controls_dock.setVisible(False)
-            self.parcel_drawer_toggle.setText("▶ Parcellation tools")
-            total = sum(self.main_splitter.sizes()) or 1
-            self.main_splitter.setSizes([0, total])
+
+    def _update_paint_target_strip(self):
+        """Refresh paint-target summary row (swatch, name, tier, adjustment, brush)."""
+        if self.selected_region_id is None:
+            self.paint_swatch.setStyleSheet("background-color: #cccccc;")
+            self.paint_target_name.setText("None")
         else:
-            self.controls_dock.setVisible(True)
-            self.parcel_drawer_toggle.setText("▼ Parcellation tools")
-            saved = getattr(self, "_parcellation_saved_sizes", None)
-            self.main_splitter.setSizes(saved if saved else [280, 720])
+            rid = int(self.selected_region_id)
+            r, g, b = resolve_label_color(rid, self.structure_map, self.catalog)
+            self.paint_swatch.setStyleSheet(
+                f"background-color: rgb({r}, {g}, {b});"
+            )
+            self.paint_target_name.setText(self.selected_region_name)
+
+        if self.ccf_advanced and self.level_combo.count() > 0:
+            tier_ctx = self.level_combo.currentText()
+        elif self.tier_combo.count() > 0:
+            tier_ctx = self.tier_combo.currentText()
+        else:
+            tier_ctx = ""
+        self.paint_tier_context.setText(tier_ctx)
+
+        if self.allow_adjustment.isChecked():
+            self.paint_adjust_badge.setText("ON")
+            self.paint_adjust_badge.setStyleSheet("color: green; font-weight: bold;")
+        else:
+            self.paint_adjust_badge.setText("OFF")
+            self.paint_adjust_badge.setStyleSheet("color: gray;")
+
+        self.paint_brush_size_label.setText(f"Brush {self.brush_size}px")
+        self.brush_label.setText(f"Brush {self.brush_size}")
+
+    def _update_brush_cursor(self, view, scene_point):
+        """Show brush-size ring at cursor when adjustment is enabled."""
+        hide_both = (
+            not self.allow_adjustment.isChecked()
+            or self.selected_region_id is None
+        )
+        if hide_both:
+            self._brush_cursor_img.setVisible(False)
+            self._brush_cursor_anno.setVisible(False)
+            return
+
+        r = self.brush_size
+        rect_x = scene_point.x() - r
+        rect_y = scene_point.y() - r
+        diameter = 2 * r
+
+        rgb = resolve_label_color(
+            int(self.selected_region_id), self.structure_map, self.catalog
+        )
+        color = QColor(*rgb)
+        color.setAlpha(128)
+        pen = QPen(color, 1.5)
+        pen.setCosmetic(True)
+        brush = QBrush(Qt.BrushStyle.NoBrush)
+
+        for item, active_view in (
+            (self._brush_cursor_img, self.img_view),
+            (self._brush_cursor_anno, self.anno_view),
+        ):
+            item.setRect(rect_x, rect_y, diameter, diameter)
+            item.setPen(pen)
+            item.setBrush(brush)
+            item.setVisible(view is active_view)
+
+    def _set_img_pixmap(self, pixmap: QPixmap):
+        if self._img_pixmap_item is not None:
+            self.img_scene.removeItem(self._img_pixmap_item)
+        self._img_pixmap_item = self.img_scene.addPixmap(pixmap)
+        self._img_pixmap_item.setZValue(0)
+
+    def _set_anno_pixmap(self, pixmap: QPixmap):
+        if self._anno_pixmap_item is not None:
+            self.anno_scene.removeItem(self._anno_pixmap_item)
+        self._anno_pixmap_item = self.anno_scene.addPixmap(pixmap)
+        self._anno_pixmap_item.setZValue(0)
+
+    def _anno_pixmap(self) -> QPixmap | None:
+        if self._anno_pixmap_item is None:
+            return None
+        return self._anno_pixmap_item.pixmap()
 
     def _flatten_catalog_regions(self, query: str = "") -> list[dict]:
         if not self.catalog:
@@ -635,6 +724,7 @@ class AnnotationViewer(QMainWindow):
     def _on_level_changed(self, _index: int):
         if self.ccf_advanced:
             self._rebuild_area_combo()
+        self._update_paint_target_strip()
 
     def _on_tier_changed(self, _index: int):
         tier_id = self._current_tier_id()
@@ -642,13 +732,14 @@ class AnnotationViewer(QMainWindow):
             self.current_tier_id = tier_id
         if not self.ccf_advanced:
             self._rebuild_area_combo()
+        self._update_paint_target_strip()
 
     def _on_ccf_advanced_toggled(self, checked: bool):
         self.ccf_advanced = bool(checked)
         self.tier_combo.setVisible(not self.ccf_advanced)
         self.level_combo.setVisible(self.ccf_advanced)
-        self.ccf_advanced_help.setVisible(self.ccf_advanced)
         self._rebuild_area_combo()
+        self._update_paint_target_strip()
 
     def _on_area_search_changed(self, text: str):
         if self._area_combo_updating or not self.catalog:
@@ -674,10 +765,19 @@ class AnnotationViewer(QMainWindow):
             if node:
                 self.selected_region_name = self._region_display_text(node)
             else:
+                if self.catalog:
+                    self.status_bar.showMessage(
+                        f"Catalog node missing for id {region_id}"
+                    )
                 info = self.structure_map.get(self.selected_region_id, {})
                 self.selected_region_name = info.get("name", "Unknown region")
+        if not _structure_map_entry(self.structure_map, region_id):
+            self.status_bar.showMessage(
+                f"No structure_map entry for id {region_id}"
+            )
         if self._overlay_ready:
             self.repaint_selected_only()
+        self._update_paint_target_strip()
 
     def _sync_area_combo_to_region(self, region_id):
         """After right-click pick, align hierarchy/area combos with the slice label."""
@@ -709,7 +809,7 @@ class AnnotationViewer(QMainWindow):
         layout.addWidget(self.parcel_status_label)
 
         target_row = QHBoxLayout()
-        target_row.addWidget(QLabel("Target:", self))
+        target_row.addWidget(QLabel("Roll up to:", self))
         self.parcel_tier_combo = QComboBox(self)
         self.parcel_tier_combo.currentIndexChanged.connect(self._on_parcel_tier_changed)
         target_row.addWidget(self.parcel_tier_combo)
@@ -752,6 +852,13 @@ class AnnotationViewer(QMainWindow):
         btn_row.addWidget(self.parcel_restore_button)
         btn_row.addStretch()
         layout.addLayout(btn_row)
+
+        self.parcel_quick_areas_button = QPushButton("Layers → functional areas", self)
+        self.parcel_quick_areas_button.setToolTip(
+            "Roll cortical layers up to functional areas on this section only."
+        )
+        self.parcel_quick_areas_button.clicked.connect(self.convert_to_parents)
+        layout.addWidget(self.parcel_quick_areas_button)
 
         exclude_row = QHBoxLayout()
         self.parcel_exclude_button = QPushButton("Exclude selected area", self)
@@ -824,7 +931,26 @@ class AnnotationViewer(QMainWindow):
             label = self._region_display_text(node) if node else str(rid)
             self.parcel_exclude_list.addItem(label)
 
+    def _reload_parcel_excludes_from_metadata(self, entry: dict | None = None):
+        """Reload exclude list for the current slice from parcellation metadata."""
+        self.parcel_excluded_ids = []
+        self.parcel_exclude_list.clear()
+        if entry is None:
+            entry = get_slice_parcellation(
+                self.annotation_dir, self._current_slice_id()
+            )
+        excluded = entry.get("excluded_region_ids") if entry else None
+        if not excluded:
+            return
+        for rid in excluded:
+            rid_int = int(rid)
+            self.parcel_excluded_ids.append(rid_int)
+            node = get_region(rid_int, self.catalog) if self.catalog else None
+            label = self._region_display_text(node) if node else str(rid_int)
+            self.parcel_exclude_list.addItem(label)
+
     def _clear_parcel_excludes(self):
+        """Clear exclude list for the current slice (does not persist until apply)."""
         self.parcel_excluded_ids = []
         self.parcel_exclude_list.clear()
 
@@ -850,7 +976,12 @@ class AnnotationViewer(QMainWindow):
         slice_id = self._current_slice_id()
         n = self.current_index + 1
         m = len(self.pairs)
-        self.parcel_status_label.setText(f"Section: {slice_id} ({n} / {m})")
+        unsaved_hint = (
+            " — Unsaved brush edits on disk" if self.was_changed else ""
+        )
+        self.parcel_status_label.setText(
+            f"Section: {slice_id} ({n} / {m}){unsaved_hint}"
+        )
 
         if self.catalog:
             tier_id, st_level = self._parcel_target()
@@ -920,6 +1051,7 @@ class AnnotationViewer(QMainWindow):
         self.parcel_preview_toggle.setChecked(False)
         self.parcel_preview_toggle.blockSignals(False)
         self.parcel_preview_array = None
+        self._reload_parcel_excludes_from_metadata(entry)
         self._update_parcellation_labels()
 
     def _on_parcel_tier_changed(self, _index: int):
@@ -959,7 +1091,13 @@ class AnnotationViewer(QMainWindow):
             st_level=st_level,
             structure_map=self.structure_map,
         )
-        self.parcel_preview_array = result.label_array
+        label = result.label_array
+        if self.parcel_excluded_ids:
+            ex_set = expand_excluded_ids(
+                self.structure_map, self.parcel_excluded_ids
+            )
+            label, _excluded = apply_exclusion(label, ex_set)
+        self.parcel_preview_array = label
 
     def _on_parcel_preview_toggled(self, checked: bool):
         self.parcel_preview = bool(checked)
@@ -1160,9 +1298,7 @@ class AnnotationViewer(QMainWindow):
             self.current_label.shape[0],
             Qt.AspectRatioMode.KeepAspectRatio,
         )
-        if self.img_scene.items():
-            self.img_scene.removeItem(self.img_scene.items()[0])
-        self.img_scene.addPixmap(self.img_pixmap)
+        self._set_img_pixmap(self.img_pixmap)
         self._update_section_labels()
         self.show_image_with_overlay()
 
@@ -1178,7 +1314,7 @@ class AnnotationViewer(QMainWindow):
 
     def update_brush(self):
         self.brush_size = self.brush_slider.value()
-        self.brush_label.setText(f"Brush Size {self.brush_size}")
+        self._update_paint_target_strip()
 
     def convert_to_parents(self):
         """Quick rollup: cortical layers → functional areas (this section only)."""
@@ -1200,19 +1336,19 @@ class AnnotationViewer(QMainWindow):
     def update_opacity(self):
         self.opacity = self.opacity_slider.value()
         if self.overlay_visible:
-            anno_pix = self.anno_scene.items()[0].pixmap()
+            anno_pix = self._anno_pixmap()
+            if anno_pix is None:
+                return
             overlayed = self.img_pixmap.copy()
             painter = QPainter(overlayed)
             painter.setOpacity(self.opacity / 255)
             painter.drawPixmap(0, 0, anno_pix)
             painter.end()
-            self.img_scene.removeItem(self.img_scene.items()[0])
-            self.img_scene.addPixmap(overlayed)
+            self._set_img_pixmap(overlayed)
 
     def toggle_overlay(self):
         self.overlay_visible = not self.overlay_visible
-        self.img_scene.removeItem(self.img_scene.items()[0])
-        self.img_scene.addPixmap(self.img_pixmap)
+        self._set_img_pixmap(self.img_pixmap)
         self.repaint_selected_only()
 
     def show_image_with_overlay(self):
@@ -1223,20 +1359,18 @@ class AnnotationViewer(QMainWindow):
         anno_image.fill(Qt.transparent)
         # Start painting on annotation image
         painter = QPainter(anno_image)
-        # Loop through all unique label values
+        # Loop through label values present in this slice
         present_labels = np.unique(label_array)
-        for label_value, info in self.structure_map.items():
-            if label_value not in present_labels:
+        for label_id in present_labels:
+            if int(label_id) == 0:
                 continue
-
-            color = QColor(*info["color"])
-
+            color = QColor(
+                *resolve_label_color(
+                    int(label_id), self.structure_map, self.catalog
+                )
+            )
             painter.setPen(color)
-
-            # Create a mask where the label array matches the current label value
-            mask = label_array == label_value
-
-            # Paint all matching pixels
+            mask = label_array == label_id
             y_coords, x_coords = np.where(mask)
             points = [QPoint(x, y) for x, y in zip(x_coords, y_coords)]
             painter.drawPoints(points)
@@ -1245,9 +1379,7 @@ class AnnotationViewer(QMainWindow):
         anno_as_array = qimage_to_numpy_array(anno_image)
         anno_image = numpy_array_to_qimage(add_outlines(label_array, anno_as_array))
         self.anno_pixmap = QPixmap.fromImage(anno_image)
-        if len(self.anno_scene.items()) > 0:
-            self.anno_scene.removeItem(self.anno_scene.items()[0])
-        self.anno_scene.addPixmap(self.anno_pixmap)
+        self._set_anno_pixmap(self.anno_pixmap)
 
         # Create a new scene for the annotations if we want to display them
         if self.overlay_visible:
@@ -1256,15 +1388,17 @@ class AnnotationViewer(QMainWindow):
             painter.setOpacity(self.opacity / 255)
             painter.drawPixmap(0, 0, self.anno_pixmap)
             painter.end()
-            self.img_scene.removeItem(self.img_scene.items()[0])
-            self.img_scene.addPixmap(overlayed)
+            self._set_img_pixmap(overlayed)
 
         self._overlay_ready = True
         self.repaint_selected_only()
 
     def paint_deltas(self, points):
         # Update the annotation pixmap with the new points
-        new_annos = self.anno_scene.items()[0].pixmap().copy()
+        base = self._anno_pixmap()
+        if base is None:
+            return
+        new_annos = base.copy()
         painter = QPainter(new_annos)
         color = QColor(218, 112, 214)
         painter.setPen(color)
@@ -1276,11 +1410,9 @@ class AnnotationViewer(QMainWindow):
             painter.setOpacity(self.opacity / 255)
             painter.drawPixmap(0, 0, new_annos)
             painter.end()
-            self.img_scene.removeItem(self.img_scene.items()[0])
-            self.img_scene.addPixmap(overlayed)
+            self._set_img_pixmap(overlayed)
 
-        self.anno_scene.removeItem(self.anno_scene.items()[0])
-        self.anno_scene.addPixmap(new_annos)
+        self._set_anno_pixmap(new_annos)
 
     def warn_unsaved_changes(self):
         dialog = QMessageBox(self)
@@ -1319,6 +1451,7 @@ class AnnotationViewer(QMainWindow):
         with open(anno_path, "wb") as f:
             pickle.dump(self.current_label, f)
         self.was_changed = False
+        self._update_parcellation_labels()
 
     def prev_image(self):
         if self.current_index > 0:
@@ -1434,6 +1567,7 @@ class AnnotationViewer(QMainWindow):
             self.originals[self.current_delta].update(new_originals)
 
             self.was_changed = True
+            self._update_parcellation_labels()
 
             # Convert the points to QPoint objects for any necessary GUI operations
             update_points = [QPoint(x, y) for x, y in new_points]
@@ -1455,7 +1589,7 @@ class AnnotationViewer(QMainWindow):
             self.current_delta -= 1  # Decrease the current delta index
 
             # Reflect the changes in the image
-            self.repaint_selected_only()
+            self.show_image_with_overlay()
 
     def repaint_selected_only(self):
         """Repaint the selected region only"""
@@ -1486,12 +1620,9 @@ class AnnotationViewer(QMainWindow):
             painter.setOpacity(self.opacity / 255)
             painter.drawPixmap(0, 0, anno_pixmap)
             painter.end()
-            self.img_scene.removeItem(self.img_scene.items()[0])
-            self.img_scene.addPixmap(overlayed)
+            self._set_img_pixmap(overlayed)
 
-        if len(self.anno_scene.items()) > 0:
-            self.anno_scene.removeItem(self.anno_scene.items()[0])
-        self.anno_scene.addPixmap(anno_pixmap)
+        self._set_anno_pixmap(anno_pixmap)
 
     def eventFilter(self, source, event):
         if event.type() == QEvent.MouseButtonPress:
@@ -1530,20 +1661,22 @@ class AnnotationViewer(QMainWindow):
                             label_value, {}
                         ).get("name", "Unknown region")
                     self.repaint_selected_only()
+                    self._update_paint_target_strip()
 
         elif event.type() == QEvent.MouseMove:
             point = event.pos()
+            view = source.parent()
             if self.is_drawing:
-                image_point = self.view_to_image_coordinates(source.parent(), point)
+                image_point = self.view_to_image_coordinates(view, point)
                 if (
                     image_point != self.last_draw_point
                 ):  # Only draw if the point has changed
                     self.last_draw_point = image_point
                     self.draw_on_image(image_point)
                 return True
-            # update the status bar
-            image_point = self.view_to_image_coordinates(source.parent(), point)
+            image_point = self.view_to_image_coordinates(view, point)
             self.update_status_bar_with_region(image_point)
+            self._update_brush_cursor(view, image_point)
             return True
 
         elif event.type() == QEvent.MouseButtonRelease:
@@ -1551,6 +1684,7 @@ class AnnotationViewer(QMainWindow):
                 self.is_drawing = False
                 self.last_draw_point = None
                 self.current_delta += 1
+                self.show_image_with_overlay()
                 return True
 
         return super(AnnotationViewer, self).eventFilter(source, event)
