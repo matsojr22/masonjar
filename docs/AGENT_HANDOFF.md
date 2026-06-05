@@ -9,8 +9,8 @@ Last updated: 2026-06-03 (viewer/preprocess/tissue UX v3.1.0). Use this file to 
 | Item | Value |
 |------|--------|
 | `package.json` version | **3.1.0** |
-| Latest tag | `v3.1.0` (pending publish) |
-| GitHub releases | https://github.com/matsojr22/masonjar/releases |
+| Latest tag | `v3.1.0` |
+| GitHub releases | https://github.com/matsojr22/masonjar/releases/tag/v3.1.0 |
 
 **v3.1.0** — **Viewer/preprocess UX**: Sharpen/top-hat manual **Preview filter**, display min/max, pan-only base ([`js/preprocess_wizard.js`](../js/preprocess_wizard.js)). **Adjust**: QSplitter parcellation drawer, background channel combo + `00_dapi` fallback ([`py/adjust_channels.py`](../py/adjust_channels.py)), paint search box; bulk parcellation removed from single-section viewer. **Parcellation (bulk)**: included-region dual list ([`js/region_dual_list.js`](../js/region_dual_list.js), `included_region_ids`, [`py/annotation_exclusion.py`](../py/annotation_exclusion.py) `apply_inclusion`). **Count**: removed Save layer info. **Tissue cleanup**: mask overlay hidden until edit; `ensure_keep_mask_polarity` on auto/guided.
 
