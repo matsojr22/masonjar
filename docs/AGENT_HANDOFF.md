@@ -9,7 +9,7 @@ Last updated: 2026-06-05 (Viewer/Editor UX v3.2.4). Use this file to resume work
 | Item | Value |
 |------|--------|
 | `package.json` version | **3.2.4** |
-| Latest tag | `v3.2.4` (pre-release on GitHub, pending publish) |
+| Latest tag | `v3.2.4` (pre-release on GitHub) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
 
 **v3.2.4** — **Viewer/Editor UX**: [`py/adjust.py`](../py/adjust.py) compact toolbars + paint-target strip + brush cursor; `resolve_label_color` overlay fix; stroke-end/undo/refresh full recolor; floatable **Parcellation** `QDockWidget`; preview excludes; metadata exclude reload. Tests: `python/tests/test_adjust_brush_overlay.py`.
