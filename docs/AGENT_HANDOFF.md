@@ -9,7 +9,7 @@ Last updated: 2026-06-05 (Settings → Network v3.2.3). Use this file to resume 
 | Item | Value |
 |------|--------|
 | `package.json` version | **3.2.3** |
-| Latest tag | `v3.2.3` (pre-release on GitHub, pending publish) |
+| Latest tag | `v3.2.3` (pre-release on GitHub) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
 
 **v3.2.3** — **Settings → Network**: moved fair-share UI off start hub; [`pages/settings.html`](../pages/settings.html) + [`pages/settings_network.html`](../pages/settings_network.html); **Select network drives…** multi-picker → `normalizeNasPathPrefix` / `mergeNasPathPrefixes` → shared `config.json` `nas_path_prefixes`; status fields `nas_path_prefixes`, `shared_config_path`, `shared_link_mbps`; IPC `showOpenNetworkLocationsDialog`, `ioFairshareSharedConfigError`. Docs [`docs/LAB_NETWORK.md`](LAB_NETWORK.md). Tests/smoke extended.
