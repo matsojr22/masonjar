@@ -8,7 +8,7 @@ Mason Jar on a shared Windows compute server can saturate the NIC when many user
 - Each job’s NAS I/O is throttled to roughly `(link speed × 85% headroom) / number of active jobs`.
 - When fewer jobs run, each job gets more bandwidth automatically.
 - Files ≤256 KB skip throttling (project JSON, small metadata).
-- Toggle and link-speed override: Start hub → **Network sharing**.
+- Per-user toggle and link-speed override: **Start → Settings → Network**.
 
 All lab members should run the same Mason Jar version for fair-share to apply to every instance.
 
@@ -26,8 +26,9 @@ These help the whole lab but are outside the Mason Jar installer:
 
 ## Tuning on your compute server
 
-1. Open Mason Jar on the server → **Network sharing**.
-2. If auto-detect picks the wrong adapter, set **Manual link speed** to your NAS NIC (e.g. 1000 Mbps for 1 GbE).
-3. Ensure `%ProgramData%\MasonJar\io-fairshare\` is writable by all RDP users (default on domain servers; IT may need to grant Modify on first deploy).
+1. Open Mason Jar on the server → **Start → Settings → Network**.
+2. Under **Server network locations**, click **Select network drives…** and pick mapped drives or UNC share folders. Mason Jar stores drive/share **roots** (e.g. `Z:\` or `\\nas01\lab`) in machine-wide `config.json` so every RDP user sees the same list.
+3. If auto-detect picks the wrong adapter, set **Manual link speed** to your NAS NIC (e.g. 1000 Mbps for 1 GbE).
+4. Ensure `%ProgramData%\MasonJar\io-fairshare\` is writable by all RDP users (default on domain servers; IT may need to grant Modify on first deploy).
 
-Shared `config.json` in that folder can set machine-wide defaults (headroom, min Mbps per job) for all users.
+Shared `config.json` in that folder can also set machine-wide defaults (headroom, min Mbps per job) for all users. Advanced edits remain possible there; the Settings UI is the supported path for NAS location configuration.

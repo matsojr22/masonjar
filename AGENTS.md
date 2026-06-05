@@ -250,12 +250,13 @@ Windows and macOS do **not** auto-fair-share SMB/NAS bandwidth across RDP users 
 | Item | Location |
 |------|----------|
 | Coordinator dir | Windows `%ProgramData%\MasonJar\io-fairshare\`; macOS `/Library/Application Support/MasonJar/io-fairshare/`; override `MASONJAR_IO_FAIRSHARE_DIR` |
-| Shared config | `{coordinator}/config.json` — `link_mbps` (auto or number), `headroom` (default 0.85), min/max Mbps per job |
+| Shared config | `{coordinator}/config.json` — `link_mbps` (auto or number), `headroom` (default 0.85), min/max Mbps per job, **`nas_path_prefixes`** (drive/UNC roots for NAS throttle matching) |
 | Per-user override | `~/.masonjar/io_fairshare.json` — `enabled`, `link_mbps` |
 | Registry | `{coordinator}/registry/{job_id}.json` — heartbeat every 5s; stale >30s ignored |
 | Python bootstrap | `import pipeline_io_bootstrap` first in heavy `py/` scripts; patches `tifffile`/`cv2`/`Path` I/O with token-bucket throttle |
-| IPC | `getIoFairshareStatus`, `saveIoFairshareUserConfig`, `saveIoFairshareSharedConfig` |
-| UI | Start hub **Network sharing** ([`pages/menu.html`](pages/menu.html), [`js/io_fairshare_settings.js`](js/io_fairshare_settings.js)) |
+| IPC | `getIoFairshareStatus`, `saveIoFairshareUserConfig`, `saveIoFairshareSharedConfig`, `showOpenNetworkLocationsDialog` (multi-select folders), `ioFairshareSharedConfigError` |
+| Helpers | `normalizeNasPathPrefix` (mapped drive → `Z:\`, UNC → `\\server\share`; macOS `/Volumes/…`), `mergeNasPathPrefixes` (dedupe, stable sort) |
+| UI | **Start → Settings → Network** ([`pages/settings_network.html`](pages/settings_network.html), [`js/io_fairshare_settings.js`](js/io_fairshare_settings.js)); hub link [`pages/settings.html`](pages/settings.html). Status includes `nas_path_prefixes`, `shared_config_path`, `shared_link_mbps` for all users on the server. **Select network drives…** merges normalized roots into shared `config.json`. |
 
 Limit per job: `(link_mbps × headroom) / active_jobs`, clamped. Small files (≤256 KB) bypass throttle. Lab IT may add switch/NAS QoS — see [`docs/LAB_NETWORK.md`](docs/LAB_NETWORK.md).
 

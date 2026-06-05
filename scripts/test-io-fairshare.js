@@ -66,11 +66,70 @@ function testRegistryStale() {
 	fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+function testNormalizeNasPathPrefix() {
+	if (process.platform === "win32") {
+		assert(
+			ioFairshare.normalizeNasPathPrefix("Z:\\Lab\\Projects\\M528") === "Z:\\",
+			"drive subfolder to root",
+		);
+		assert(
+			ioFairshare.normalizeNasPathPrefix("\\\\nas01\\share\\lab\\data") ===
+				"\\\\nas01\\share",
+			"UNC to share root",
+		);
+	} else if (process.platform === "darwin") {
+		assert(
+			ioFairshare.normalizeNasPathPrefix("/Volumes/NAS/lab/data") ===
+				"/Volumes/NAS",
+			"volume root",
+		);
+	}
+}
+
+function testMergeNasPathPrefixes() {
+	if (process.platform === "win32") {
+		var merged = ioFairshare.mergeNasPathPrefixes(["Z:\\"], ["z:\\", "Z:/"]);
+		assert(merged.length === 1, "dedupe drive letter");
+		merged = ioFairshare.mergeNasPathPrefixes(
+			["\\\\nas\\share"],
+			["\\\\nas\\share\\sub"],
+		);
+		assert(merged.length === 1, "dedupe UNC share");
+	} else if (process.platform === "darwin") {
+		var mergedDarwin = ioFairshare.mergeNasPathPrefixes(
+			["/Volumes/NAS"],
+			["/Volumes/NAS/lab/data"],
+		);
+		assert(mergedDarwin.length === 1, "dedupe volume root");
+	}
+}
+
+function testStatusIncludesNasPrefixes() {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mj-io-status-"));
+	fs.mkdirSync(path.join(tmp, "registry"), { recursive: true });
+	fs.writeFileSync(
+		path.join(tmp, "config.json"),
+		JSON.stringify({ nas_path_prefixes: ["Z:\\"], stale_seconds: 30 }),
+	);
+	const home = fs.mkdtempSync(path.join(os.tmpdir(), "mj-io-home-"));
+	const status = ioFairshare.getIoFairshareStatus(tmp, home);
+	assert(Array.isArray(status.nas_path_prefixes), "nas_path_prefixes array");
+	if (process.platform === "win32") {
+		assert(status.nas_path_prefixes.indexOf("Z:\\") >= 0, "reads Z: prefix");
+	}
+	assert(status.shared_config_path.indexOf("config.json") >= 0, "config path");
+	fs.rmSync(tmp, { recursive: true, force: true });
+	fs.rmSync(home, { recursive: true, force: true });
+}
+
 function main() {
 	testParseLinkSpeed();
 	testComputeJobLimit();
 	testCoordinatorPaths();
 	testRegistryStale();
+	testNormalizeNasPathPrefix();
+	testMergeNasPathPrefixes();
+	testStatusIncludesNasPrefixes();
 	console.log("test-io-fairshare: ok");
 }
 

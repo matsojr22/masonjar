@@ -897,7 +897,8 @@ function parseDialogArg(data) {
     if (data && typeof data === "object") {
         const tag = data.tag != null ? String(data.tag) : String(data);
         const defaultPath = typeof data.defaultPath === "string" ? data.defaultPath : undefined;
-        return { tag, defaultPath };
+        const multi = !!data.multi;
+        return { tag, defaultPath, multi };
     }
     return { tag: String(data) };
 }
@@ -920,8 +921,11 @@ function dialogParentWindow(event) {
     const focused = BrowserWindow.getFocusedWindow();
     return focused && !focused.isDestroyed() ? focused : null;
 }
-function directoryDialogOptions(tag, defaultPath) {
-    const options = openDialogOptions(["openDirectory"], defaultPath);
+function directoryDialogOptions(tag, defaultPath, multi) {
+    const props = multi
+        ? ["openDirectory", "multiSelections"]
+        : ["openDirectory"];
+    const options = openDialogOptions(props, defaultPath);
     if (tag === "projectBundle") {
         options.title = `Open ${BRANDING.PRODUCT_NAME} project`;
         options.message =
@@ -936,6 +940,11 @@ function directoryDialogOptions(tag, defaultPath) {
         options.title = "Legacy brain folder";
         options.message =
             "Select the M### brain folder (must contain a counting/ subdirectory).";
+    }
+    else if (tag === "nasLocations") {
+        options.title = "Select network drives or NAS folders";
+        options.message =
+            "Choose mapped drives (e.g. Z:\\) or UNC shares. Mason Jar stores the drive or share root for bandwidth fair-share.";
     }
     return options;
 }
@@ -969,6 +978,32 @@ function pickDirectory(event, data) {
         return { canceled: false, tag, path: result.filePaths[0] };
     });
 }
+function pickNetworkLocations(event, data) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const parentWindow = dialogParentWindow(event);
+        const { tag, defaultPath } = parseDialogArg(data);
+        const options = directoryDialogOptions(tag || "nasLocations", defaultPath, true);
+        if (parentWindow && !parentWindow.isDestroyed()) {
+            parentWindow.show();
+            parentWindow.focus();
+        }
+        let result;
+        try {
+            result =
+                parentWindow && !parentWindow.isDestroyed()
+                    ? yield dialog.showOpenDialog(parentWindow, options)
+                    : yield dialog.showOpenDialog(options);
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return { canceled: true, error: message };
+        }
+        if (result.canceled || !result.filePaths.length) {
+            return { canceled: true };
+        }
+        return { canceled: false, paths: result.filePaths };
+    });
+}
 /** Promise-based folder picker (avoids returnPath listener races on the menu). */
 ipcMain.handle("showOpenDirectoryDialog", (event, data) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -979,6 +1014,18 @@ ipcMain.handle("showOpenDirectoryDialog", (event, data) => __awaiter(void 0, voi
         const { tag } = parseDialogArg(data);
         const message = err instanceof Error ? err.message : String(err);
         return { canceled: true, tag, error: message };
+    }
+}));
+ipcMain.handle("showOpenNetworkLocationsDialog", (event, data) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const payload = data && typeof data === "object"
+            ? Object.assign(Object.assign({}, data), { tag: "nasLocations", multi: true }) : { tag: "nasLocations", multi: true };
+        return yield pickNetworkLocations(event, payload);
+    }
+    catch (err) {
+        console.error("showOpenNetworkLocationsDialog failed:", err);
+        const message = err instanceof Error ? err.message : String(err);
+        return { canceled: true, error: message };
     }
 }));
 // Handlers
@@ -2281,10 +2328,16 @@ ipcMain.on("saveIoFairshareUserConfig", function (event, patch) {
     event.sender.send("ioFairshareUserConfigSaved", saved);
 });
 ipcMain.on("saveIoFairshareSharedConfig", function (event, patch) {
-    const saved = (0, io_fairshare_1.saveSharedConfig)(ioFairshareDir, patch || {});
-    (0, io_fairshare_1.resetLinkSpeedCache)();
-    event.sender.send("ioFairshareStatus", (0, io_fairshare_1.getIoFairshareStatus)(ioFairshareDir, homeDir));
-    event.sender.send("ioFairshareSharedConfigSaved", saved);
+    try {
+        const saved = (0, io_fairshare_1.saveSharedConfig)(ioFairshareDir, patch || {});
+        (0, io_fairshare_1.resetLinkSpeedCache)();
+        event.sender.send("ioFairshareStatus", (0, io_fairshare_1.getIoFairshareStatus)(ioFairshareDir, homeDir));
+        event.sender.send("ioFairshareSharedConfigSaved", saved);
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        event.sender.send("ioFairshareSharedConfigError", { message: message });
+    }
 });
 ipcMain.on("runBatch", function (event, plan) {
     const { runBatchQueue } = require("./batch_queue");

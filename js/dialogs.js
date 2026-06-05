@@ -43,6 +43,39 @@ function pickDirectory(opts) {
 		});
 }
 
+/**
+ * @param {{ tag?: string, defaultPath?: string }} opts
+ * @returns {Promise<string[]|null>} Selected directory paths, or null if canceled.
+ */
+function pickNetworkLocations(opts) {
+	opts = opts || {};
+	var tag = opts.tag || "nasLocations";
+	var payload = { tag: tag, multi: true };
+	if (opts.defaultPath) {
+		payload.defaultPath = opts.defaultPath;
+	}
+	return ipc
+		.invoke("showOpenNetworkLocationsDialog", payload)
+		.then(function (result) {
+			if (!result) {
+				alert("Folder dialog failed: no response from the app.");
+				return null;
+			}
+			if (result.error) {
+				alert("Could not open folder dialog:\n" + result.error);
+				return null;
+			}
+			if (result.canceled || !result.paths || !result.paths.length) {
+				return null;
+			}
+			return result.paths;
+		})
+		.catch(function (err) {
+			alert("Could not open folder dialog:\n" + String(err.message || err));
+			return null;
+		});
+}
+
 function ensurePickRoleModal(canonicalRoles) {
 	var modalEl = document.getElementById("mjPickRoleModal");
 	if (modalEl) {
@@ -130,6 +163,7 @@ function pickProjectRole(canonicalRoles, defaultRole) {
 
 module.exports = {
 	pickDirectory: pickDirectory,
+	pickNetworkLocations: pickNetworkLocations,
 	pickProjectRole: pickProjectRole,
 	ROLE_LABELS: ROLE_LABELS,
 };

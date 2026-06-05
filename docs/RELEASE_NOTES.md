@@ -6,6 +6,24 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.2.3
+
+**What's new**
+
+Network sharing settings moved to **Start → Settings → Network**. An admin or first user on a shared server can pick mapped drives or UNC shares with **Select network drives…**; Mason Jar saves normalized drive/share roots for everyone on that machine.
+
+**Changes**
+
+- Settings hub with **Network** page (per-user fair-share toggle and link speed unchanged).
+- Shared `nas_path_prefixes` list visible to all RDP users; no manual JSON editing required for typical setup.
+- Multi-select folder picker writes machine-wide config under `%ProgramData%\MasonJar\io-fairshare\`.
+
+**Commit subject**
+
+Settings Network page with shared NAS drive picker
+
+---
+
 ## v3.2.2
 
 **What's new**

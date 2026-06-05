@@ -21,6 +21,8 @@ const PAGES = [
 	"menu_category.html",
 	"dapi_cleanup.html",
 	"credits.html",
+	"settings.html",
+	"settings_network.html",
 	"batch_wizard.html",
 	"parcellation_wizard.html",
 	"tophat_wizard.html",
@@ -62,6 +64,11 @@ const DOM_ASSERTIONS = {
 	],
 	"align.html": ["indir", "outdir", "run", "spacing", "whole", "half"],
 	"adjust.html": ["imdir", "annodir", "run"],
+	"settings_network.html": [
+		"ioFairsharePanel",
+		"ioFairshareNasList",
+		"ioFairsharePickNas",
+	],
 	"parcellation_wizard.html": [
 		"step1",
 		"sliceTableBody",

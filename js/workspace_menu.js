@@ -73,7 +73,7 @@ pageInit.onReady(function () {
 				(status.active_jobs || 0) +
 				" active job(s) on this machine · ~" +
 				Math.round(status.limit_mbps || 0) +
-				" Mbps for new pipeline I/O";
+				" Mbps for new pipeline I/O · configure in Start → Settings → Network";
 		});
 		ioFairshareSettings.refreshStatus();
 	}

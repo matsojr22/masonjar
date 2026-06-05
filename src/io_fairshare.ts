@@ -41,6 +41,9 @@ export interface IoFairshareStatus {
   min_mbps_per_job: number;
   max_mbps_per_job: number;
   local_jobs: string[];
+  nas_path_prefixes: string[];
+  shared_config_path: string;
+  shared_link_mbps: number | "auto";
 }
 
 const DEFAULT_SHARED: IoFairshareSharedConfig = {
@@ -82,6 +85,80 @@ export function userConfigPath(homeDir: string): string {
 
 function sharedConfigPath(coordinatorDir: string): string {
   return path.join(coordinatorDir, "config.json");
+}
+
+export function getSharedConfigPath(coordinatorDir: string): string {
+  return sharedConfigPath(coordinatorDir);
+}
+
+function prefixKey(text: string): string {
+  if (process.platform === "win32") {
+    return text.replace(/\//g, "\\").toLowerCase();
+  }
+  return text;
+}
+
+/** Normalize a picked folder to a NAS throttle root (drive letter or UNC share). */
+export function normalizeNasPathPrefix(absPath: string): string | null {
+  const raw = String(absPath || "").trim();
+  if (!raw) {
+    return null;
+  }
+  if (process.platform === "win32") {
+    const normalized = raw.replace(/\//g, "\\");
+    if (normalized.startsWith("\\\\")) {
+      const parts = normalized.split("\\").filter(Boolean);
+      if (parts.length < 2) {
+        return null;
+      }
+      return "\\\\" + parts[0] + "\\" + parts[1];
+    }
+    const driveMatch = normalized.match(/^([A-Za-z]:)(\\.*)?$/);
+    if (driveMatch) {
+      return driveMatch[1].toUpperCase() + "\\";
+    }
+    return null;
+  }
+  const resolved = path.resolve(raw);
+  if (process.platform === "darwin" && resolved.startsWith("/Volumes/")) {
+    const parts = resolved.split(path.sep).filter(Boolean);
+    if (parts.length >= 2 && parts[0] === "Volumes") {
+      return path.join("/", "Volumes", parts[1]);
+    }
+  }
+  if (resolved.startsWith("\\\\") || resolved.startsWith("//")) {
+    const unc = resolved.replace(/\//g, "\\");
+    const parts = unc.split("\\").filter(Boolean);
+    if (parts.length >= 2) {
+      return "\\\\" + parts[0] + "\\" + parts[1];
+    }
+  }
+  return null;
+}
+
+export function mergeNasPathPrefixes(
+  existing: string[],
+  added: string[],
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const all = (existing || []).concat(added || []);
+  for (let i = 0; i < all.length; i++) {
+    const norm = normalizeNasPathPrefix(all[i]) || String(all[i] || "").trim();
+    if (!norm) {
+      continue;
+    }
+    const key = prefixKey(norm);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(norm);
+  }
+  out.sort(function (a, b) {
+    return a.localeCompare(b);
+  });
+  return out;
 }
 
 function registryDir(coordinatorDir: string): string {
@@ -340,6 +417,9 @@ export function getIoFairshareStatus(
     min_mbps_per_job: shared.min_mbps_per_job,
     max_mbps_per_job: maxCap,
     local_jobs: localJobs,
+    nas_path_prefixes: mergeNasPathPrefixes(shared.nas_path_prefixes || [], []),
+    shared_config_path: sharedConfigPath(coordinatorDir),
+    shared_link_mbps: shared.link_mbps,
   };
 }
 

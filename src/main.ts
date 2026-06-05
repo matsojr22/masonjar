@@ -1059,7 +1059,11 @@ ipcMain.on("getVersion", (event: any) => {
   event.sender.send("version", getVersion());
 });
 
-function parseDialogArg(data: any): { tag: string; defaultPath?: string } {
+function parseDialogArg(data: any): {
+  tag: string;
+  defaultPath?: string;
+  multi?: boolean;
+} {
   if (typeof data === "string") {
     return { tag: data };
   }
@@ -1067,17 +1071,21 @@ function parseDialogArg(data: any): { tag: string; defaultPath?: string } {
     const tag = data.tag != null ? String(data.tag) : String(data);
     const defaultPath =
       typeof data.defaultPath === "string" ? data.defaultPath : undefined;
-    return { tag, defaultPath };
+    const multi = !!data.multi;
+    return { tag, defaultPath, multi };
   }
   return { tag: String(data) };
 }
 
 function openDialogOptions(
-  properties: ("openDirectory" | "openFile")[],
+  properties: ("openDirectory" | "openFile" | "multiSelections")[],
   defaultPath?: string,
-): { properties: ("openDirectory" | "openFile")[]; defaultPath?: string } {
+): {
+  properties: ("openDirectory" | "openFile" | "multiSelections")[];
+  defaultPath?: string;
+} {
   const options: {
-    properties: ("openDirectory" | "openFile")[];
+    properties: ("openDirectory" | "openFile" | "multiSelections")[];
     defaultPath?: string;
   } = { properties };
   if (defaultPath && fs.existsSync(defaultPath)) {
@@ -1102,14 +1110,18 @@ function dialogParentWindow(event: { sender: any }): typeof BrowserWindow | null
 function directoryDialogOptions(
   tag: string,
   defaultPath?: string,
+  multi?: boolean,
 ): {
-  properties: ("openDirectory" | "openFile")[];
+  properties: ("openDirectory" | "openFile" | "multiSelections")[];
   defaultPath?: string;
   title?: string;
   message?: string;
 } {
-  const options = openDialogOptions(["openDirectory"], defaultPath) as {
-    properties: ("openDirectory" | "openFile")[];
+  const props: ("openDirectory" | "openFile" | "multiSelections")[] = multi
+    ? ["openDirectory", "multiSelections"]
+    : ["openDirectory"];
+  const options = openDialogOptions(props, defaultPath) as {
+    properties: ("openDirectory" | "openFile" | "multiSelections")[];
     defaultPath?: string;
     title?: string;
     message?: string;
@@ -1126,6 +1138,10 @@ function directoryDialogOptions(
     options.title = "Legacy brain folder";
     options.message =
       "Select the M### brain folder (must contain a counting/ subdirectory).";
+  } else if (tag === "nasLocations") {
+    options.title = "Select network drives or NAS folders";
+    options.message =
+      "Choose mapped drives (e.g. Z:\\) or UNC shares. Mason Jar stores the drive or share root for bandwidth fair-share.";
   }
   return options;
 }
@@ -1165,6 +1181,36 @@ async function pickDirectory(
   return { canceled: false, tag, path: result.filePaths[0] };
 }
 
+async function pickNetworkLocations(
+  event: { sender: { send: (channel: string, payload: unknown) => void } },
+  data: unknown,
+): Promise<
+  | { canceled: true; error?: string }
+  | { canceled: false; paths: string[] }
+> {
+  const parentWindow = dialogParentWindow(event);
+  const { tag, defaultPath } = parseDialogArg(data);
+  const options = directoryDialogOptions(tag || "nasLocations", defaultPath, true);
+  if (parentWindow && !parentWindow.isDestroyed()) {
+    parentWindow.show();
+    parentWindow.focus();
+  }
+  let result;
+  try {
+    result =
+      parentWindow && !parentWindow.isDestroyed()
+        ? await dialog.showOpenDialog(parentWindow, options)
+        : await dialog.showOpenDialog(options);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { canceled: true, error: message };
+  }
+  if (result.canceled || !result.filePaths.length) {
+    return { canceled: true };
+  }
+  return { canceled: false, paths: result.filePaths };
+}
+
 /** Promise-based folder picker (avoids returnPath listener races on the menu). */
 ipcMain.handle("showOpenDirectoryDialog", async (event: any, data: unknown) => {
   try {
@@ -1174,6 +1220,20 @@ ipcMain.handle("showOpenDirectoryDialog", async (event: any, data: unknown) => {
     const { tag } = parseDialogArg(data);
     const message = err instanceof Error ? err.message : String(err);
     return { canceled: true, tag, error: message };
+  }
+});
+
+ipcMain.handle("showOpenNetworkLocationsDialog", async (event: any, data: unknown) => {
+  try {
+    const payload =
+      data && typeof data === "object"
+        ? { ...(data as object), tag: "nasLocations", multi: true }
+        : { tag: "nasLocations", multi: true };
+    return await pickNetworkLocations(event, payload);
+  } catch (err) {
+    console.error("showOpenNetworkLocationsDialog failed:", err);
+    const message = err instanceof Error ? err.message : String(err);
+    return { canceled: true, error: message };
   }
 });
 
@@ -2623,10 +2683,15 @@ ipcMain.on("saveIoFairshareUserConfig", function (event: any, patch: IoFairshare
 ipcMain.on(
   "saveIoFairshareSharedConfig",
   function (event: any, patch: Partial<IoFairshareSharedConfig>) {
-    const saved = saveSharedConfig(ioFairshareDir, patch || {});
-    resetLinkSpeedCache();
-    event.sender.send("ioFairshareStatus", getIoFairshareStatus(ioFairshareDir, homeDir));
-    event.sender.send("ioFairshareSharedConfigSaved", saved);
+    try {
+      const saved = saveSharedConfig(ioFairshareDir, patch || {});
+      resetLinkSpeedCache();
+      event.sender.send("ioFairshareStatus", getIoFairshareStatus(ioFairshareDir, homeDir));
+      event.sender.send("ioFairshareSharedConfigSaved", saved);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      event.sender.send("ioFairshareSharedConfigError", { message: message });
+    }
   },
 );
 

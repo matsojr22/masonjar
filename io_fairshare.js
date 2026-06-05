@@ -23,7 +23,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createHeavyJobHandle = exports.applyIoFairsharePythonEnv = exports.endNodeJobTracking = exports.beginNodeJobTracking = exports.unregisterJob = exports.touchJob = exports.registerJob = exports.newJobId = exports.getIoFairshareStatus = exports.isFairshareEnabled = exports.computeJobLimitMbps = exports.listRegistryEntries = exports.saveUserConfig = exports.loadUserConfig = exports.saveSharedConfig = exports.loadSharedConfig = exports.ensureCoordinatorDir = exports.detectLinkMbps = exports.parseLinkSpeedText = exports.userConfigPath = exports.defaultCoordinatorDir = exports.resetLinkSpeedCache = void 0;
+exports.createHeavyJobHandle = exports.applyIoFairsharePythonEnv = exports.endNodeJobTracking = exports.beginNodeJobTracking = exports.unregisterJob = exports.touchJob = exports.registerJob = exports.newJobId = exports.getIoFairshareStatus = exports.isFairshareEnabled = exports.computeJobLimitMbps = exports.listRegistryEntries = exports.saveUserConfig = exports.loadUserConfig = exports.saveSharedConfig = exports.loadSharedConfig = exports.ensureCoordinatorDir = exports.detectLinkMbps = exports.parseLinkSpeedText = exports.mergeNasPathPrefixes = exports.normalizeNasPathPrefix = exports.getSharedConfigPath = exports.userConfigPath = exports.defaultCoordinatorDir = exports.resetLinkSpeedCache = void 0;
 const crypto = __importStar(require("crypto"));
 const fs = __importStar(require("fs"));
 const os = __importStar(require("os"));
@@ -66,6 +66,76 @@ exports.userConfigPath = userConfigPath;
 function sharedConfigPath(coordinatorDir) {
     return path.join(coordinatorDir, "config.json");
 }
+function getSharedConfigPath(coordinatorDir) {
+    return sharedConfigPath(coordinatorDir);
+}
+exports.getSharedConfigPath = getSharedConfigPath;
+function prefixKey(text) {
+    if (process.platform === "win32") {
+        return text.replace(/\//g, "\\").toLowerCase();
+    }
+    return text;
+}
+/** Normalize a picked folder to a NAS throttle root (drive letter or UNC share). */
+function normalizeNasPathPrefix(absPath) {
+    const raw = String(absPath || "").trim();
+    if (!raw) {
+        return null;
+    }
+    if (process.platform === "win32") {
+        const normalized = raw.replace(/\//g, "\\");
+        if (normalized.startsWith("\\\\")) {
+            const parts = normalized.split("\\").filter(Boolean);
+            if (parts.length < 2) {
+                return null;
+            }
+            return "\\\\" + parts[0] + "\\" + parts[1];
+        }
+        const driveMatch = normalized.match(/^([A-Za-z]:)(\\.*)?$/);
+        if (driveMatch) {
+            return driveMatch[1].toUpperCase() + "\\";
+        }
+        return null;
+    }
+    const resolved = path.resolve(raw);
+    if (process.platform === "darwin" && resolved.startsWith("/Volumes/")) {
+        const parts = resolved.split(path.sep).filter(Boolean);
+        if (parts.length >= 2 && parts[0] === "Volumes") {
+            return path.join("/", "Volumes", parts[1]);
+        }
+    }
+    if (resolved.startsWith("\\\\") || resolved.startsWith("//")) {
+        const unc = resolved.replace(/\//g, "\\");
+        const parts = unc.split("\\").filter(Boolean);
+        if (parts.length >= 2) {
+            return "\\\\" + parts[0] + "\\" + parts[1];
+        }
+    }
+    return null;
+}
+exports.normalizeNasPathPrefix = normalizeNasPathPrefix;
+function mergeNasPathPrefixes(existing, added) {
+    const out = [];
+    const seen = new Set();
+    const all = (existing || []).concat(added || []);
+    for (let i = 0; i < all.length; i++) {
+        const norm = normalizeNasPathPrefix(all[i]) || String(all[i] || "").trim();
+        if (!norm) {
+            continue;
+        }
+        const key = prefixKey(norm);
+        if (seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        out.push(norm);
+    }
+    out.sort(function (a, b) {
+        return a.localeCompare(b);
+    });
+    return out;
+}
+exports.mergeNasPathPrefixes = mergeNasPathPrefixes;
 function registryDir(coordinatorDir) {
     return path.join(coordinatorDir, "registry");
 }
@@ -293,6 +363,9 @@ function getIoFairshareStatus(coordinatorDir, homeDir) {
         min_mbps_per_job: shared.min_mbps_per_job,
         max_mbps_per_job: maxCap,
         local_jobs: localJobs,
+        nas_path_prefixes: mergeNasPathPrefixes(shared.nas_path_prefixes || [], []),
+        shared_config_path: sharedConfigPath(coordinatorDir),
+        shared_link_mbps: shared.link_mbps,
     };
 }
 exports.getIoFairshareStatus = getIoFairshareStatus;
