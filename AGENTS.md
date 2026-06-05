@@ -424,7 +424,8 @@ Compiles TypeScript, runs JS dev tests, then builds **all desktop targets locall
 **Publish to GitHub** (after tag `v<version>` matches `package.json`): upload **Windows zip only** by default (Zen users are Windows-centric; faster publish). macOS DMGs remain local unless you opt in:
 
 ```bash
-node scripts/publish-release.js          # Windows zip only
+node scripts/publish-release.js          # Windows zip only (pre-release by default)
+node scripts/publish-release.js --stable # full release (not pre-release)
 node scripts/publish-release.js --all-platforms   # upload DMGs + zip
 ```
 
