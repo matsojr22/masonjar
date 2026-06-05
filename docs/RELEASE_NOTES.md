@@ -6,6 +6,28 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.2.0
+
+**What's new**
+
+When several people run Mason Jar on the same Windows compute server, pipeline jobs now **share NAS bandwidth fairly** instead of one instance saturating the network. Each active job gets a slice of the link speed; when fewer jobs are running, each job can use more. Turn it on from the start hub under **Network sharing** (on by default). Link speed can auto-detect or be set manually if your server has multiple NICs.
+
+**Changes**
+
+- Adaptive fair-share for heavy pipeline steps (max, align, detect, CZI extract, batch, etc.).
+- Start hub and workspace show active job count and approximate Mbps share.
+- Sharpen reduces parallel workers when bandwidth share is small.
+
+**Commit subject**
+
+Share NAS bandwidth fairly when many Mason Jar instances run on one server
+
+**Commit body**
+
+Mason Jar 3.2.0 adds machine-wide adaptive I/O fair-share so pipeline jobs on a shared compute server split NAS bandwidth instead of one instance saturating the NIC. Configure link speed from the start hub Network sharing section.
+
+---
+
 ## v3.1.0
 
 **What's new**

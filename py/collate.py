@@ -1,4 +1,5 @@
 # Imports
+import pipeline_io_bootstrap  # noqa: F401
 import csv
 from tkinter import ttk
 from tkinter import filedialog

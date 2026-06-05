@@ -1,3 +1,4 @@
+import pipeline_io_bootstrap  # noqa: F401
 import argparse
 from pathlib import Path
 

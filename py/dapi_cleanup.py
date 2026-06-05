@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pipeline_io_bootstrap  # noqa: F401
 import argparse
 import shutil
 from pathlib import Path

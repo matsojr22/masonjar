@@ -1,4 +1,5 @@
 from tkinter import filedialog
+import pipeline_io_bootstrap  # noqa: F401
 import os
 import tifffile as tiff
 from skimage.filters import unsharp_mask

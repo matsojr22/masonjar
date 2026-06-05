@@ -1,0 +1,91 @@
+"""Tests for py/io_fairshare.py adaptive bandwidth fair-share."""
+
+from __future__ import annotations
+
+import json
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+PY_ROOT = Path(__file__).resolve().parents[1] / ".." / "py"
+sys.path.insert(0, str(PY_ROOT.resolve()))
+
+import io_fairshare  # noqa: E402
+
+
+@pytest.fixture
+def coordinator(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MASONJAR_IO_FAIRSHARE_DIR", str(tmp_path))
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "link_mbps": 1000,
+                "headroom": 0.85,
+                "min_mbps_per_job": 25,
+                "max_mbps_per_job": "auto",
+                "small_file_bytes": 256 * 1024,
+                "stale_seconds": 30,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "registry").mkdir()
+    monkeypatch.setenv("MASONJAR_IO_FAIRSHARE", "1")
+    monkeypatch.setenv("MASONJAR_IO_LINK_MBPS", "1000")
+    monkeypatch.setenv("MASONJAR_IO_JOB_ID", "test-job")
+    monkeypatch.setenv("MASONJAR_IO_JOB_LABEL", "test")
+    return tmp_path
+
+
+def test_compute_limit_single_job(coordinator: Path):
+    io_fairshare._coordinator_dir = str(coordinator)
+    assert io_fairshare.compute_limit_mbps() == pytest.approx(850.0, rel=0.01)
+
+
+def test_compute_limit_splits_active_jobs(coordinator: Path):
+    io_fairshare._coordinator_dir = str(coordinator)
+    reg = coordinator / "registry"
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    for idx in range(3):
+        (reg / f"job{idx}.json").write_text(
+            json.dumps(
+                {
+                    "job_id": f"job{idx}",
+                    "pid": 1000 + idx,
+                    "user": "u",
+                    "hostname": "h",
+                    "label": "max",
+                    "started_at": now,
+                    "last_heartbeat": now,
+                }
+            ),
+            encoding="utf-8",
+        )
+    limit = io_fairshare.compute_limit_mbps()
+    assert limit == pytest.approx(850.0 / 3.0, rel=0.01)
+
+
+def test_should_throttle_unc_on_windows(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert io_fairshare._should_throttle(r"\\nas\share\file.tif") is True
+    assert io_fairshare._should_throttle(r"C:\local\file.tif") is True
+
+
+def test_small_file_bypass(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MASONJAR_IO_FAIRSHARE", "0")
+    p = tmp_path / "tiny.bin"
+    p.write_bytes(b"hello")
+    assert io_fairshare.throttled_read_bytes(p) == b"hello"
+
+
+def test_suggested_max_workers(monkeypatch, coordinator: Path):
+    monkeypatch.setenv("MASONJAR_IO_FAIRSHARE", "1")
+    io_fairshare._activated = True
+    io_fairshare._coordinator_dir = str(coordinator)
+    monkeypatch.setattr(io_fairshare, "compute_limit_mbps", lambda: 150.0)
+    assert io_fairshare.suggested_max_workers(4) == 1
+    monkeypatch.setattr(io_fairshare, "compute_limit_mbps", lambda: 450.0)
+    assert io_fairshare.suggested_max_workers(4) == 4

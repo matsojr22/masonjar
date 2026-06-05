@@ -7,6 +7,7 @@ var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var projectFiles = require("./project_files");
 var appLogToggle = require("./app_log_toggle");
+var ioFairshareSettings = require("./io_fairshare_settings");
 
 var projectChip = document.getElementById("projectChip");
 
@@ -59,4 +60,21 @@ pageInit.onReady(function () {
 		projectFiles.renderStepFailures();
 	});
 	projectFiles.bindProjectFileControls();
+	var compact = document.getElementById("ioFairshareStatusCompact");
+	if (compact) {
+		var ipc = require("electron").ipcRenderer;
+		ipc.on("ioFairshareStatus", function (_event, status) {
+			if (!status || !status.enabled) {
+				compact.textContent = "";
+				return;
+			}
+			compact.textContent =
+				"Network share: " +
+				(status.active_jobs || 0) +
+				" active job(s) on this machine · ~" +
+				Math.round(status.limit_mbps || 0) +
+				" Mbps for new pipeline I/O";
+		});
+		ioFairshareSettings.refreshStatus();
+	}
 });

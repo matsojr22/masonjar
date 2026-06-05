@@ -1,4 +1,5 @@
 import os
+import pipeline_io_bootstrap  # noqa: F401
 import json
 from datetime import datetime, timezone
 import numpy as np

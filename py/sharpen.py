@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pipeline_io_bootstrap  # noqa: F401
 import argparse
 import json
 import os
@@ -174,7 +175,11 @@ def run_batch(args) -> int:
         print("LOG: no input files", flush=True)
         return 1
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
+    import io_fairshare
+
+    max_workers = io_fairshare.suggested_max_workers(4)
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         fn = partial(
             process_file,
             output_path=str(output_path),

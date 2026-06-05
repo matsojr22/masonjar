@@ -66,6 +66,50 @@
         <ul id="recentProjects" class="list-group list-group-flush hub-recent-list small"></ul>
       </section>
 
+      <section
+        id="ioFairsharePanel"
+        class="mb-4 workspace-block text-start"
+        aria-label="Network sharing"
+      >
+        <h2 class="h6 text-muted mb-2">Network sharing</h2>
+        <p class="small text-muted mb-2">
+          On shared compute servers, Mason Jar splits NAS bandwidth fairly across
+          active pipeline jobs on this machine.
+        </p>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" id="ioFairshareEnabled" checked />
+          <label class="form-check-label" for="ioFairshareEnabled">
+            Enable adaptive bandwidth fair-share
+          </label>
+        </div>
+        <div class="row g-2 align-items-end mb-2">
+          <div class="col-sm-4">
+            <label class="form-label small mb-0" for="ioFairshareLinkMode">Link speed</label>
+            <select class="form-select form-select-sm" id="ioFairshareLinkMode">
+              <option value="auto" selected>Auto-detect</option>
+              <option value="manual">Manual (Mbps)</option>
+            </select>
+          </div>
+          <div class="col-sm-4 d-none" id="ioFairshareManualWrap">
+            <label class="form-label small mb-0" for="ioFairshareLinkMbps">Mbps</label>
+            <input
+              type="number"
+              class="form-control form-control-sm"
+              id="ioFairshareLinkMbps"
+              min="10"
+              step="10"
+              value="1000"
+            />
+          </div>
+          <div class="col-sm-4">
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="ioFairshareSaveLink">
+              Save link speed
+            </button>
+          </div>
+        </div>
+        <p class="small mb-0" id="ioFairshareStatus">Checking network share status…</p>
+      </section>
+
       <section class="mb-3" aria-label="Batch processing">
         <a class="menu-card menu-card-batch d-block" href="./batch_wizard.html">
           <i class="fas fa-tasks menu-card-icon" aria-hidden="true"></i>
@@ -80,6 +124,6 @@
       crossorigin="anonymous"
     ></script>
     <script src="../js/hub_version.js"></script>
-    <script src="../js/run.js" data-entry="open_guide.js,menu.js"></script>
+    <script src="../js/run.js" data-entry="open_guide.js,io_fairshare_settings.js,menu.js"></script>
   </body>
 </html>

@@ -243,6 +243,22 @@ When the user starts Alignment or Viewer/Editor from Mason Jar, the Electron mai
 
 When resolving `05_predictions`, if there are no top-level `Predictions_*.pkl` files but nested folders contain them, the workspace picks the **most recently modified** leaf and may set a short warning for ambiguous multi-run trees (also surfaced in the import wizard review when a predictions source path is set).
 
+## NAS bandwidth fair-share (multi-instance)
+
+Windows and macOS do **not** auto-fair-share SMB/NAS bandwidth across RDP users or Mason Jar instances. Cooperative fair-share lives in [`src/io_fairshare.ts`](src/io_fairshare.ts) + [`py/io_fairshare.py`](py/io_fairshare.py).
+
+| Item | Location |
+|------|----------|
+| Coordinator dir | Windows `%ProgramData%\MasonJar\io-fairshare\`; macOS `/Library/Application Support/MasonJar/io-fairshare/`; override `MASONJAR_IO_FAIRSHARE_DIR` |
+| Shared config | `{coordinator}/config.json` — `link_mbps` (auto or number), `headroom` (default 0.85), min/max Mbps per job |
+| Per-user override | `~/.masonjar/io_fairshare.json` — `enabled`, `link_mbps` |
+| Registry | `{coordinator}/registry/{job_id}.json` — heartbeat every 5s; stale >30s ignored |
+| Python bootstrap | `import pipeline_io_bootstrap` first in heavy `py/` scripts; patches `tifffile`/`cv2`/`Path` I/O with token-bucket throttle |
+| IPC | `getIoFairshareStatus`, `saveIoFairshareUserConfig`, `saveIoFairshareSharedConfig` |
+| UI | Start hub **Network sharing** ([`pages/menu.html`](pages/menu.html), [`js/io_fairshare_settings.js`](js/io_fairshare_settings.js)) |
+
+Limit per job: `(link_mbps × headroom) / active_jobs`, clamped. Small files (≤256 KB) bypass throttle. Lab IT may add switch/NAS QoS — see [`docs/LAB_NETWORK.md`](docs/LAB_NETWORK.md).
+
 ## Batch wizard ([`pages/batch_wizard.html`](pages/batch_wizard.html) + [`js/batch_wizard.js`](js/batch_wizard.js))
 
 Three-step wizard (Setup → Run → Summary) mirroring the CZI / Isolate Regions pattern (`body.wizard-page`, `#wizardSteps` pills, `setStep()`, sticky cancel hidden while running, dual logging to wizard `pre.wizard-log` + the global Application log). The hub Batch card links here ([`pages/menu.html`](pages/menu.html)).

@@ -1,4 +1,5 @@
 import cv2
+import pipeline_io_bootstrap  # noqa: F401
 import pickle
 import os
 import json

@@ -20,6 +20,19 @@ const Module = require("module");
 
 const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 import type { BatchPlan } from "./batch_queue";
+import {
+  createHeavyJobHandle,
+  defaultCoordinatorDir,
+  detectLinkMbps,
+  ensureCoordinatorDir,
+  getIoFairshareStatus,
+  loadUserConfig,
+  saveSharedConfig,
+  saveUserConfig,
+  resetLinkSpeedCache,
+  type IoFairshareSharedConfig,
+  type IoFairshareUserConfig,
+} from "./io_fairshare";
 const { promisify } = require("util");
 const { PythonShell } = require("python-shell");
 const tar = require("tar");
@@ -222,6 +235,7 @@ const envPythonPath = path.join(envPath, envMod);
 var pyCommand = process.platform === "win32" ? "python.exe" : "./python3";
 // Path to our python files
 const pyScriptsPath = path.join(appDir, "/py");
+const ioFairshareDir = defaultCoordinatorDir();
 
 const CURRENT_VERSION_TAG = getVersion();
 const GITHUB_API_RELEASES = `https://api.github.com/repos/${BRANDING.GITHUB_REPO}/releases/latest`;
@@ -1001,6 +1015,8 @@ app.on("ready", () => {
 
   win.webContents.once("did-finish-load", () => {
     checkLocalDir();
+    ensureCoordinatorDir(ioFairshareDir);
+    void detectLinkMbps();
     void maybeMigrateLegacyHome(win).then((ok) => {
       if (!ok) {
         return;
@@ -1216,7 +1232,7 @@ function cleanupPythonKillListener(killChannel: string) {
 
 /** Drop orphaned kill-* IPC listeners on Python child error or exit. Scoped to this process only (no single-instance lock). */
 /** Avoid MPS hangs on ops like torchvision::nms during detection on Apple Silicon. */
-function pythonShellEnv(): NodeJS.ProcessEnv {
+function pythonShellEnvBase(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   if (process.platform === "darwin") {
     env.PYTORCH_ENABLE_MPS_FALLBACK = "1";
@@ -1225,6 +1241,51 @@ function pythonShellEnv(): NodeJS.ProcessEnv {
     env.PYTHONIOENCODING = "utf-8";
   }
   return env;
+}
+
+function pythonShellEnv(): NodeJS.ProcessEnv {
+  return pythonShellEnvBase();
+}
+
+type PythonShellOptions = {
+  mode: "text" | "binary" | "json";
+  pythonPath: string;
+  scriptPath: string;
+  args: string[];
+  env?: NodeJS.ProcessEnv;
+};
+
+function mergeHeavyJobEnv(
+  label: string,
+  partial: PythonShellOptions,
+): { options: PythonShellOptions; release: () => void } {
+  const job = createHeavyJobHandle(
+    ioFairshareDir,
+    homeDir,
+    label,
+    pythonShellEnvBase(),
+  );
+  return {
+    options: { ...partial, env: job.env },
+    release: job.release,
+  };
+}
+
+function attachIoFairshareRelease(
+  pyshell: InstanceType<typeof PythonShell>,
+  release: () => void,
+): () => void {
+  let released = false;
+  const onceRelease = () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    release();
+  };
+  pyshell.on("close", onceRelease);
+  pyshell.on("error", onceRelease);
+  return onceRelease;
 }
 
 function attachPythonShellKillCleanup(
@@ -1280,8 +1341,8 @@ function describePythonShellFailure(
 
 // Max Projection
 ipcMain.on("runMax", function (event: any, data: any[]) {
-  let options = {
-    mode: "text",
+  const partial = {
+    mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args: [
@@ -1292,8 +1353,10 @@ ipcMain.on("runMax", function (event: any, data: any[]) {
       "-g False",
     ],
   };
+  const { options, release } = mergeHeavyJobEnv("max", partial);
 
   let pyshell = new PythonShell("max.py", options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killMax");
   var total: number = 0;
   var current: number = 0;
@@ -1302,6 +1365,7 @@ ipcMain.on("runMax", function (event: any, data: any[]) {
       total = Number(message);
     } else if (message == "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        releaseJob();
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
           reportPythonFailure(pyFail);
@@ -1335,13 +1399,15 @@ ipcMain.on("runAdjust", function (event: any, data: any[]) {
   appendFlagPathArg(adjustArgs, "-s", structPath);
   appendFlagPathArg(adjustArgs, "-a", data[1]);
   appendSliceListArg(adjustArgs, data, 2);
-  let options = {
-    mode: "text",
+  const partial = {
+    mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args: adjustArgs,
   };
+  const { options, release } = mergeHeavyJobEnv("adjust", partial);
   let pyshell = new PythonShell("adjust.py", options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killAdjust");
   try {
     const parent = dialogParentWindow(event);
@@ -1361,6 +1427,7 @@ ipcMain.on("runAdjust", function (event: any, data: any[]) {
       total = Number(message);
     } else if (message == "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        releaseJob();
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
           reportPythonFailure(pyFail);
@@ -1400,13 +1467,15 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
   appendFlagPathArg(alignArgs, "-c", mapPath);
   alignArgs.push("-l", String(data[4] ?? "").trim());
   appendSliceListArg(alignArgs, data, 5);
-  let options = {
-    mode: "text",
+  const partial = {
+    mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args: alignArgs,
   };
+  const { options, release } = mergeHeavyJobEnv("align", partial);
   let pyshell = new PythonShell("map.py", options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killAlign");
   try {
     const parent = dialogParentWindow(event);
@@ -1428,6 +1497,7 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
       total = Number(message);
     } else if (message == "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        releaseJob();
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
           reportPythonFailure(pyFail);
@@ -1478,14 +1548,16 @@ ipcMain.on("runIntensity", function (event: any, data: any[]) {
     appendFlagPathArg(args, "--config", configPath);
   }
 
-  let options = {
-    mode: "text",
+  let partial = {
+    mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args,
   };
 
+  const { options, release } = mergeHeavyJobEnv("intensity", partial);
   let pyshell = new PythonShell("region.py", options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killIntensity");
   var total: number = 0;
   var current: number = 0;
@@ -1499,6 +1571,7 @@ ipcMain.on("runIntensity", function (event: any, data: any[]) {
       total = Number(message);
     } else if (message == "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        releaseJob();
         const pyFail = describePythonShellFailure(err, code, signal);
         const noPkls =
           intensityStderr.indexOf("NO_PKLS_WRITTEN") >= 0 ||
@@ -1536,13 +1609,15 @@ ipcMain.on("runIntensity", function (event: any, data: any[]) {
 
 // Export dual-channel ROI TIFs (DAPI + signal PKLs)
 ipcMain.on("runExportDualTif", function (event: any, data: any[]) {
-  let options = {
-    mode: "text",
+  const partial = {
+    mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args: [String.raw`-i ${data[0]}`, String.raw`-o ${data[1]}`],
   };
+  const { options, release } = mergeHeavyJobEnv("dual", partial);
   let pyshell = new PythonShell("export_roi_dual_tif.py", options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killExportDualTif");
   var total: number = 0;
   var current: number = 0;
@@ -1554,6 +1629,7 @@ ipcMain.on("runExportDualTif", function (event: any, data: any[]) {
       total = Number(message);
     } else if (message == "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        releaseJob();
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
           reportPythonFailure(pyFail);
@@ -1590,13 +1666,15 @@ ipcMain.on("runCount", function (event: any, data: any[]) {
 
   appendSliceListArg(custom_args, data, 3);
 
-  let options = {
-    mode: "text",
+  const partial = {
+    mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args: custom_args,
   };
+  const { options, release } = mergeHeavyJobEnv("count", partial);
   let pyshell = new PythonShell("count.py", options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killCount");
   var total: number = 0;
   var current: number = 0;
@@ -1610,6 +1688,7 @@ ipcMain.on("runCount", function (event: any, data: any[]) {
       total = Number(message);
     } else if (message == "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        releaseJob();
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
           reportPythonFailure(pyFail);
@@ -1636,8 +1715,8 @@ ipcMain.on("runCount", function (event: any, data: any[]) {
 
 // Collate
 ipcMain.on("runCollate", function (event: any, data: any[]) {
-  let options = {
-    mode: "text",
+  const partial = {
+    mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args: [
@@ -1648,10 +1727,13 @@ ipcMain.on("runCollate", function (event: any, data: any[]) {
       "-g False",
     ],
   };
+  const { options, release } = mergeHeavyJobEnv("collate", partial);
   let pyshell = new PythonShell("collate.py", options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killCollate");
 
   pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+    releaseJob();
     cleanupPythonKillListener("killCollate");
     const pyFail = describePythonShellFailure(err, code, signal);
     if (pyFail) {
@@ -1795,13 +1877,15 @@ ipcMain.on("runTophat", function (event: any, data: any[]) {
       appendFlagPathArg(args, "--slice-list", String(data[4]));
     }
   }
-  const options = {
+  const partial = {
     mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args,
   };
+  const { options, release } = mergeHeavyJobEnv("tophat", partial);
   const pyshell = new PythonShell("top_hat.py", options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killTophat");
   let total = 0;
   let current = 0;
@@ -1814,6 +1898,7 @@ ipcMain.on("runTophat", function (event: any, data: any[]) {
       total = Number(message);
     } else if (message === "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        releaseJob();
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
           reportPythonFailure(pyFail);
@@ -1850,13 +1935,15 @@ ipcMain.on("runSharpen", function (event: any, data: any[]) {
       args.push("-e");
     }
   }
-  const options = {
+  const partial = {
     mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args,
   };
+  const { options, release } = mergeHeavyJobEnv("sharpen", partial);
   const pyshell = new PythonShell("sharpen.py", options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killSharpen");
   let total = 0;
   let current = 0;
@@ -1868,6 +1955,7 @@ ipcMain.on("runSharpen", function (event: any, data: any[]) {
       total = Number(message);
     } else if (message === "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        releaseJob();
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
           reportPythonFailure(pyFail);
@@ -1906,14 +1994,16 @@ ipcMain.on("runParcellation", function (event: any, data: any[]) {
     appendFlagPathArg(args, "-j", configPath);
   }
 
-  let options = {
-    mode: "text",
+  let partial = {
+    mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args,
   };
 
+  const { options, release } = mergeHeavyJobEnv("parcellation", partial);
   let pyshell = new PythonShell("apply_parcellation.py", options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killParcellation");
   event.sender.send("updateLoad", [0, "Launching parcellation…"]);
   var total: number = 0;
@@ -1923,6 +2013,7 @@ ipcMain.on("runParcellation", function (event: any, data: any[]) {
       total = Number(message);
     } else if (message == "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        releaseJob();
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
           reportPythonFailure(pyFail);
@@ -1972,13 +2063,15 @@ ipcMain.on("runDapiCleanup", function (event: any, data: any[]) {
     args.push("--bg-value", bgValue);
   }
 
-  let options = {
-    mode: "text",
+  let partial = {
+    mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args: args,
   };
+  const { options, release } = mergeHeavyJobEnv("dapi_cleanup", partial);
   let pyshell = new PythonShell("dapi_cleanup.py", options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killDapiCleanup");
   var total: number = 0;
   var current: number = 0;
@@ -1987,6 +2080,7 @@ ipcMain.on("runDapiCleanup", function (event: any, data: any[]) {
       total = Number(message);
     } else if (message == "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        releaseJob();
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
           reportPythonFailure(pyFail);
@@ -2052,14 +2146,15 @@ ipcMain.on("runTissueCleanupApply", function (event: any, data: any[]) {
   const configPath = data[1] || "";
   const args: string[] = ["--apply"];
   appendCziPathArgs(args, bundleRoot, configPath);
-  const options = {
+  const partial = {
     mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args,
-    env: pythonShellEnv(),
   };
+  const { options, release } = mergeHeavyJobEnv("tissue_cleanup", partial);
   const pyshell = new PythonShell("tissue_cleanup.py", options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killTissueCleanup");
   let total = 0;
   let current = 0;
@@ -2093,6 +2188,7 @@ ipcMain.on("runTissueCleanupApply", function (event: any, data: any[]) {
     }
     if (message === "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        releaseJob();
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
           reportPythonFailure(pyFail);
@@ -2157,15 +2253,15 @@ ipcMain.on("runDetection", function (event: any, data: any[]) {
 
   appendSliceListArg(custom_args, data, 9);
 
-  let options = {
-    mode: "text",
+  const partial = {
+    mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     args: custom_args,
-    env: pythonShellEnv(),
   };
-
+  const { options, release } = mergeHeavyJobEnv("detect", partial);
   let pyshell = new PythonShell("find_neurons.py", options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killDetect");
   var total: number = 0;
   var current: number = 0;
@@ -2179,6 +2275,7 @@ ipcMain.on("runDetection", function (event: any, data: any[]) {
       total = Number(message);
     } else if (message == "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        releaseJob();
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
           reportPythonFailure(pyFail);
@@ -2238,14 +2335,23 @@ function runCziPythonScript(
   queueLogLineForUi(`Launching Python: ${scriptName} (${pythonExe})`);
   event.sender.send("cziJobLog", `Launching Python: ${scriptName}`);
 
-  const options = {
+  const partial = {
     mode: "text" as const,
     pythonPath: pythonExe,
     scriptPath: pyScriptsPath,
     args: args,
-    env: pythonShellEnv(),
   };
-  const pyshell = new PythonShell(scriptName, options);
+  const cziLabel =
+    scriptName === "czi_extract.py"
+      ? "czi_extract"
+      : scriptName === "apply_geometry.py"
+        ? "apply_geometry"
+        : "czi";
+  const jobBundle = isProbe
+    ? { options: { ...partial, env: pythonShellEnv() }, release: () => undefined }
+    : mergeHeavyJobEnv(cziLabel, partial);
+  const pyshell = new PythonShell(scriptName, jobBundle.options);
+  const releaseJob = attachIoFairshareRelease(pyshell, jobBundle.release);
   activeCziPythonShell = pyshell;
   let total = 0;
   let current = 0;
@@ -2265,6 +2371,7 @@ function runCziPythonScript(
       return;
     }
     resultSent = true;
+    releaseJob();
     releaseActiveCziShell();
     cleanupPythonKillListener(killChannel);
     event.sender.send(resultChannel, payload);
@@ -2496,11 +2603,32 @@ function getBatchQueueDeps() {
     pyScriptsPath,
     homeDir,
     appDir,
+    ioFairshareDir,
     describePythonShellFailure,
     queueLogLineForUi,
     pythonShellEnv,
   };
 }
+
+ipcMain.on("getIoFairshareStatus", function (event: any) {
+  event.sender.send("ioFairshareStatus", getIoFairshareStatus(ioFairshareDir, homeDir));
+});
+
+ipcMain.on("saveIoFairshareUserConfig", function (event: any, patch: IoFairshareUserConfig) {
+  const saved = saveUserConfig(homeDir, patch || {});
+  event.sender.send("ioFairshareStatus", getIoFairshareStatus(ioFairshareDir, homeDir));
+  event.sender.send("ioFairshareUserConfigSaved", saved);
+});
+
+ipcMain.on(
+  "saveIoFairshareSharedConfig",
+  function (event: any, patch: Partial<IoFairshareSharedConfig>) {
+    const saved = saveSharedConfig(ioFairshareDir, patch || {});
+    resetLinkSpeedCache();
+    event.sender.send("ioFairshareStatus", getIoFairshareStatus(ioFairshareDir, homeDir));
+    event.sender.send("ioFairshareSharedConfigSaved", saved);
+  },
+);
 
 ipcMain.on("runBatch", function (event: any, plan: BatchPlan) {
   const { runBatchQueue } = require("./batch_queue") as typeof import("./batch_queue");

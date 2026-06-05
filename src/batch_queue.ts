@@ -1,3 +1,6 @@
+import {
+  createHeavyJobHandle,
+} from "./io_fairshare";
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -109,6 +112,7 @@ export interface BatchQueueDeps {
   pyScriptsPath: string;
   homeDir: string;
   appDir: string;
+  ioFairshareDir: string;
   describePythonShellFailure: (
     err: unknown,
     code: unknown,
@@ -187,15 +191,32 @@ function runPython(
       resolve({ error: "Cancelled", noPklsWritten: false });
       return;
     }
+    const baseEnv = deps.pythonShellEnv();
+    const job = createHeavyJobHandle(
+      deps.ioFairshareDir,
+      deps.homeDir,
+      opts.scriptName.replace(/\.py$/, ""),
+      baseEnv,
+    );
     const pythonOptions = {
       mode: "text" as const,
       pythonPath: path.join(deps.envPythonPath, deps.pyCommand),
       scriptPath: deps.pyScriptsPath,
       args: opts.args,
-      env: deps.pythonShellEnv(),
+      env: job.env,
     };
     const pyshell = new deps.PythonShell(opts.scriptName, pythonOptions);
     currentBatchShell = pyshell;
+    let released = false;
+    const releaseJob = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      job.release();
+    };
+    pyshell.on("close", releaseJob);
+    pyshell.on("error", releaseJob);
     let total = 0;
     let current = 0;
     let sawNoPkls = false;
@@ -206,6 +227,7 @@ function runPython(
         return;
       }
       resolved = true;
+      releaseJob();
       currentBatchShell = null;
       resolve({ error, noPklsWritten: sawNoPkls });
     }

@@ -33,6 +33,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.runBatchQueue = exports.killBatchQueue = void 0;
+const io_fairshare_1 = require("./io_fairshare");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const batch_paths_1 = require("./batch_paths");
@@ -81,15 +82,27 @@ function runPython(deps, opts) {
             resolve({ error: "Cancelled", noPklsWritten: false });
             return;
         }
+        const baseEnv = deps.pythonShellEnv();
+        const job = (0, io_fairshare_1.createHeavyJobHandle)(deps.ioFairshareDir, deps.homeDir, opts.scriptName.replace(/\.py$/, ""), baseEnv);
         const pythonOptions = {
             mode: "text",
             pythonPath: path.join(deps.envPythonPath, deps.pyCommand),
             scriptPath: deps.pyScriptsPath,
             args: opts.args,
-            env: deps.pythonShellEnv(),
+            env: job.env,
         };
         const pyshell = new deps.PythonShell(opts.scriptName, pythonOptions);
         currentBatchShell = pyshell;
+        let released = false;
+        const releaseJob = () => {
+            if (released) {
+                return;
+            }
+            released = true;
+            job.release();
+        };
+        pyshell.on("close", releaseJob);
+        pyshell.on("error", releaseJob);
         let total = 0;
         let current = 0;
         let sawNoPkls = false;
@@ -99,6 +112,7 @@ function runPython(deps, opts) {
                 return;
             }
             resolved = true;
+            releaseJob();
             currentBatchShell = null;
             resolve({ error, noPklsWritten: sawNoPkls });
         }

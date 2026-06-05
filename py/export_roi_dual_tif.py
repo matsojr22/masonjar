@@ -7,6 +7,7 @@ Derived from bbox rasterization logic similar to RSAT image_only export.
 
 from __future__ import annotations
 
+import pipeline_io_bootstrap  # noqa: F401
 import argparse
 import pickle
 import sys

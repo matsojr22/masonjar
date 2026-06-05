@@ -8,6 +8,7 @@ var workspace = require("./workspace");
 var pipelineGate = require("./pipeline_gate");
 var dialogs = require("./dialogs");
 var appLogToggle = require("./app_log_toggle");
+var ioFairshareSettings = require("./io_fairshare_settings");
 
 var WORKSPACE_MENU = "./workspace_menu.html";
 
@@ -206,6 +207,7 @@ pageInit.onReady(function () {
 
 	bindOpenProject();
 	appLogToggle.bindAppLogToggle(toggleAppLogBtn);
+	ioFairshareSettings.bindNetworkSharing("ioFairsharePanel");
 	if (checkUpdatesBtn) {
 		checkUpdatesBtn.addEventListener("click", function () {
 			ipc.send("checkForUpdates", []);
