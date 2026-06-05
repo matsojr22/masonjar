@@ -37,6 +37,7 @@ const DEFAULT_SHARED = {
     max_mbps_per_job: "auto",
     small_file_bytes: 256 * 1024,
     stale_seconds: 30,
+    nas_path_prefixes: [],
 };
 let cachedLinkMbps = null;
 function resetLinkSpeedCache() {

@@ -71,7 +71,16 @@ def test_compute_limit_splits_active_jobs(coordinator: Path):
 def test_should_throttle_unc_on_windows(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     assert io_fairshare._should_throttle(r"\\nas\share\file.tif") is True
-    assert io_fairshare._should_throttle(r"C:\local\file.tif") is True
+    assert io_fairshare._should_throttle(r"C:\local\file.tif") is False
+
+
+def test_should_throttle_configured_prefix(monkeypatch, coordinator: Path):
+    io_fairshare._coordinator_dir = str(coordinator)
+    cfg = json.loads((coordinator / "config.json").read_text(encoding="utf-8"))
+    cfg["nas_path_prefixes"] = ["Z:"]
+    (coordinator / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert io_fairshare._should_throttle(r"Z:\lab\project\file.tif") is True
 
 
 def test_small_file_bypass(tmp_path: Path, monkeypatch):

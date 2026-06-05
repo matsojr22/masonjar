@@ -6,6 +6,22 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.2.1
+
+**What's new**
+
+Network fair-share now throttles mapped NAS drives (e.g. `Z:\`) when you list them in the shared config, not only UNC paths. Local disk I/O is left unthrottled.
+
+**Changes**
+
+- `nas_path_prefixes` in `%ProgramData%\MasonJar\io-fairshare\config.json` (e.g. `["Z:\\"]`).
+
+**Commit subject**
+
+Fix NAS fair-share for mapped drive letters on Windows
+
+---
+
 ## v3.2.0
 
 **What's new**

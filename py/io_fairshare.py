@@ -57,6 +57,7 @@ def _load_shared_config() -> dict[str, Any]:
         "max_mbps_per_job": "auto",
         "small_file_bytes": _SMALL_FILE_BYTES,
         "stale_seconds": _STALE_SECONDS,
+        "nas_path_prefixes": [],
     }
     try:
         if cfg_path.is_file():
@@ -227,15 +228,30 @@ class TokenBucket:
 _BUCKET = TokenBucket()
 
 
+def _nas_prefixes() -> list[str]:
+    cfg = _load_shared_config()
+    prefixes = list(cfg.get("nas_path_prefixes") or [])
+    env = os.environ.get("MASONJAR_IO_NAS_PREFIXES", "").strip()
+    if env:
+        prefixes.extend(p.strip() for p in env.split(";") if p.strip())
+    return [os.fspath(p) for p in prefixes]
+
+
 def _should_throttle(path: str | os.PathLike[str]) -> bool:
-    text = os.fspath(path)
+    text = os.path.normcase(os.fspath(path))
     if sys.platform == "win32":
         if text.startswith("\\\\"):
             return True
-        if len(text) >= 2 and text[1] == ":":
-            return True
+        for pref in _nas_prefixes():
+            if text.startswith(os.path.normcase(pref)):
+                return True
         return False
-    return text.startswith("/")
+    if text.startswith("/volumes/"):
+        return True
+    for pref in _nas_prefixes():
+        if text.startswith(os.path.normcase(pref)):
+            return True
+    return False
 
 
 def _file_size(path: str | os.PathLike[str]) -> int | None:
