@@ -361,7 +361,7 @@ function renderParamSection(stepId, body, params) {
 					'<select id="parcelLevelSelect" class="form-select form-select-sm d-none" aria-label="CCFv3 raw depth"></select>' +
 				"</div>" +
 				'<div class="col-md-6">' +
-					'<label class="form-label small" for="parcelRegionSearch">Search regions to exclude</label>' +
+					'<label class="form-label small" for="parcelRegionSearch">Search available</label>' +
 					'<input type="search" class="form-control form-control-sm" id="parcelRegionSearch" placeholder="acronym or name" />' +
 				"</div>" +
 			"</div>" +
@@ -373,15 +373,22 @@ function renderParamSection(stepId, body, params) {
 				'<div><div class="small fw-bold mb-1">Available regions</div>' +
 				'<div id="parcelAvailable" class="region-list-panel"></div></div>' +
 				'<div class="d-flex flex-column justify-content-center gap-2">' +
-				'<button type="button" class="btn btn-sm btn-primary" id="parcelAdd">Exclude →</button>' +
+				'<button type="button" class="btn btn-sm btn-primary" id="parcelAdd">Add →</button>' +
 				'<button type="button" class="btn btn-sm btn-outline-secondary" id="parcelRemove">← Remove</button>' +
+				'<button type="button" class="btn btn-sm btn-outline-primary" id="parcelAddAll">Add all</button>' +
+				'<button type="button" class="btn btn-sm btn-outline-danger" id="parcelRemoveAll">Remove all</button>' +
 				"</div>" +
-				'<div><div class="small fw-bold mb-1">Excluded after rollup</div>' +
-				'<div id="parcelExcluded" class="region-list-panel"></div></div>' +
+				'<div><div class="small fw-bold mb-1">Included regions</div>' +
+				'<div id="parcelIncluded" class="region-list-panel"></div></div>' +
 			"</div>" +
 			'<p id="parcelRegionHint" class="small text-muted mb-0"></p>';
-		if (!state.parcellation.excludedRegionIds.length && params.excludedRegionIds) {
-			state.parcellation.excludedRegionIds = params.excludedRegionIds.slice();
+		if (!state.parcellation.includedRegionIds.length && params.includedRegionIds) {
+			state.parcellation.includedRegionIds = params.includedRegionIds.slice();
+		} else if (
+			!state.parcellation.includedRegionIds.length &&
+			params.excludedRegionIds
+		) {
+			state.parcellation.includedRegionIds = params.excludedRegionIds.slice();
 		}
 		setTimeout(initParcellationPicker, 0);
 		return;
@@ -629,7 +636,7 @@ function initParcellationPicker() {
 		addBtn.dataset.bound = "1";
 		addBtn.addEventListener("click", function () {
 			if (state.parcelAvailableHighlight != null) {
-				addParcellationExcluded(state.parcelAvailableHighlight);
+				addParcellationIncluded(state.parcelAvailableHighlight);
 			}
 		});
 	}
@@ -638,12 +645,33 @@ function initParcellationPicker() {
 		remBtn.dataset.bound = "1";
 		remBtn.addEventListener("click", function () {
 			if (state.parcelSelectedHighlight != null) {
-				removeParcellationExcluded(state.parcelSelectedHighlight);
+				removeParcellationIncluded(state.parcelSelectedHighlight);
 			}
 		});
 	}
+	var addAllBtn = qs("parcelAddAll");
+	if (addAllBtn && !addAllBtn.dataset.bound) {
+		addAllBtn.dataset.bound = "1";
+		addAllBtn.addEventListener("click", function () {
+			var regions = parcellationRegionsForPicker(
+				qs("parcelRegionSearch") ? qs("parcelRegionSearch").value : "",
+			);
+			for (var a = 0; a < regions.length; a++) {
+				addParcellationIncluded(regions[a].id);
+			}
+		});
+	}
+	var removeAllBtn = qs("parcelRemoveAll");
+	if (removeAllBtn && !removeAllBtn.dataset.bound) {
+		removeAllBtn.dataset.bound = "1";
+		removeAllBtn.addEventListener("click", function () {
+			state.parcellation.includedRegionIds = [];
+			renderParcellationAvailable();
+			renderParcellationIncluded();
+		});
+	}
 	renderParcellationAvailable();
-	renderParcellationExcluded();
+	renderParcellationIncluded();
 }
 
 function parcellationRegionsForPicker(search) {
@@ -661,14 +689,14 @@ function renderParcellationAvailable() {
 	if (!panel || !state.catalog) return;
 	var search = qs("parcelRegionSearch") ? qs("parcelRegionSearch").value : "";
 	var regions = parcellationRegionsForPicker(search);
-	var excluded = {};
-	for (var s = 0; s < state.parcellation.excludedRegionIds.length; s++) {
-		excluded[state.parcellation.excludedRegionIds[s]] = true;
+	var included = {};
+	for (var s = 0; s < state.parcellation.includedRegionIds.length; s++) {
+		included[state.parcellation.includedRegionIds[s]] = true;
 	}
 	panel.innerHTML = "";
 	for (var i = 0; i < regions.length; i++) {
 		var node = regions[i];
-		if (excluded[node.id]) continue;
+		if (included[node.id]) continue;
 		var row = document.createElement("div");
 		row.className = "region-picker-row";
 		if (state.parcelAvailableHighlight === node.id) row.classList.add("selected-row");
@@ -690,18 +718,19 @@ function renderParcellationAvailable() {
 	}
 	var hint = qs("parcelRegionHint");
 	if (hint) {
-		hint.textContent =
-			state.parcellation.excludedRegionIds.length +
-			" region(s) excluded. Pick a coarser hierarchy or add exclusions.";
+		hint.textContent = state.parcellation.includedRegionIds.length
+			? state.parcellation.includedRegionIds.length +
+				" region(s) included after rollup."
+			: "Empty included list keeps all regions after rollup.";
 	}
 }
 
-function renderParcellationExcluded() {
-	var panel = qs("parcelExcluded");
+function renderParcellationIncluded() {
+	var panel = qs("parcelIncluded");
 	if (!panel || !state.catalog) return;
 	panel.innerHTML = "";
-	for (var i = 0; i < state.parcellation.excludedRegionIds.length; i++) {
-		var id = state.parcellation.excludedRegionIds[i];
+	for (var i = 0; i < state.parcellation.includedRegionIds.length; i++) {
+		var id = state.parcellation.includedRegionIds[i];
 		var node = state.catalog.byId[id];
 		if (!node) continue;
 		var row = document.createElement("div");
@@ -711,26 +740,28 @@ function renderParcellationExcluded() {
 		row.addEventListener("click", (function (rid) {
 			return function () {
 				state.parcelSelectedHighlight = rid;
-				renderParcellationExcluded();
+				renderParcellationIncluded();
 			};
 		})(id));
 		panel.appendChild(row);
 	}
 }
 
-function addParcellationExcluded(id) {
-	if (state.parcellation.excludedRegionIds.indexOf(id) >= 0) return;
-	state.parcellation.excludedRegionIds.push(id);
+function addParcellationIncluded(id) {
+	if (state.parcellation.includedRegionIds.indexOf(id) >= 0) return;
+	state.parcellation.includedRegionIds.push(id);
 	renderParcellationAvailable();
-	renderParcellationExcluded();
+	renderParcellationIncluded();
 }
 
-function removeParcellationExcluded(id) {
-	state.parcellation.excludedRegionIds = state.parcellation.excludedRegionIds.filter(function (x) {
-		return x !== id;
-	});
+function removeParcellationIncluded(id) {
+	state.parcellation.includedRegionIds = state.parcellation.includedRegionIds.filter(
+		function (x) {
+			return x !== id;
+		},
+	);
 	renderParcellationAvailable();
-	renderParcellationExcluded();
+	renderParcellationIncluded();
 }
 
 function isParcellationPlanValid() {
@@ -738,10 +769,8 @@ function isParcellationPlanValid() {
 	var p = state.params.parcellation || {};
 	var adv = !!p.ccfAdvanced;
 	var tierId = adv ? null : p.tierId || "areas";
-	var excluded = state.parcellation.excludedRegionIds.length;
 	if (adv) return true;
-	if (tierId !== "full") return true;
-	return excluded > 0;
+	return tierId !== "full";
 }
 
 // ---------------------------------------------------------------- intensity picker ----
@@ -1018,7 +1047,7 @@ function collectParamsFromUi() {
 				? parseInt(qs("parcelLevelSelect").value, 10)
 				: 6;
 			next.ccfAdvanced = !!(qs("parcelAdvanced") && qs("parcelAdvanced").checked);
-			next.excludedRegionIds = state.parcellation.excludedRegionIds.slice();
+			next.includedRegionIds = state.parcellation.includedRegionIds.slice();
 		} else if (stepId === "dapi_cleanup") {
 			next.inPlace = qs("dapi-inplace") ? qs("dapi-inplace").value === "true" : true;
 			next.isolate = !!(qs("dapi-isolate") && qs("dapi-isolate").checked);
@@ -1146,12 +1175,12 @@ function classifyPreflightCell(bundleRoot, stepId) {
 		var pParams = state.params.parcellation || registry.DEFAULT_PARAMS.parcellation;
 		var adv = !!pParams.ccfAdvanced;
 		var tierId = adv ? null : pParams.tierId || "areas";
-		var excluded = (state.parcellation.excludedRegionIds || []).length;
-		if (!adv && tierId === "full" && excluded === 0) {
+		var included = (state.parcellation.includedRegionIds || []).length;
+		if (!adv && tierId === "full") {
 			return {
 				tone: "amber",
 				label: "no-op",
-				reason: "Full detail with no exclusions — step will skip.",
+				reason: "Full detail — step will skip.",
 			};
 		}
 		return {

@@ -151,6 +151,46 @@ def test_restore_fine(align_dir, catalog, structure_map):
     assert np.array_equal(restored, backup)
 
 
+def test_apply_inclusion_zeros_outside_set():
+    arr = np.array([[100, 200], [300, 0]], dtype=np.uint32)
+    out, n = apply_inclusion(arr, {100, 200})
+    assert n == 1
+    assert out[0, 0] == 100
+    assert out[0, 1] == 200
+    assert out[1, 0] == 0
+    assert out[1, 1] == 0
+
+
+def test_inclusion_after_rollup(align_dir, catalog, structure_map):
+    sid = "M528_s021"
+    visp4 = catalog["by_acronym"]["VISp4"]["id"]
+    aud = catalog["by_acronym"].get("AUD")
+    if aud is None:
+        pytest.skip("AUD not in catalog")
+    aud_id = aud["id"]
+    grid = np.zeros((4, 4), dtype=np.uint32)
+    grid[0:2, :] = visp4
+    grid[2:, :] = aud_id
+    with (align_dir / f"Annotation_{sid}.pkl").open("wb") as f:
+        pickle.dump(grid, f)
+
+    vis = catalog["by_acronym"]["VIS"]["id"]
+    apply_parcellation_to_slice(
+        align_dir,
+        sid,
+        tier_id="areas",
+        st_level=None,
+        excluded_region_ids=None,
+        included_region_ids=[vis],
+        structure_map=structure_map,
+        catalog=catalog,
+    )
+    with (align_dir / f"Annotation_{sid}.pkl").open("rb") as f:
+        out = pickle.load(f)
+    assert np.any(out[0:2, :] != 0)
+    assert np.all(out[2:, :] == 0)
+
+
 def test_exclusion_after_rollup(align_dir, catalog, structure_map):
     sid = "M528_s020"
     visp4 = catalog["by_acronym"]["VISp4"]["id"]

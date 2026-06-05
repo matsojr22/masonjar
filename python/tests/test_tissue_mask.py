@@ -106,6 +106,16 @@ def test_resize_keep_mask_nearest() -> None:
     assert big[0, 0] == 0
 
 
+def test_ensure_keep_mask_polarity_inverts_when_tissue_is_brighter() -> None:
+    from tissue_mask import ensure_keep_mask_polarity
+
+    gray = _synthetic_blob()
+    inverted = np.where(gray < 100, 255, 0).astype(np.uint8)
+    corrected = ensure_keep_mask_polarity(gray, inverted)
+    assert corrected[gray < 100].mean() > 200
+    assert corrected[gray > 200].mean() < 50
+
+
 def test_paths_for_slice_includes_sharpen_tophat(tmp_path: Path) -> None:
     from bundle_slice_paths import paths_for_slice
 

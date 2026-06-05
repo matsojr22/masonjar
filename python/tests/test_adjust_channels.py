@@ -65,6 +65,17 @@ def test_lowres_channels_previews_png_only(tmp_path: Path) -> None:
     assert names == ["Axons", "Dapi", "Rabies Red", "Somata"]
 
 
+def test_lowres_channels_dapi_pipeline_fallback(tmp_path: Path) -> None:
+    dapi = tmp_path / "00_dapi"
+    dapi.mkdir()
+    (dapi / "M528_s061.tif").write_bytes(b"dapi")
+    (dapi / "M528_s061.png").write_bytes(b"png")
+    channels = lowres_channels_for_slice(dapi, "M528_s061")
+    assert len(channels) == 1
+    assert channels[0][0] == "DAPI (pipeline)"
+    assert channels[0][1].name == "M528_s061.png"
+
+
 def test_lowres_channels_explicit_previews_dir(tmp_path: Path) -> None:
     dapi = tmp_path / "00_dapi"
     custom = tmp_path / "custom_previews"

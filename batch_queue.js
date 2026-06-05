@@ -445,11 +445,8 @@ function preflightJob(deps, proj, stepId, plan, onLine) {
         const stLevel = ccfAdvanced
             ? (pParams.stLevel != null ? Number(pParams.stLevel) : 6)
             : null;
-        const excluded = pParams.excludedRegionIds || [];
-        if (!ccfAdvanced && tierId === "full" && excluded.length === 0) {
-            return { skip: true, reason: "no parcellation change" };
-        }
-        if (ccfAdvanced && stLevel == null && excluded.length === 0) {
+        const included = pParams.includedRegionIds || [];
+        if (!ccfAdvanced && tierId === "full" && included.length === 0) {
             return { skip: true, reason: "no parcellation change" };
         }
     }
@@ -878,7 +875,7 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
             st_level: pParams.ccfAdvanced
                 ? (pParams.stLevel != null ? Number(pParams.stLevel) : 6)
                 : null,
-            excluded_region_ids: pParams.excludedRegionIds || [],
+            included_region_ids: pParams.includedRegionIds || [],
             slice_ids: null,
         };
         const metaPath = (0, batch_paths_1.ensureMetaDir)(proj.path);
