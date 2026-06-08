@@ -9,7 +9,7 @@ Last updated: 2026-06-07 (v3.3.0). Use this file to resume work; long-term archi
 | Item | Value |
 |------|--------|
 | `package.json` version | **3.3.0** |
-| Latest tag | `v3.2.5` (pre-release on GitHub); **v3.3.0** pending build/publish |
+| Latest tag | `v3.3.0` (pre-release on GitHub; Windows zip published) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
 
 **v3.3.0** — **Geometry partial-apply recovery**: [`js/geometry_state.js`](../js/geometry_state.js) policy audit; [`pages/geometry_repair_wizard.html`](../pages/geometry_repair_wizard.html) + [`js/geometry_repair_wizard.js`](../js/geometry_repair_wizard.js) full-series fingerprint probe ([`py/geometry_fingerprint_probe.py`](../py/geometry_fingerprint_probe.py), [`py/geometry_orientation_match.py`](../py/geometry_orientation_match.py)); cross-channel mask IoU (not intensity); [`py/apply_geometry.py`](../py/apply_geometry.py) progress manifest + `repair_mode: geometry`; Orient **Rebuild geometry** / **Finalize only**; batch preflight uses `ops` geometry. Meta: `.masonjar/geometry_apply_progress.json`, `geometry_apply_last_result.json`, `geometry_repair_queue.json`. IPC: `runGeometryFingerprintProbe`. Tests: `scripts/test-geometry-state.js`, `python/tests/test_geometry_orientation_match.py`.
