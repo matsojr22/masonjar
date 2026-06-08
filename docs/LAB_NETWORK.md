@@ -4,7 +4,7 @@ Mason Jar on a shared Windows compute server can saturate the NIC when many user
 
 ## What Mason Jar does (client-side)
 
-- Tracks active heavy Python jobs machine-wide via `%ProgramData%\MasonJar\io-fairshare\registry\` (Windows).
+- Tracks active heavy Python jobs machine-wide via `%ProgramData%\MasonJar\io-fairshare\registry\` (Windows). Registry heartbeats are best-effort: if antivirus or another user locks a registry file, fair-share may under-count active jobs briefly but Mason Jar will not crash.
 - Each job’s NAS I/O is throttled to roughly `(link speed × 85% headroom) / number of active jobs`.
 - When fewer jobs run, each job gets more bandwidth automatically.
 - Files ≤256 KB skip throttling (project JSON, small metadata).

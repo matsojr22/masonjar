@@ -176,12 +176,87 @@ function readJsonFile<T>(filePath: string): T | null {
   }
 }
 
-function writeJsonAtomic(filePath: string, data: unknown): void {
+function isRegistryLockError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  return code === "EPERM" || code === "EACCES" || code === "EBUSY";
+}
+
+function sleepMs(ms: number): void {
+  if (ms <= 0) {
+    return;
+  }
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    /* brief spin for registry lock retry */
+  }
+}
+
+function removeFileBestEffort(filePath: string): void {
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch (_err) {
+    /* ignore */
+  }
+}
+
+function writeJsonWithRetry(
+  filePath: string,
+  payload: string,
+  maxAttempts = 5,
+): void {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      fs.writeFileSync(filePath, payload, "utf8");
+      return;
+    } catch (err) {
+      if (attempt < maxAttempts - 1 && isRegistryLockError(err)) {
+        sleepMs(25 * (attempt + 1));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+let lastRegistryWarnAt = 0;
+
+function warnRegistryBestEffort(message: string): void {
+  const now = Date.now();
+  if (now - lastRegistryWarnAt < 60000) {
+    return;
+  }
+  lastRegistryWarnAt = now;
+  console.warn(message);
+}
+
+/** Atomic JSON write; falls back to in-place retry on Windows file locks. */
+export function writeJsonAtomic(filePath: string, data: unknown): void {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
+  const payload = JSON.stringify(data, null, 2);
   const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-  fs.renameSync(tmp, filePath);
+  fs.writeFileSync(tmp, payload, "utf8");
+  try {
+    try {
+      fs.renameSync(tmp, filePath);
+    } catch (err) {
+      if (isRegistryLockError(err) && fs.existsSync(filePath)) {
+        removeFileBestEffort(tmp);
+        writeJsonWithRetry(filePath, payload);
+        return;
+      }
+      if (isRegistryLockError(err)) {
+        sleepMs(50);
+        fs.renameSync(tmp, filePath);
+        return;
+      }
+      throw err;
+    }
+  } finally {
+    removeFileBestEffort(tmp);
+  }
 }
 
 export function parseLinkSpeedText(raw: string): number | null {
@@ -435,27 +510,39 @@ export function registerJob(
   jobId: string,
   label: string,
 ): void {
-  ensureCoordinatorDir(coordinatorDir);
-  const entry: IoFairshareRegistryEntry = {
-    job_id: jobId,
-    pid: process.pid,
-    user: os.userInfo().username,
-    hostname: os.hostname(),
-    label,
-    started_at: new Date().toISOString(),
-    last_heartbeat: new Date().toISOString(),
-  };
-  writeJsonAtomic(path.join(registryDir(coordinatorDir), `${jobId}.json`), entry);
+  try {
+    ensureCoordinatorDir(coordinatorDir);
+    const entry: IoFairshareRegistryEntry = {
+      job_id: jobId,
+      pid: process.pid,
+      user: os.userInfo().username,
+      hostname: os.hostname(),
+      label,
+      started_at: new Date().toISOString(),
+      last_heartbeat: new Date().toISOString(),
+    };
+    writeJsonAtomic(path.join(registryDir(coordinatorDir), `${jobId}.json`), entry);
+  } catch (err) {
+    warnRegistryBestEffort(
+      `io-fairshare: registry register failed (${jobId}): ${(err as Error).message}`,
+    );
+  }
 }
 
 export function touchJob(coordinatorDir: string, jobId: string): void {
-  const filePath = path.join(registryDir(coordinatorDir), `${jobId}.json`);
-  const entry = readJsonFile<IoFairshareRegistryEntry>(filePath);
-  if (!entry) {
-    return;
+  try {
+    const filePath = path.join(registryDir(coordinatorDir), `${jobId}.json`);
+    const entry = readJsonFile<IoFairshareRegistryEntry>(filePath);
+    if (!entry) {
+      return;
+    }
+    entry.last_heartbeat = new Date().toISOString();
+    writeJsonAtomic(filePath, entry);
+  } catch (err) {
+    warnRegistryBestEffort(
+      `io-fairshare: registry heartbeat failed (${jobId}): ${(err as Error).message}`,
+    );
   }
-  entry.last_heartbeat = new Date().toISOString();
-  writeJsonAtomic(filePath, entry);
 }
 
 export function unregisterJob(coordinatorDir: string, jobId: string): void {
@@ -476,9 +563,21 @@ export function beginNodeJobTracking(
   jobId: string,
   label: string,
 ): void {
-  registerJob(coordinatorDir, jobId, label);
+  try {
+    registerJob(coordinatorDir, jobId, label);
+  } catch (err) {
+    warnRegistryBestEffort(
+      `io-fairshare: begin tracking failed (${jobId}): ${(err as Error).message}`,
+    );
+  }
   const timer = setInterval(() => {
-    touchJob(coordinatorDir, jobId);
+    try {
+      touchJob(coordinatorDir, jobId);
+    } catch (err) {
+      warnRegistryBestEffort(
+        `io-fairshare: heartbeat failed (${jobId}): ${(err as Error).message}`,
+      );
+    }
   }, 5000);
   if (typeof timer.unref === "function") {
     timer.unref();

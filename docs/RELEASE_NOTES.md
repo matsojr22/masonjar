@@ -6,6 +6,23 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.2.5
+
+**What's new**
+
+Fixes a Windows crash during long jobs (e.g. Apply geometry) when network fair-share could not update its registry file.
+
+**Changes**
+
+- Registry heartbeats use Windows-safe writes with retry; failures are logged, not fatal.
+- Orient / geometry and other heavy jobs continue even if `%ProgramData%\MasonJar\io-fairshare\registry\` is briefly locked.
+
+**Commit subject**
+
+Fix io-fairshare EPERM crash on Windows registry heartbeats
+
+---
+
 ## v3.2.4
 
 **What's new**

@@ -252,7 +252,7 @@ Windows and macOS do **not** auto-fair-share SMB/NAS bandwidth across RDP users 
 | Coordinator dir | Windows `%ProgramData%\MasonJar\io-fairshare\`; macOS `/Library/Application Support/MasonJar/io-fairshare/`; override `MASONJAR_IO_FAIRSHARE_DIR` |
 | Shared config | `{coordinator}/config.json` — `link_mbps` (auto or number), `headroom` (default 0.85), min/max Mbps per job, **`nas_path_prefixes`** (drive/UNC roots for NAS throttle matching) |
 | Per-user override | `~/.masonjar/io_fairshare.json` — `enabled`, `link_mbps` |
-| Registry | `{coordinator}/registry/{job_id}.json` — heartbeat every 5s; stale >30s ignored |
+| Registry | `{coordinator}/registry/{job_id}.json` — heartbeat every 5s; stale >30s ignored. Windows: `writeJsonAtomic` falls back to in-place retry on `EPERM`/`EBUSY`; heartbeats are **best-effort** (never crash main) |
 | Python bootstrap | `import pipeline_io_bootstrap` first in heavy `py/` scripts; patches `tifffile`/`cv2`/`Path` I/O with token-bucket throttle |
 | IPC | `getIoFairshareStatus`, `saveIoFairshareUserConfig`, `saveIoFairshareSharedConfig`, `showOpenNetworkLocationsDialog` (multi-select folders), `ioFairshareSharedConfigError` |
 | Helpers | `normalizeNasPathPrefix` (mapped drive → `Z:\`, UNC → `\\server\share`; macOS `/Volumes/…`), `mergeNasPathPrefixes` (dedupe, stable sort) |

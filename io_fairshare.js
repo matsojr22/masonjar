@@ -150,13 +150,82 @@ function readJsonFile(filePath) {
         return null;
     }
 }
+function isRegistryLockError(err) {
+    const code = err === null || err === void 0 ? void 0 : err.code;
+    return code === "EPERM" || code === "EACCES" || code === "EBUSY";
+}
+function sleepMs(ms) {
+    if (ms <= 0) {
+        return;
+    }
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+        /* brief spin for registry lock retry */
+    }
+}
+function removeFileBestEffort(filePath) {
+    try {
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+        }
+    }
+    catch (_err) {
+        /* ignore */
+    }
+}
+function writeJsonWithRetry(filePath, payload, maxAttempts = 5) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+            fs.writeFileSync(filePath, payload, "utf8");
+            return;
+        }
+        catch (err) {
+            if (attempt < maxAttempts - 1 && isRegistryLockError(err)) {
+                sleepMs(25 * (attempt + 1));
+                continue;
+            }
+            throw err;
+        }
+    }
+}
+let lastRegistryWarnAt = 0;
+function warnRegistryBestEffort(message) {
+    const now = Date.now();
+    if (now - lastRegistryWarnAt < 60000) {
+        return;
+    }
+    lastRegistryWarnAt = now;
+    console.warn(message);
+}
 function writeJsonAtomic(filePath, data) {
     const dir = path.dirname(filePath);
     fs.mkdirSync(dir, { recursive: true });
+    const payload = JSON.stringify(data, null, 2);
     const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-    fs.renameSync(tmp, filePath);
+    fs.writeFileSync(tmp, payload, "utf8");
+    try {
+        try {
+            fs.renameSync(tmp, filePath);
+        }
+        catch (err) {
+            if (isRegistryLockError(err) && fs.existsSync(filePath)) {
+                removeFileBestEffort(tmp);
+                writeJsonWithRetry(filePath, payload);
+                return;
+            }
+            if (isRegistryLockError(err)) {
+                sleepMs(50);
+                fs.renameSync(tmp, filePath);
+                return;
+            }
+            throw err;
+        }
+    }
+    finally {
+        removeFileBestEffort(tmp);
+    }
 }
+exports.writeJsonAtomic = writeJsonAtomic;
 function parseLinkSpeedText(raw) {
     const text = String(raw || "").trim().toLowerCase();
     if (!text) {
@@ -377,27 +446,37 @@ function newJobId() {
 }
 exports.newJobId = newJobId;
 function registerJob(coordinatorDir, jobId, label) {
-    ensureCoordinatorDir(coordinatorDir);
-    const entry = {
-        job_id: jobId,
-        pid: process.pid,
-        user: os.userInfo().username,
-        hostname: os.hostname(),
-        label,
-        started_at: new Date().toISOString(),
-        last_heartbeat: new Date().toISOString(),
-    };
-    writeJsonAtomic(path.join(registryDir(coordinatorDir), `${jobId}.json`), entry);
+    try {
+        ensureCoordinatorDir(coordinatorDir);
+        const entry = {
+            job_id: jobId,
+            pid: process.pid,
+            user: os.userInfo().username,
+            hostname: os.hostname(),
+            label,
+            started_at: new Date().toISOString(),
+            last_heartbeat: new Date().toISOString(),
+        };
+        writeJsonAtomic(path.join(registryDir(coordinatorDir), `${jobId}.json`), entry);
+    }
+    catch (err) {
+        warnRegistryBestEffort(`io-fairshare: registry register failed (${jobId}): ${err.message}`);
+    }
 }
 exports.registerJob = registerJob;
 function touchJob(coordinatorDir, jobId) {
-    const filePath = path.join(registryDir(coordinatorDir), `${jobId}.json`);
-    const entry = readJsonFile(filePath);
-    if (!entry) {
-        return;
+    try {
+        const filePath = path.join(registryDir(coordinatorDir), `${jobId}.json`);
+        const entry = readJsonFile(filePath);
+        if (!entry) {
+            return;
+        }
+        entry.last_heartbeat = new Date().toISOString();
+        writeJsonAtomic(filePath, entry);
     }
-    entry.last_heartbeat = new Date().toISOString();
-    writeJsonAtomic(filePath, entry);
+    catch (err) {
+        warnRegistryBestEffort(`io-fairshare: registry heartbeat failed (${jobId}): ${err.message}`);
+    }
 }
 exports.touchJob = touchJob;
 function unregisterJob(coordinatorDir, jobId) {
@@ -414,9 +493,19 @@ function unregisterJob(coordinatorDir, jobId) {
 exports.unregisterJob = unregisterJob;
 const activeNodeJobs = new Map();
 function beginNodeJobTracking(coordinatorDir, jobId, label) {
-    registerJob(coordinatorDir, jobId, label);
+    try {
+        registerJob(coordinatorDir, jobId, label);
+    }
+    catch (err) {
+        warnRegistryBestEffort(`io-fairshare: begin tracking failed (${jobId}): ${err.message}`);
+    }
     const timer = setInterval(() => {
-        touchJob(coordinatorDir, jobId);
+        try {
+            touchJob(coordinatorDir, jobId);
+        }
+        catch (err) {
+            warnRegistryBestEffort(`io-fairshare: heartbeat failed (${jobId}): ${err.message}`);
+        }
     }, 5000);
     if (typeof timer.unref === "function") {
         timer.unref();

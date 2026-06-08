@@ -104,6 +104,32 @@ function testMergeNasPathPrefixes() {
 	}
 }
 
+function testWriteJsonAtomicHeartbeatRewrite() {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mj-io-write-"));
+	const reg = path.join(tmp, "registry");
+	fs.mkdirSync(reg, { recursive: true });
+	const filePath = path.join(reg, "job-heartbeat.json");
+	const entry = {
+		job_id: "job-heartbeat",
+		pid: process.pid,
+		last_heartbeat: new Date().toISOString(),
+	};
+	for (var i = 0; i < 12; i++) {
+		entry.last_heartbeat = new Date().toISOString();
+		ioFairshare.writeJsonAtomic(filePath, entry);
+	}
+	const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+	assert(parsed.job_id === "job-heartbeat", "heartbeat rewrite keeps job_id");
+	fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+function testTouchJobMissingIsNoop() {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mj-io-touch-"));
+	fs.mkdirSync(path.join(tmp, "registry"), { recursive: true });
+	ioFairshare.touchJob(tmp, "missing-job-id");
+	fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 function testStatusIncludesNasPrefixes() {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mj-io-status-"));
 	fs.mkdirSync(path.join(tmp, "registry"), { recursive: true });
@@ -129,6 +155,8 @@ function main() {
 	testRegistryStale();
 	testNormalizeNasPathPrefix();
 	testMergeNasPathPrefixes();
+	testWriteJsonAtomicHeartbeatRewrite();
+	testTouchJobMissingIsNoop();
 	testStatusIncludesNasPrefixes();
 	console.log("test-io-fairshare: ok");
 }
