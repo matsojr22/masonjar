@@ -1,6 +1,6 @@
 # Agent session handoff
 
-Last updated: 2026-06-01 (v3.3.1). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-08 (v3.3.2). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
 
@@ -8,9 +8,11 @@ Last updated: 2026-06-01 (v3.3.1). Use this file to resume work; long-term archi
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **3.3.1** |
-| Latest tag | `v3.3.1` (pre-release on GitHub; Windows zip published) |
+| `package.json` version | **3.3.2** |
+| Latest tag | `v3.3.2` (pre-release on GitHub; Windows zip published) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v3.3.2** — **Geometry state shadowing hotfix**: [`js/geometry_state.js`](../js/geometry_state.js) `configFingerprint` / `resolveSliceIds` parameter renamed to `importCfg` so the `czi_import` module is not shadowed; fixes Check orientation slice list resolution from import config (v3.3.1 regression).
 
 **v3.3.1** — **Check orientation UX + M468 fixes**: always-visible **Check orientation** ([`pages/orient.html`](../pages/orient.html), [`js/menu_category.js`](../js/menu_category.js)); [`js/geometry_state.js`](../js/geometry_state.js) signals `reapply_stack_risk`, `partial_pending_subset`, `legacy_partial_suspect`; block unsafe re-Apply; [`py/apply_geometry.py`](../py/apply_geometry.py) `TiffFile` preflight abort + plane-wise z-stack I/O + `derivatives_from_original` repair; wizard polish. Tests: `scripts/test-geometry-state.js`, `python/tests/test_apply_geometry.py`.
 

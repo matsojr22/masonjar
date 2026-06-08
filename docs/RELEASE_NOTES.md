@@ -6,6 +6,22 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.3.2
+
+**What's new**
+
+Fixes **Check orientation** failing to load slice lists on projects that rely on the CZI import config (v3.3.1 regression).
+
+**Changes**
+
+- Geometry state helpers no longer confuse the import config object with the CZI import module when resolving slice IDs.
+
+**Commit subject**
+
+Fix Check orientation slice list after geometry state regression
+
+---
+
 ## v3.3.1
 
 **What's new**

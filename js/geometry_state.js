@@ -43,15 +43,15 @@ function geometryOnlyHash(cziImport) {
 	return crypto.createHash("sha256").update(JSON.stringify(geom)).digest("hex");
 }
 
-function configFingerprint(cziImport) {
-	if (!cziImport) {
+function configFingerprint(importCfg) {
+	if (!importCfg) {
 		return "";
 	}
-	if (typeof cziImport.config_fingerprint === "string") {
-		return cziImport.config_fingerprint;
+	if (typeof importCfg.config_fingerprint === "string") {
+		return importCfg.config_fingerprint;
 	}
 	return cziImport.cziImportFingerprint
-		? cziImport.cziImportFingerprint(cziImport)
+		? cziImport.cziImportFingerprint(importCfg)
 		: "";
 }
 
@@ -90,8 +90,8 @@ function defaultReferenceBranch(cziImport) {
 	return "somata";
 }
 
-function resolveSliceIds(bundleRoot, cziImport) {
-	var ids = cziImport.collectSliceIds(cziImport || {});
+function resolveSliceIds(bundleRoot, importCfg) {
+	var ids = cziImport.collectSliceIds(importCfg || {});
 	if (ids.length) {
 		return ids;
 	}
