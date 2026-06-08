@@ -77,13 +77,29 @@ def apply_ops_to_array(arr: np.ndarray, ops: list) -> np.ndarray:
     return out
 
 
+def _read_tiff_array(path: Path) -> np.ndarray:
+    """Read TIFF via TiffFile (path-based; avoids io_fairshare BytesIO on large NAS files)."""
+    with tiff.TiffFile(str(path)) as tf:
+        pages = tf.pages
+        if not pages:
+            raise ValueError(f"No TIFF pages in {path.name}")
+        if len(pages) == 1:
+            return np.asarray(pages[0].asarray())
+        planes = [np.asarray(p.asarray()) for p in pages]
+        return np.stack(planes, axis=0)
+
+
+def _write_tiff_array(path: Path, arr: np.ndarray) -> None:
+    tiff.imwrite(str(path), arr, photometric="minisblack")
+
+
 def _read_image_array(path: Path) -> np.ndarray:
     if path.suffix.lower() == ".png":
         img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
         if img is None:
             raise ValueError(f"Could not read {path}")
         return np.asarray(img)
-    return np.asarray(tiff.imread(str(path)))
+    return _read_tiff_array(path)
 
 
 def _write_image_array(path: Path, arr: np.ndarray) -> None:
@@ -93,7 +109,7 @@ def _write_image_array(path: Path, arr: np.ndarray) -> None:
     if path.suffix.lower() == ".png":
         cv2.imwrite(str(path), arr)
         return
-    tiff.imwrite(str(path), arr, photometric="minisblack")
+    _write_tiff_array(path, arr)
 
 
 def transform_file(path: Path, ops: list) -> tuple[np.ndarray, np.ndarray]:
@@ -132,35 +148,50 @@ def _file_kind(path: Path) -> str:
     return "TIFF"
 
 
-def _describe_target(path: Path) -> str:
+def _probe_target(path: Path) -> tuple[bool, str]:
     size = path.stat().st_size if path.is_file() else 0
     kind = _file_kind(path)
     detail = f"{kind} {size} bytes"
+    if not path.is_file():
+        return False, detail + " (missing)"
     if kind == "TIFF":
         try:
-            arr = np.asarray(tiff.imread(str(path)))
-            if arr.ndim == 2:
-                detail += f" 2D {arr.dtype} {arr.shape[1]}x{arr.shape[0]}"
-            elif arr.ndim == 3:
-                detail += f" Z-stack {arr.dtype} Z={arr.shape[0]} {arr.shape[2]}x{arr.shape[1]}"
-            else:
-                detail += f" ndim={arr.ndim} {arr.dtype}"
+            with tiff.TiffFile(str(path)) as tf:
+                pages = tf.pages
+                if not pages:
+                    return False, detail + " (no pages)"
+                dtype = pages[0].dtype
+                shape = pages[0].shape
+                if len(pages) == 1:
+                    detail += f" 2D {dtype} {shape[1]}x{shape[0]}"
+                else:
+                    detail += f" Z-stack {dtype} Z={len(pages)} {shape[1]}x{shape[0]}"
+            return True, detail
         except Exception as exc:
-            detail += f" (read meta failed: {exc})"
-    else:
-        try:
-            img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-            if img is not None:
-                arr = np.asarray(img)
-                detail += f" 2D {arr.dtype} {arr.shape[1]}x{arr.shape[0]}"
-        except Exception as exc:
-            detail += f" (read meta failed: {exc})"
+            return False, detail + f" (read meta failed: {exc})"
+    try:
+        img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        if img is None:
+            return False, detail + " (read failed)"
+        arr = np.asarray(img)
+        detail += f" 2D {arr.dtype} {arr.shape[1]}x{arr.shape[0]}"
+        return True, detail
+    except Exception as exc:
+        return False, detail + f" (read meta failed: {exc})"
+
+
+def _describe_target(path: Path) -> str:
+    _ok, detail = _probe_target(path)
     return detail
 
 
-def preflight_log(jobs: list[tuple[str, list, list[Path]]], bundle_root: Path) -> int:
+def preflight_log(
+    jobs: list[tuple[str, list, list[Path]]],
+    bundle_root: Path,
+) -> tuple[int, list[str]]:
     total_bytes = 0
     total_files = sum(len(targets) for _, _, targets in jobs)
+    failed_probes: list[str] = []
     emit_log(f"Preflight: {len(jobs)} slice(s), {total_files} file(s) to transform")
     for slice_id, _ops, targets in jobs:
         for tpath in targets:
@@ -170,18 +201,26 @@ def preflight_log(jobs: list[tuple[str, list, list[Path]]], bundle_root: Path) -
                 rel = Path(tpath.name)
             size = tpath.stat().st_size if tpath.is_file() else 0
             total_bytes += size
-            emit_log(f"  {rel}: {_describe_target(tpath)}")
+            ok, detail = _probe_target(tpath)
+            emit_log(f"  {rel}: {detail}")
+            if not ok:
+                failed_probes.append(f"{rel}: {detail}")
     emit_log(f"Preflight total: {total_files} files, {total_bytes} bytes")
-    return total_files
+    if failed_probes:
+        emit_log(f"Preflight FAILED: {len(failed_probes)} unreadable target(s)")
+    return total_files, failed_probes
 
 
 def _ops_from_js_list(op_list: list) -> list:
     return ops_from_string_list(op_list)
 
 
-def collect_repair_jobs(bundle_root: Path, cfg: dict) -> list[tuple[str, list, Path, str]]:
-    """(slice_id, ops, path, strategy) from repair_targets."""
-    jobs: list[tuple[str, list, Path, str]] = []
+def collect_repair_jobs(
+    bundle_root: Path,
+    cfg: dict,
+) -> list[tuple[str, list, Path, str, str]]:
+    """(slice_id, ops, path, strategy, branch) from repair_targets."""
+    jobs: list[tuple[str, list, Path, str, str]] = []
     for target in cfg.get("repair_targets") or []:
         strategy = str(target.get("strategy") or "derivatives_from_original")
         if strategy == "skip":
@@ -190,17 +229,71 @@ def collect_repair_jobs(bundle_root: Path, cfg: dict) -> list[tuple[str, list, P
         rel = str(target.get("rel_path") or "").strip()
         if not rel:
             continue
+        branch = str(target.get("branch") or "")
         op_list = target.get("ops") or []
         ops = _ops_from_js_list(op_list) if op_list else []
         path = bundle_root / rel
         if strategy == "transform_original":
-            branch = str(target.get("branch") or "")
             if branch:
                 orig = bundle_root / CANONICAL_REL["original_scans"] / branch / f"{slice_id}.tif"
                 if orig.is_file():
                     path = orig
-        jobs.append((slice_id, ops, path, strategy))
+        jobs.append((slice_id, ops, path, strategy, branch))
     return jobs
+
+
+def _preview_from_plane(plane, preview_scale: float) -> np.ndarray:
+    from czi_common import clamp_preview_scale, preview_autoscale_to_uint8
+
+    scale = clamp_preview_scale(preview_scale)
+    uint8 = preview_autoscale_to_uint8(plane)
+    if scale >= 0.999:
+        return uint8
+    h, w = uint8.shape[:2]
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    return cv2.resize(uint8, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+
+def _write_preview_png(dest: Path, plane, preview_scale: float) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(dest), _preview_from_plane(plane, preview_scale))
+
+
+def _repair_derivatives_from_original(
+    bundle_root: Path,
+    slice_id: str,
+    branch: str,
+    rel_path: str,
+    ops: list,
+    preview_scale: float,
+) -> None:
+    from czi_common import dapi_preview_path, orient_dapi_preview_path
+    from czi_extract import plane_from_zstack
+
+    orig = bundle_root / CANONICAL_REL["original_scans"] / branch / f"{slice_id}.tif"
+    if not orig.is_file():
+        raise FileNotFoundError(f"Missing z-stack {orig.relative_to(bundle_root)}")
+    stack = _read_tiff_array(orig)
+    if ops:
+        if stack.ndim == 2:
+            stack = apply_ops_to_array(stack, ops)
+        else:
+            stack = np.stack(
+                [apply_ops_to_array(stack[z], ops) for z in range(stack.shape[0])],
+                axis=0,
+            )
+        _write_tiff_array(orig, stack)
+    plane = plane_from_zstack(stack)
+    rel_lower = rel_path.replace("\\", "/").lower()
+    if branch == "dapi" or "/00_dapi/" in rel_lower or rel_lower.endswith("_dapi.png"):
+        preview = _preview_from_plane(plane, preview_scale)
+        for dest in (orient_dapi_preview_path(bundle_root, slice_id), dapi_preview_path(bundle_root, slice_id)):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(dest), preview)
+        return
+    dest = bundle_root / rel_path
+    _write_preview_png(dest, plane, preview_scale)
 
 
 def run_transform_jobs(
@@ -264,26 +357,45 @@ def run_transform_jobs(
 def run_repair_jobs(bundle_root: Path, cfg: dict) -> tuple[int, int, list[str], int]:
     jobs = collect_repair_jobs(bundle_root, cfg)
     total_files = len(jobs)
+    preview_scale = float(cfg.get("preview_scale") or 0.05)
     emit_log(f"Geometry repair: {total_files} target(s)")
     print(total_files, flush=True)
     changed = 0
     bytes_total = 0
     failed: list[str] = []
-    for i, (slice_id, ops, tpath, strategy) in enumerate(jobs):
+    for i, (slice_id, ops, tpath, strategy, branch) in enumerate(jobs):
         idx = i + 1
         try:
             rel = tpath.relative_to(bundle_root)
         except ValueError:
             rel = Path(tpath.name)
-        if strategy == "skip" or not tpath.is_file():
+        if strategy == "skip":
             emit_log(f"[{idx}/{total_files}] skip {rel}")
             continue
         emit_log(f"[{idx}/{total_files}] repair {strategy} {rel}")
         try:
-            if ops:
-                _before, after = transform_file(tpath, ops)
+            if strategy == "derivatives_from_original":
+                rel_path = str(tpath.relative_to(bundle_root)).replace("\\", "/")
+                if not branch:
+                    branch = Path(rel_path).stem.split("_")[-1] if "_" in Path(rel_path).stem else ""
+                _repair_derivatives_from_original(
+                    bundle_root,
+                    slice_id,
+                    branch,
+                    rel_path,
+                    ops,
+                    preview_scale,
+                )
+            elif strategy == "transform_original":
+                if not tpath.is_file():
+                    raise FileNotFoundError(f"Missing {rel}")
+                if ops:
+                    transform_file(tpath, ops)
             else:
-                after = _read_image_array(tpath)
+                if not tpath.is_file():
+                    raise FileNotFoundError(f"Missing {rel}")
+                if ops:
+                    transform_file(tpath, ops)
             changed += 1
             bytes_total += tpath.stat().st_size if tpath.is_file() else 0
             print(f"Repaired geometry [{idx}/{total_files}] {rel}", flush=True)
@@ -338,8 +450,28 @@ def main() -> int:
         return 0
 
     jobs = collect_geometry_jobs(bundle_root, geometry, cfg)
-    total_files = preflight_log(jobs, bundle_root)
+    total_files, failed_probes = preflight_log(jobs, bundle_root)
     print(total_files, flush=True)
+    if failed_probes:
+        emit_result(
+            {
+                "ok": False,
+                "error": "preflight_failed",
+                "failed_probes": failed_probes,
+                "files_total": total_files,
+            },
+        )
+        write_last_result(
+            bundle_root,
+            {
+                "ok": False,
+                "error": "preflight_failed",
+                "failed_probes": failed_probes,
+                "geometry_hash": geometry_hash,
+                "config_fingerprint": config_fingerprint,
+            },
+        )
+        return 1
 
     progress = load_progress(bundle_root)
     if progress and (

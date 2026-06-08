@@ -1365,9 +1365,16 @@ function updateOrientPreviewBanner() {
 		wizardState.cziImport,
 	);
 	var banner = qs("orientPreviewBanner");
+	var geomBanner = qs("orientGeometryBanner");
 	var repairBtn = qs("orientRepairPreviews");
 	var step5Next = qs("step5Next");
 	var pending = countNonIdentityGeometry();
+	var sliceIds = cziImport.collectSliceIds(wizardState.cziImport);
+	var geoState = geometryState.assessGeometryApplyState(
+		wizardState.bundleRoot,
+		wizardState.cziImport,
+		{ sliceIds: sliceIds, previewHealth: health },
+	);
 	var msg = cziImport.orientPreviewBannerText(health);
 	if (banner) {
 		if (msg) {
@@ -1378,16 +1385,32 @@ function updateOrientPreviewBanner() {
 			banner.classList.add("d-none");
 		}
 	}
+	var geoMsg = geometryState.geometryStateBannerText(geoState, health);
+	if (geomBanner) {
+		if (geoMsg && geoState.policyState === "interrupted") {
+			geomBanner.innerHTML =
+				geoMsg +
+				' <a href="./geometry_repair_wizard.html">Check orientation</a>';
+			geomBanner.classList.remove("d-none");
+		} else {
+			geomBanner.textContent = "";
+			geomBanner.classList.add("d-none");
+		}
+	}
 	if (repairBtn) {
 		repairBtn.classList.toggle("d-none", !health.needsRepair);
 	}
 	if (step5Next && !geometryRunning) {
-		step5Next.disabled = !health.canApply || pending === 0;
+		step5Next.disabled =
+			!health.canApply || !geoState.allowApply || pending === 0;
 	}
 	var step5Hint = qs("step5ApplyHint");
 	if (step5Hint && !geometryRunning) {
 		if (!health.canApply) {
 			step5Hint.textContent = "";
+		} else if (geoState.policyState === "interrupted") {
+			step5Hint.innerHTML =
+				'Geometry apply is blocked. Open <a href="./geometry_repair_wizard.html">Check orientation</a> to audit and repair.';
 		} else if (pending === 0) {
 			step5Hint.textContent = wizardState.cziImport.geometry_applied_at
 				? "No pending changes. Review on-disk previews or adjust a slice before confirming again."
@@ -2098,10 +2121,14 @@ async function runApplyGeometry() {
 	);
 	if (geoState.policyState === "interrupted") {
 		throw new Error(
-			"Geometry apply is blocked — open Rebuild geometry from Orient to repair inconsistent files.",
+			"Geometry apply is blocked — open Check orientation to audit and repair inconsistent files.",
 		);
 	}
-	if (pending > 0 && wizardState.cziImport.geometry_applied_at) {
+	if (
+		pending > 0 &&
+		wizardState.cziImport.geometry_applied_at &&
+		geoState.policyState === "healthy"
+	) {
 		if (
 			!confirm(
 				"Geometry was already applied to files. Apply again will rotate/flip current on-disk images. Continue?",

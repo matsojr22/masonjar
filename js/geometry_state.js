@@ -188,6 +188,85 @@ function sliceMtimeSplit(bundleRoot, sliceId, thresholdSec) {
 	return span > thresholdSec;
 }
 
+function slicePreviewDapiMtimeMismatch(bundleRoot, sliceId, thresholdMs) {
+	thresholdMs = thresholdMs == null ? 1000 : thresholdMs;
+	var dapiPng = path.join(bundleRoot, DAPI_REL, sliceId + ".png");
+	if (!fs.existsSync(dapiPng)) {
+		return false;
+	}
+	var dapiM;
+	try {
+		dapiM = fs.statSync(dapiPng).mtimeMs;
+	} catch (e) {
+		return false;
+	}
+	var previews = previewPathsForSlice(bundleRoot, sliceId);
+	for (var i = 0; i < previews.length; i++) {
+		try {
+			if (Math.abs(fs.statSync(previews[i].abs_path).mtimeMs - dapiM) > thresholdMs) {
+				return true;
+			}
+		} catch (e2) {
+			/* skip */
+		}
+	}
+	return false;
+}
+
+function outputsNewerThanGeometryConfig(bundleRoot) {
+	var cfgPath = path.join(bundleRoot, branding.META_DIR, "czi_import_config.json");
+	if (!fs.existsSync(cfgPath)) {
+		return false;
+	}
+	var cfgMtime;
+	try {
+		cfgMtime = fs.statSync(cfgPath).mtimeMs;
+	} catch (e) {
+		return false;
+	}
+	var scanRoots = [
+		path.join(bundleRoot, "data", "original_scans"),
+		path.join(bundleRoot, "data", "counting", "03_max"),
+	];
+	for (var r = 0; r < scanRoots.length; r++) {
+		var root = scanRoots[r];
+		if (!fs.existsSync(root)) {
+			continue;
+		}
+		var stack = [root];
+		while (stack.length) {
+			var dir = stack.pop();
+			var entries;
+			try {
+				entries = fs.readdirSync(dir);
+			} catch (e2) {
+				continue;
+			}
+			for (var i = 0; i < entries.length; i++) {
+				var full = path.join(dir, entries[i]);
+				var st;
+				try {
+					st = fs.statSync(full);
+				} catch (e3) {
+					continue;
+				}
+				if (st.isDirectory()) {
+					stack.push(full);
+					continue;
+				}
+				var lower = entries[i].toLowerCase();
+				if (!lower.endsWith(".tif") && !lower.endsWith(".tiff")) {
+					continue;
+				}
+				if (st.mtimeMs > cfgMtime + 1000) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+
 function progressMatches(cziImport, progress) {
 	if (!progress) {
 		return false;
@@ -239,10 +318,46 @@ function assessGeometryApplyState(bundleRoot, cziImport, options) {
 		}
 	}
 
+	if (cziImport.geometry_applied_at && pendingCount > 0) {
+		signals.push("reapply_stack_risk");
+		policyState = "interrupted";
+	}
+
+	if (
+		pendingCount > 0 &&
+		pendingCount < sliceIds.length &&
+		(cziImport.geometry_applied_at || outputsNewerThanGeometryConfig(bundleRoot))
+	) {
+		signals.push("partial_pending_subset");
+		policyState = "interrupted";
+	}
+
+	var hasProgressMeta = !!(progress && progressOk);
+	var hasLastResultMeta = !!(lastResult && progressOk);
+	if (
+		!hasProgressMeta &&
+		!hasLastResultMeta &&
+		pendingCount > 0 &&
+		!cziImport.geometry_applied_at
+	) {
+		for (var ls = 0; ls < sliceIds.length; ls++) {
+			var sid = sliceIds[ls];
+			if (!orientGeometry.geometryHasPending(cziImport.geometry[sid])) {
+				continue;
+			}
+			if (sliceMtimeSplit(bundleRoot, sid) || slicePreviewDapiMtimeMismatch(bundleRoot, sid)) {
+				signals.push("legacy_partial_suspect");
+				policyState = "interrupted";
+				break;
+			}
+		}
+	}
+
 	if (
 		signals.indexOf("manifest_incomplete") < 0 &&
 		signals.indexOf("last_result_failed") < 0 &&
 		signals.indexOf("finalize_pending") < 0 &&
+		signals.indexOf("legacy_partial_suspect") < 0 &&
 		pendingCount > 0 &&
 		!cziImport.geometry_applied_at
 	) {
@@ -321,15 +436,33 @@ function geometryStateBannerText(state, previewHealth) {
 		return cziImport.orientPreviewBannerText(previewHealth);
 	}
 	if (state.policyState === "interrupted") {
+		if (state.signals && state.signals.indexOf("reapply_stack_risk") >= 0) {
+			return (
+				"Files were already modified; pending geometry on " +
+				state.pendingCount +
+				" of " +
+				state.sliceIds.length +
+				" slices. Use Check orientation — do not Apply."
+			);
+		}
+		if (state.signals && state.signals.indexOf("partial_pending_subset") >= 0) {
+			return (
+				"Pending geometry on " +
+				state.pendingCount +
+				" of " +
+				state.sliceIds.length +
+				" slices after a prior apply. Use Check orientation — do not Apply."
+			);
+		}
 		return (
 			"Geometry apply was interrupted or files are inconsistent. " +
-			"Do not use Apply geometry — open Rebuild geometry to audit and repair."
+			"Do not use Apply geometry — use Check orientation to audit and repair."
 		);
 	}
 	if (state.policyState === "finalize_pending") {
 		return (
 			"Geometry files appear fully written but project settings were not finalized. " +
-			"Use Finalize only or open Rebuild geometry."
+			"Use Finalize only or Check orientation."
 		);
 	}
 	return "";
@@ -443,7 +576,7 @@ function batchGeometryPreflight(projectPath, cziImport) {
 		return {
 			tone: "red",
 			label: "blocked",
-			reason: "Interrupted geometry — run Rebuild geometry in Orient first.",
+			reason: "Interrupted geometry — run Check orientation first.",
 		};
 	}
 	if (!hasPendingGeometry(cziImport || {}, state.sliceIds)) {

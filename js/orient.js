@@ -281,7 +281,7 @@ function updateOrientPreviewBanner() {
 	if (rebuildLink) {
 		rebuildLink.classList.toggle(
 			"d-none",
-			!geoState.showRebuildWizard && geoState.policyState === "healthy",
+			geoState.policyState !== "interrupted" && geoState.policyState !== "finalize_pending",
 		);
 	}
 	if (finalizeBtn) {
@@ -295,7 +295,10 @@ function updateOrientPreviewBanner() {
 		if (!health.canApply) {
 			/* repair banner carries the message */
 		} else if (geoState.policyState === "interrupted") {
-			status.textContent = "Apply is disabled — use Rebuild geometry to audit and repair.";
+			status.textContent = "Apply is disabled — use Check orientation to audit and repair.";
+		} else if (pending > 0 && !orientState.cziImport.geometry_applied_at) {
+			status.textContent =
+				"CSS preview — adjust slices, then Apply geometry. If a prior apply crashed, use Check orientation first.";
 		} else if (pending === 0) {
 			status.textContent = orientState.cziImport.geometry_applied_at
 				? "No pending changes. Tiles show on-disk orientation; adjust a slice and Apply again for further changes."
@@ -488,10 +491,14 @@ function runApplyGeometry() {
 	var geoState = getGeometryApplyState(ids);
 	if (geoState.policyState === "interrupted") {
 		return Promise.reject(
-			new Error("Geometry apply is blocked — open Rebuild geometry to repair inconsistent files."),
+			new Error("Geometry apply is blocked — use Check orientation to audit and repair."),
 		);
 	}
-	if (geomCount > 0 && orientState.cziImport.geometry_applied_at) {
+	if (
+		geomCount > 0 &&
+		orientState.cziImport.geometry_applied_at &&
+		geoState.policyState === "healthy"
+	) {
 		if (
 			!confirm(
 				"Geometry was already applied to files. Apply again will rotate/flip current on-disk images. Continue?",
@@ -567,11 +574,18 @@ function runApplyGeometry() {
 			geometryState.persistLastApplyResult(orientState.bundleRoot, orientState.cziImport, payload || {});
 			if (!payload || payload.ok === false) {
 				var errMsg = (payload && payload.error) || "Geometry apply failed";
-				if (payload && payload.failed && payload.failed.length) {
+				if (payload && payload.error === "preflight_failed" && payload.failed_probes) {
+					errMsg = "Preflight failed — fix unreadable files before applying";
+					verboseLog("ERROR: " + errMsg);
+					for (var fp = 0; fp < payload.failed_probes.length; fp++) {
+						verboseLog("  " + payload.failed_probes[fp]);
+					}
+				} else if (payload && payload.failed && payload.failed.length) {
 					errMsg += ": " + payload.failed.join("; ");
 				}
 				setActivity("Geometry apply failed: " + errMsg, 0);
 				verboseLog("ERROR: " + errMsg);
+				updateOrientPreviewBanner();
 				reject(new Error(errMsg));
 				return;
 			}

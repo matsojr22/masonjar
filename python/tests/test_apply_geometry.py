@@ -153,3 +153,81 @@ def test_double_apply_rot90_changes_pixels_twice(tmp_path: Path) -> None:
     assert not np.array_equal(after_twice, after_once)
     expected_twice = np.rot90(np.rot90(once, k=-1), k=-1)
     assert np.array_equal(after_twice, expected_twice)
+
+
+def test_preflight_probe_uses_tiff_file_not_full_read(tmp_path: Path, monkeypatch) -> None:
+    from apply_geometry import _probe_target, collect_geometry_jobs, preflight_log
+
+    bundle = tmp_path / "Brain_masonjar"
+    z, h, w = 4, 8, 10
+    stack = np.arange(z * h * w, dtype=np.uint8).reshape(z, h, w)
+    orig = bundle / "data/original_scans/somata/M1.tif"
+    orig.parent.mkdir(parents=True, exist_ok=True)
+    tiff.imwrite(orig, stack, photometric="minisblack")
+
+    def _boom(_path):
+        raise ValueError("whole-file imread should not run in preflight")
+
+    monkeypatch.setattr("apply_geometry.tiff.imread", _boom)
+
+    ok, detail = _probe_target(orig)
+    assert ok is True
+    assert "Z-stack" in detail
+    assert "Z=4" in detail
+
+    cfg = {"channels": [{"role": "signal_somata", "keep": True}]}
+    geometry = {"M1": {"ops": ["rot90"]}}
+    jobs = collect_geometry_jobs(bundle, geometry, cfg)
+    total, failed = preflight_log(jobs, bundle)
+    assert total >= 1
+    assert failed == []
+
+
+def test_preflight_aborts_on_missing_target(tmp_path: Path) -> None:
+    from apply_geometry import _probe_target, collect_geometry_jobs, preflight_log
+
+    bundle = tmp_path / "Brain_masonjar"
+    missing = bundle / "data/counting/_previews/M1_somata.png"
+    missing.parent.mkdir(parents=True, exist_ok=True)
+    cfg = {"channels": [{"role": "signal_somata", "keep": True}]}
+    geometry = {"M1": {"ops": ["rot90"]}}
+    jobs = collect_geometry_jobs(bundle, geometry, cfg)
+    assert jobs == []
+    ok, detail = _probe_target(missing)
+    assert ok is False
+    assert "missing" in detail
+
+
+def test_repair_derivatives_from_original(tmp_path: Path) -> None:
+    from apply_geometry import run_repair_jobs
+
+    bundle = tmp_path / "Brain_masonjar"
+    slice_id = "M1"
+    z, h, w = 2, 6, 8
+    stack = np.arange(z * h * w, dtype=np.uint8).reshape(z, h, w)
+    orig = bundle / "data/original_scans/somata" / f"{slice_id}.tif"
+    prev = bundle / "data/counting/_previews" / f"{slice_id}_somata.png"
+    orig.parent.mkdir(parents=True, exist_ok=True)
+    prev.parent.mkdir(parents=True, exist_ok=True)
+    tiff.imwrite(orig, stack, photometric="minisblack")
+    prev.write_bytes(b"old")
+
+    cfg = {
+        "preview_scale": 0.5,
+        "repair_targets": [
+            {
+                "slice_id": slice_id,
+                "branch": "somata",
+                "rel_path": "data/counting/_previews/M1_somata.png",
+                "strategy": "derivatives_from_original",
+                "ops": ["rot90"],
+            },
+        ],
+    }
+    changed, _bytes, failed, total = run_repair_jobs(bundle, cfg)
+    assert failed == []
+    assert changed == 1
+    assert total == 1
+    loaded = tiff.imread(orig)
+    assert loaded.shape == (z, w, h)
+    assert prev.stat().st_size > 4

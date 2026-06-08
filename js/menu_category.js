@@ -15,6 +15,7 @@ var CATEGORIES = {
 			{ label: "Sharpen", href: "./sharpen_wizard.html" },
 			{ label: "Top-hat filter", href: "./tophat_wizard.html" },
 			{ label: "Orient slices", href: "./orient.html" },
+			{ label: "Check orientation", href: "./geometry_repair_wizard.html" },
 			{ label: "DAPI cleanup", href: "./dapi_cleanup.html" },
 			{
 				label: "Semi-manual tissue edge cleanup",

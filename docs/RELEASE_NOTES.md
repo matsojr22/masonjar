@@ -6,6 +6,26 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.3.1
+
+**What's new**
+
+**Check orientation** is always available from Orient and the Image preprocessing menu — you no longer need an interrupted-apply flag to reach the full-series audit.
+
+**Changes**
+
+- Blocks unsafe re-Apply when files were already modified but pending geometry remains (e.g. partial apply on 25 of 71 slices).
+- Detects legacy partial-apply crashes (pre-v3.3.0) via mtime signals without progress meta files.
+- Large z-stack TIFFs on NAS paths: preflight probes metadata via `TiffFile` and aborts before the transform loop; plane-wise reads avoid io_fairshare `BytesIO` failures.
+- Geometry repair executes `derivatives_from_original` — rebuilds previews from `original_scans` z-stacks.
+- Repair wizard renamed **Check orientation** with clearer healthy-state and audit-error copy.
+
+**Commit subject**
+
+Check orientation UX, block unsafe re-Apply, large TIFF geometry fix
+
+---
+
 ## v3.3.0
 
 **What's new**

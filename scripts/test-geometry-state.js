@@ -79,6 +79,74 @@ function testFreshPendingAllowsApply() {
 	assert.strictEqual(st.allowApply, true);
 }
 
+function testReapplyStackRisk() {
+	var bundle = tempBundle();
+	var czi = {
+		geometry: {
+			S1: { ops: ["rot90"] },
+			S2: { ops: [] },
+		},
+		geometry_applied_at: "2026-01-01T00:00:00.000Z",
+	};
+	var st = geometryState.assessGeometryApplyState(bundle, czi, {
+		sliceIds: ["S1", "S2"],
+		previewHealth: { needsRepair: false, canApply: true },
+	});
+	assert.strictEqual(st.policyState, "interrupted");
+	assert.ok(st.signals.indexOf("reapply_stack_risk") >= 0);
+	assert.strictEqual(st.allowApply, false);
+}
+
+function testPartialPendingSubset() {
+	var bundle = tempBundle();
+	var cfgPath = path.join(bundle, ".masonjar", "czi_import_config.json");
+	fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+	fs.writeFileSync(cfgPath, "{}", "utf8");
+	var oldTime = Date.now() - 7 * 24 * 3600 * 1000;
+	fs.utimesSync(cfgPath, oldTime / 1000, oldTime / 1000);
+	var origDir = path.join(bundle, "data/original_scans/somata");
+	fs.mkdirSync(origDir, { recursive: true });
+	var tif = path.join(origDir, "S1.tif");
+	fs.writeFileSync(tif, "tif");
+	fs.utimesSync(tif, Date.now() / 1000, Date.now() / 1000);
+	var czi = {
+		geometry: {
+			S1: { ops: ["rot90"] },
+			S2: { ops: [] },
+		},
+		geometry_applied_at: "2026-01-01T00:00:00.000Z",
+	};
+	var st = geometryState.assessGeometryApplyState(bundle, czi, {
+		sliceIds: ["S1", "S2"],
+		previewHealth: { needsRepair: false, canApply: true },
+	});
+	assert.strictEqual(st.policyState, "interrupted");
+	assert.ok(st.signals.indexOf("partial_pending_subset") >= 0);
+}
+
+function testLegacyPartialSuspect() {
+	var bundle = tempBundle();
+	var prev = path.join(bundle, "data/counting/_previews");
+	var dapiDir = path.join(bundle, "data/counting/00_dapi");
+	fs.mkdirSync(dapiDir, { recursive: true });
+	var somataPng = path.join(prev, "S1_somata.png");
+	var dapiPng = path.join(dapiDir, "S1.png");
+	fs.writeFileSync(somataPng, "png");
+	fs.writeFileSync(dapiPng, "png");
+	var now = Date.now() / 1000;
+	fs.utimesSync(somataPng, now, now);
+	fs.utimesSync(dapiPng, now - 120, now - 120);
+	var czi = {
+		geometry: { S1: { ops: ["rot90"] } },
+	};
+	var st = geometryState.assessGeometryApplyState(bundle, czi, {
+		sliceIds: ["S1"],
+		previewHealth: { needsRepair: false, canApply: true },
+	});
+	assert.strictEqual(st.policyState, "interrupted");
+	assert.ok(st.signals.indexOf("legacy_partial_suspect") >= 0);
+}
+
 function testBuildRepairTargets() {
 	var queue = {
 		slices: [
@@ -106,6 +174,9 @@ function run() {
 	testHasPendingOps();
 	testInterruptedFromLastResult();
 	testFreshPendingAllowsApply();
+	testReapplyStackRisk();
+	testPartialPendingSubset();
+	testLegacyPartialSuspect();
 	testBuildRepairTargets();
 	console.log("test-geometry-state: PASS");
 }

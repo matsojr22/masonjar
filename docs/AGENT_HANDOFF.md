@@ -1,6 +1,6 @@
 # Agent session handoff
 
-Last updated: 2026-06-07 (v3.3.0). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-01 (v3.3.1). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
 
@@ -8,9 +8,11 @@ Last updated: 2026-06-07 (v3.3.0). Use this file to resume work; long-term archi
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **3.3.0** |
-| Latest tag | `v3.3.0` (pre-release on GitHub; Windows zip published) |
+| `package.json` version | **3.3.1** |
+| Latest tag | `v3.3.1` (pre-release on GitHub; Windows zip published) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v3.3.1** — **Check orientation UX + M468 fixes**: always-visible **Check orientation** ([`pages/orient.html`](../pages/orient.html), [`js/menu_category.js`](../js/menu_category.js)); [`js/geometry_state.js`](../js/geometry_state.js) signals `reapply_stack_risk`, `partial_pending_subset`, `legacy_partial_suspect`; block unsafe re-Apply; [`py/apply_geometry.py`](../py/apply_geometry.py) `TiffFile` preflight abort + plane-wise z-stack I/O + `derivatives_from_original` repair; wizard polish. Tests: `scripts/test-geometry-state.js`, `python/tests/test_apply_geometry.py`.
 
 **v3.3.0** — **Geometry partial-apply recovery**: [`js/geometry_state.js`](../js/geometry_state.js) policy audit; [`pages/geometry_repair_wizard.html`](../pages/geometry_repair_wizard.html) + [`js/geometry_repair_wizard.js`](../js/geometry_repair_wizard.js) full-series fingerprint probe ([`py/geometry_fingerprint_probe.py`](../py/geometry_fingerprint_probe.py), [`py/geometry_orientation_match.py`](../py/geometry_orientation_match.py)); cross-channel mask IoU (not intensity); [`py/apply_geometry.py`](../py/apply_geometry.py) progress manifest + `repair_mode: geometry`; Orient **Rebuild geometry** / **Finalize only**; batch preflight uses `ops` geometry. Meta: `.masonjar/geometry_apply_progress.json`, `geometry_apply_last_result.json`, `geometry_repair_queue.json`. IPC: `runGeometryFingerprintProbe`. Tests: `scripts/test-geometry-state.js`, `python/tests/test_geometry_orientation_match.py`.
 

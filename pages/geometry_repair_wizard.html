@@ -14,7 +14,7 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net/; font-src 'self' https://fonts.gstatic.com; img-src 'self' file: data:;"
     />
-    <title>Mason Jar — Geometry repair</title>
+    <title>Mason Jar — Check orientation</title>
     <style>
       .wizard-log {
         max-height: 22rem;
@@ -53,9 +53,10 @@
   <body class="wizard-page">
     <div class="container workspace-block text-start py-4">
       <nav id="navTrail" class="mb-3"></nav>
-      <h1 class="h4 mb-2">Geometry repair</h1>
+      <h1 class="h4 mb-2">Check orientation</h1>
       <p class="text-muted small">
-        Audits every tissue section for orientation mismatches, then repairs approved slices.
+        Full-section orientation audit across all channels. Repair mismatches only when the audit
+        finds them.
       </p>
 
       <ul class="nav nav-pills mb-3" id="wizardSteps">
@@ -86,8 +87,8 @@
         <div id="auditSummary" class="alert alert-info small"></div>
         <label class="small" for="referenceBranchSelect">Reference branch</label>
         <select id="referenceBranchSelect" class="form-select form-select-sm mb-3" style="max-width: 16rem"></select>
-        <button type="button" class="btn btn-primary" id="step1Next">Continue</button>
-        <button type="button" class="btn btn-outline-secondary ms-2" id="step1Close">Close</button>
+        <button type="button" class="btn btn-primary" id="step1Next">Continue to review</button>
+        <a class="btn btn-outline-secondary ms-2" id="step1BackOrient" href="./orient.html">Back to Orient</a>
       </section>
 
       <section id="step2" class="wizard-panel d-none">

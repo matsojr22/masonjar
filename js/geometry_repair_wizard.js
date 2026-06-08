@@ -178,9 +178,17 @@ function renderAuditSummary() {
 			" — Repair previews in Orient first (invalid TIFF/missing _previews).";
 	} else if (sum.needReview === 0 && sum.autoRepairable === 0 && sum.ok === sum.total) {
 		el.className = "alert alert-success small";
-		el.textContent = "No inconsistent geometry detected across the series.";
+		el.textContent =
+			"No inconsistent geometry detected across " +
+			(sum.total || 0) +
+			" section(s). Back to Orient to adjust slices, or close this wizard.";
 	} else {
 		el.className = "alert alert-info small";
+	}
+	var step1Next = qs("step1Next");
+	if (step1Next && state.queue) {
+		var needsWork = sum.needReview > 0 || sum.autoRepairable > 0;
+		step1Next.classList.toggle("d-none", !needsWork);
 	}
 }
 
@@ -331,8 +339,14 @@ function runAudit() {
 			ipc.removeListener("geometryFingerprintResult", onResult);
 			state.auditRunning = false;
 			if (!payload || payload.ok === false) {
-				setBar("auditProgress", 0, "auditStatus", "Audit failed");
-				reject(new Error((payload && payload.error) || "Fingerprint probe failed"));
+				var errDetail = (payload && payload.error) || "Fingerprint probe failed";
+				if (!state.sliceIds.length) {
+					errDetail =
+						"No tissue sections found — check that _previews PNGs or 00_dapi exist on this project.";
+				}
+				appendLog("geometryRepairLog", "ERROR: " + errDetail);
+				setBar("auditProgress", 0, "auditStatus", "Audit failed: " + errDetail);
+				reject(new Error(errDetail));
 				return;
 			}
 			state.queue = geometryState.mergeProbeIntoQueue(state.bundleRoot, payload, state.cziImport);
@@ -413,7 +427,7 @@ function init() {
 			{ label: "Start", href: "./menu.html" },
 			{ label: "Workspace", href: "./workspace_menu.html" },
 			{ label: "Orient", href: "./orient.html" },
-			{ label: "Geometry repair" },
+			{ label: "Check orientation" },
 		],
 		"navTrail",
 	);
@@ -425,25 +439,25 @@ function init() {
 	}
 	state.cziImport = loadCziImportConfig();
 
-	qs("step1Next").addEventListener("click", function () {
-		var sel = qs("referenceBranchSelect");
-		if (sel && state.queue) {
-			state.queue.reference_branch = sel.value;
-			geometryState.writeRepairQueue(state.bundleRoot, state.queue);
-		}
-		var needReview = geometryState.slicesNeedingReview(state.queue).length;
-		if (needReview > 0) {
-			state.reviewIndex = 0;
-			setStep(2);
-			renderReviewSlice();
-		} else {
-			setStep(3);
-			renderConfirmSummary();
-		}
-	});
-	qs("step1Close").addEventListener("click", function () {
-		window.location.href = "./orient.html";
-	});
+	var step1NextBtn = qs("step1Next");
+	if (step1NextBtn) {
+		step1NextBtn.addEventListener("click", function () {
+			var sel = qs("referenceBranchSelect");
+			if (sel && state.queue) {
+				state.queue.reference_branch = sel.value;
+				geometryState.writeRepairQueue(state.bundleRoot, state.queue);
+			}
+			var needReview = geometryState.slicesNeedingReview(state.queue).length;
+			if (needReview > 0) {
+				state.reviewIndex = 0;
+				setStep(2);
+				renderReviewSlice();
+			} else {
+				setStep(3);
+				renderConfirmSummary();
+			}
+		});
+	}
 	qs("reviewRot90").addEventListener("click", function () {
 		state.reviewOps = orientGeometry.applyGeometryAction(state.reviewOps, "rot90");
 		updateReviewOpsStatus();
