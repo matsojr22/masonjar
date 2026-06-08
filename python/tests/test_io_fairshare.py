@@ -98,3 +98,20 @@ def test_suggested_max_workers(monkeypatch, coordinator: Path):
     assert io_fairshare.suggested_max_workers(4) == 1
     monkeypatch.setattr(io_fairshare, "compute_limit_mbps", lambda: 450.0)
     assert io_fairshare.suggested_max_workers(4) == 4
+
+
+def test_throttled_tiff_imwrite_roundtrip(tmp_path: Path, coordinator: Path, monkeypatch):
+    import numpy as np
+    import tifffile
+
+    monkeypatch.setenv("MASONJAR_IO_FAIRSHARE", "1")
+    io_fairshare.deactivate()
+    assert io_fairshare.activate()
+    monkeypatch.setattr(io_fairshare, "_should_throttle", lambda _p: True)
+
+    path = tmp_path / "stack.tif"
+    arr = np.arange(24, dtype=np.uint8).reshape(2, 3, 4)
+    tifffile.imwrite(path, arr, photometric="minisblack")
+    loaded = tifffile.imread(path)
+    np.testing.assert_array_equal(loaded, arr)
+    io_fairshare.deactivate()

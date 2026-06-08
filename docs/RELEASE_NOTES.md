@@ -6,6 +6,23 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.3.3
+
+**What's new**
+
+Geometry repair (**Check orientation** → repair) no longer fails on z-stack TIFFs stored on network drives. v3.3.2 could error with "expected str, bytes or os.PathLike object, not BytesIO" partway through a repair run.
+
+**Changes**
+
+- io_fairshare TIFF read/write patches no longer recurse through themselves when buffering to memory.
+- Throttled file writes use the original Path helpers, avoiding infinite recursion on small files.
+
+**Commit subject**
+
+Fix geometry repair TIFF writes on network drives
+
+---
+
 ## v3.3.2
 
 **What's new**

@@ -231,3 +231,70 @@ def test_repair_derivatives_from_original(tmp_path: Path) -> None:
     loaded = tiff.imread(orig)
     assert loaded.shape == (z, w, h)
     assert prev.stat().st_size > 4
+
+
+def test_repair_derivatives_with_io_fairshare(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    import io_fairshare
+
+    coord = tmp_path / "fairshare"
+    coord.mkdir()
+    (coord / "registry").mkdir()
+    (coord / "config.json").write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "link_mbps": 1000,
+                "headroom": 0.85,
+                "min_mbps_per_job": 25,
+                "max_mbps_per_job": "auto",
+                "small_file_bytes": 256 * 1024,
+                "stale_seconds": 30,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MASONJAR_IO_FAIRSHARE_DIR", str(coord))
+    monkeypatch.setenv("MASONJAR_IO_FAIRSHARE", "1")
+    monkeypatch.setenv("MASONJAR_IO_JOB_ID", "test-geo-repair")
+    monkeypatch.setenv("MASONJAR_IO_JOB_LABEL", "test")
+    io_fairshare.deactivate()
+    assert io_fairshare.activate()
+    monkeypatch.setattr(io_fairshare, "_should_throttle", lambda _p: True)
+
+    from apply_geometry import run_repair_jobs
+
+    bundle = tmp_path / "Brain_masonjar"
+    slice_id = "M1"
+    z, h, w = 2, 6, 8
+    stack = np.arange(z * h * w, dtype=np.uint8).reshape(z, h, w)
+    orig = bundle / "data/original_scans/somata" / f"{slice_id}.tif"
+    prev = bundle / "data/counting/_previews" / f"{slice_id}_somata.png"
+    orig.parent.mkdir(parents=True, exist_ok=True)
+    prev.parent.mkdir(parents=True, exist_ok=True)
+    tiff.imwrite(orig, stack, photometric="minisblack")
+    prev.write_bytes(b"old")
+
+    cfg = {
+        "preview_scale": 0.5,
+        "repair_targets": [
+            {
+                "slice_id": slice_id,
+                "branch": "somata",
+                "rel_path": "data/counting/_previews/M1_somata.png",
+                "strategy": "derivatives_from_original",
+                "ops": ["rot90"],
+            },
+        ],
+    }
+    changed, _bytes, failed, total = run_repair_jobs(bundle, cfg)
+    io_fairshare.deactivate()
+    assert failed == []
+    assert changed == 1
+    assert total == 1
+    loaded = tiff.imread(orig)
+    assert loaded.shape == (z, w, h)
+    assert prev.stat().st_size > 4

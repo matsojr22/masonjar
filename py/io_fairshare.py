@@ -261,14 +261,29 @@ def _file_size(path: str | os.PathLike[str]) -> int | None:
         return None
 
 
+def _path_read_bytes(path: str | os.PathLike[str]) -> bytes:
+    p = Path(os.fspath(path))
+    if "Path.read_bytes" in _orig:
+        return _orig["Path.read_bytes"](p)
+    return p.read_bytes()
+
+
+def _path_write_bytes(path: str | os.PathLike[str], data: bytes) -> None:
+    p = Path(os.fspath(path))
+    if "Path.write_bytes" in _orig:
+        _orig["Path.write_bytes"](p, data)
+    else:
+        p.write_bytes(data)
+
+
 def throttled_read_bytes(path: str | os.PathLike[str]) -> bytes:
     p = os.fspath(path)
     if not _activated or not _should_throttle(p):
-        return Path(p).read_bytes()
+        return _path_read_bytes(p)
     size = _file_size(p)
     small = int(_load_shared_config().get("small_file_bytes", _SMALL_FILE_BYTES))
     if size is not None and size <= small:
-        return Path(p).read_bytes()
+        return _path_read_bytes(p)
     chunks: list[bytes] = []
     with open(p, "rb") as f:
         while True:
@@ -283,11 +298,11 @@ def throttled_read_bytes(path: str | os.PathLike[str]) -> bytes:
 def throttled_write_bytes(path: str | os.PathLike[str], data: bytes) -> None:
     p = os.fspath(path)
     if not _activated or not _should_throttle(p):
-        Path(p).write_bytes(data)
+        _path_write_bytes(p, data)
         return
     small = int(_load_shared_config().get("small_file_bytes", _SMALL_FILE_BYTES))
     if len(data) <= small:
-        Path(p).write_bytes(data)
+        _path_write_bytes(p, data)
         return
     Path(p).parent.mkdir(parents=True, exist_ok=True)
     offset = 0
@@ -330,12 +345,19 @@ def _wrap_cv2_imwrite(orig: Callable[..., Any], path: str, img: Any, *args: Any,
     return True
 
 
+def _is_fspath_like(path: Any) -> bool:
+    try:
+        os.fspath(path)
+    except TypeError:
+        return False
+    return True
+
+
 def _wrap_tiff_imread(orig: Callable[..., Any], path: str, *args: Any, **kwargs: Any) -> Any:
     import io
 
-    import numpy as np
-    import tifffile
-
+    if not _is_fspath_like(path):
+        return orig(path, *args, **kwargs)
     p = os.fspath(path)
     if not _activated or not _should_throttle(p):
         return orig(path, *args, **kwargs)
@@ -344,19 +366,19 @@ def _wrap_tiff_imread(orig: Callable[..., Any], path: str, *args: Any, **kwargs:
     if size is not None and size <= small:
         return orig(path, *args, **kwargs)
     raw = throttled_read_bytes(p)
-    return tifffile.imread(io.BytesIO(raw), *args, **kwargs)
+    return orig(io.BytesIO(raw), *args, **kwargs)
 
 
 def _wrap_tiff_imwrite(orig: Callable[..., Any], path: str, data: Any, *args: Any, **kwargs: Any) -> Any:
     import io
 
-    import tifffile
-
+    if not _is_fspath_like(path):
+        return orig(path, data, *args, **kwargs)
     p = os.fspath(path)
     if not _activated or not _should_throttle(p):
         return orig(path, data, *args, **kwargs)
     buf = io.BytesIO()
-    tifffile.imwrite(buf, data, *args, **kwargs)
+    orig(buf, data, *args, **kwargs)
     throttled_write_bytes(p, buf.getvalue())
     return None
 
