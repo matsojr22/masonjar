@@ -35,6 +35,7 @@ from czi_common import (  # noqa: E402
     natural_sort_key,
     natural_sort_slice_ids,
     original_scans_path,
+    resolve_original_zstack_path,
     parse_section_suffix,
     parse_section_with_identifier,
     preview_plane_to_uint8,
@@ -139,6 +140,30 @@ def test_branch_paths(tmp_path: Path) -> None:
     assert max_dir == bundle / "data/counting/03_max/somata/max/run-slug"
     other_max = max_output_run_dir(bundle, "other:rabies_red", "run-slug")
     assert other_max == bundle / "data/counting/03_max/rabies_red/max/run-slug"
+
+
+def test_resolve_original_zstack_path(tmp_path: Path) -> None:
+    import numpy as np
+    import tifffile as tiff
+
+    bundle = tmp_path / "Brain_masonjar"
+    slice_id = "M1"
+    flat = bundle / "data/original_scans" / f"{slice_id}.tif"
+    nested = bundle / "data/original_scans/dapi" / f"{slice_id}.tif"
+    flat.parent.mkdir(parents=True, exist_ok=True)
+    tiff.imwrite(flat, np.zeros((2, 2), dtype=np.uint8), photometric="minisblack")
+    assert resolve_original_zstack_path(bundle, slice_id, "dapi") == flat
+
+    flat.unlink()
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    tiff.imwrite(nested, np.zeros((2, 2), dtype=np.uint8), photometric="minisblack")
+    assert resolve_original_zstack_path(bundle, slice_id, "dapi") == nested
+
+    assert resolve_original_zstack_path(bundle, slice_id, "somata") is None
+    somata = bundle / "data/original_scans/somata" / f"{slice_id}.tif"
+    somata.parent.mkdir(parents=True, exist_ok=True)
+    tiff.imwrite(somata, np.zeros((2, 2), dtype=np.uint8), photometric="minisblack")
+    assert resolve_original_zstack_path(bundle, slice_id, "somata") == somata
 
 
 def test_parse_section_suffix() -> None:

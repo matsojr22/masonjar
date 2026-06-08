@@ -272,6 +272,29 @@ def original_scans_path(bundle_root: Path, channel: Mapping[str, Any], slice_id:
     return base / f"{slice_id}.tif"
 
 
+def resolve_original_zstack_path(
+    bundle_root: Path,
+    slice_id: str,
+    branch: str,
+) -> Path | None:
+    """Locate on-disk z-stack TIFF for a preview branch name."""
+    base = bundle_root / CANONICAL_REL["original_scans"]
+    branch = str(branch or "").strip()
+    if branch == "dapi":
+        candidates = [
+            base / f"{slice_id}.tif",
+            base / "dapi" / f"{slice_id}.tif",
+        ]
+    elif branch:
+        candidates = [base / branch / f"{slice_id}.tif"]
+    else:
+        candidates = [base / f"{slice_id}.tif"]
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
 def dapi_preview_path(bundle_root: Path, slice_id: str) -> Path:
     return bundle_root / CANONICAL_REL["dapi"] / f"{slice_id}.png"
 

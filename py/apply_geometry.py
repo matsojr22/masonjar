@@ -13,7 +13,7 @@ import numpy as np
 import tifffile as tiff
 
 from bundle_slice_paths import paths_for_slice, signal_branch_dirs_from_cfg
-from czi_common import CANONICAL_REL, emit_log, emit_result, load_import_config
+from czi_common import CANONICAL_REL, emit_log, emit_result, load_import_config, resolve_original_zstack_path
 from geometry_apply_progress import (
     clear_progress,
     is_completed,
@@ -235,8 +235,8 @@ def collect_repair_jobs(
         path = bundle_root / rel
         if strategy == "transform_original":
             if branch:
-                orig = bundle_root / CANONICAL_REL["original_scans"] / branch / f"{slice_id}.tif"
-                if orig.is_file():
+                orig = resolve_original_zstack_path(bundle_root, slice_id, branch)
+                if orig is not None:
                     path = orig
         jobs.append((slice_id, ops, path, strategy, branch))
     return jobs
@@ -260,6 +260,18 @@ def _write_preview_png(dest: Path, plane, preview_scale: float) -> None:
     cv2.imwrite(str(dest), _preview_from_plane(plane, preview_scale))
 
 
+def _repair_dapi_previews_from_pngs(bundle_root: Path, slice_id: str, ops: list) -> None:
+    from czi_common import dapi_preview_path, orient_dapi_preview_path
+
+    emit_log(f"  dapi_repair_fallback preview_transform (no z-stack) {slice_id}")
+    for dest in (
+        orient_dapi_preview_path(bundle_root, slice_id),
+        dapi_preview_path(bundle_root, slice_id),
+    ):
+        if dest.is_file() and ops:
+            transform_file(dest, ops)
+
+
 def _repair_derivatives_from_original(
     bundle_root: Path,
     slice_id: str,
@@ -271,9 +283,16 @@ def _repair_derivatives_from_original(
     from czi_common import dapi_preview_path, orient_dapi_preview_path
     from czi_extract import plane_from_zstack
 
-    orig = bundle_root / CANONICAL_REL["original_scans"] / branch / f"{slice_id}.tif"
-    if not orig.is_file():
-        raise FileNotFoundError(f"Missing z-stack {orig.relative_to(bundle_root)}")
+    rel_lower = rel_path.replace("\\", "/").lower()
+    is_dapi = branch == "dapi" or "/00_dapi/" in rel_lower or rel_lower.endswith("_dapi.png")
+
+    orig = resolve_original_zstack_path(bundle_root, slice_id, branch)
+    if orig is None:
+        if is_dapi:
+            _repair_dapi_previews_from_pngs(bundle_root, slice_id, ops)
+            return
+        missing = bundle_root / CANONICAL_REL["original_scans"] / branch / f"{slice_id}.tif"
+        raise FileNotFoundError(f"Missing z-stack {missing.relative_to(bundle_root)}")
     stack = _read_tiff_array(orig)
     if ops:
         if stack.ndim == 2:
@@ -285,8 +304,7 @@ def _repair_derivatives_from_original(
             )
         _write_tiff_array(orig, stack)
     plane = plane_from_zstack(stack)
-    rel_lower = rel_path.replace("\\", "/").lower()
-    if branch == "dapi" or "/00_dapi/" in rel_lower or rel_lower.endswith("_dapi.png"):
+    if is_dapi:
         preview = _preview_from_plane(plane, preview_scale)
         for dest in (orient_dapi_preview_path(bundle_root, slice_id), dapi_preview_path(bundle_root, slice_id)):
             dest.parent.mkdir(parents=True, exist_ok=True)

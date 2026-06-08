@@ -1,6 +1,6 @@
 # Agent session handoff
 
-Last updated: 2026-06-08 (v3.3.3). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-08 (v3.3.4). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
 
@@ -8,9 +8,11 @@ Last updated: 2026-06-08 (v3.3.3). Use this file to resume work; long-term archi
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **3.3.3** |
-| Latest tag | `v3.3.3` (pre-release on GitHub; Windows zip published) |
+| `package.json` version | **3.3.4** |
+| Latest tag | `v3.3.4` (pre-release on GitHub; Windows zip published) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v3.3.4** — **DAPI geometry repair z-stack path**: [`py/czi_common.py`](../py/czi_common.py) `resolve_original_zstack_path` (DAPI flat `original_scans/{sliceId}.tif`); [`py/apply_geometry.py`](../py/apply_geometry.py) DAPI PNG fallback when no z-stack; [`py/geometry_orientation_match.py`](../py/geometry_orientation_match.py) probe prefers `transform_original` for DAPI without stack. Tests: `python/tests/test_apply_geometry.py`, `python/tests/test_czi_common.py`.
 
 **v3.3.3** — **io_fairshare TIFF repair fix**: [`py/io_fairshare.py`](../py/io_fairshare.py) `_wrap_tiff_imread`/`_wrap_tiff_imwrite` call `orig()` for `BytesIO` buffers; `_path_read_bytes`/`_path_write_bytes` bypass patched `Path` methods — fixes geometry repair `BytesIO` / recursion errors on NAS-throttled z-stack writes. Tests: `python/tests/test_io_fairshare.py`, `python/tests/test_apply_geometry.py`.
 

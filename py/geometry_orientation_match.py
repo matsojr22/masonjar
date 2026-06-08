@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from apply_geometry import apply_ops_to_array, compose_ops_from_spec, ops_from_string_list
+from czi_common import resolve_original_zstack_path
 
 MAX_EDGE = 256
 PROFILE_ROWS = 8
@@ -263,7 +264,13 @@ def probe_slice_channels(
             entry["suggested_strategy"] = "transform_original"
         else:
             entry["on_disk_orientation"] = "unknown"
-            entry["suggested_strategy"] = "derivatives_from_original"
+            suggested = "derivatives_from_original"
+            if (
+                branch == "dapi"
+                and resolve_original_zstack_path(bundle_root, slice_id, branch) is None
+            ):
+                suggested = "transform_original"
+            entry["suggested_strategy"] = suggested
 
         entry["best_variant"] = variant
         entry["confidence"] = round(score, 3)

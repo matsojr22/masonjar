@@ -6,6 +6,24 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.3.4
+
+**What's new**
+
+Check orientation repair no longer fails on DAPI preview files looking for a z-stack under `original_scans/dapi/`. DAPI stacks from CZI import live at `original_scans/{section}.tif`; when no stack exists, repair transforms the existing DAPI PNGs instead.
+
+**Changes**
+
+- Geometry repair resolves DAPI z-stack paths using the same layout as CZI import (flat under `original_scans/`).
+- Fallback transforms `_previews` and `00_dapi` PNGs when no DAPI z-stack is on disk.
+- Orientation audit suggests in-place DAPI transform when no z-stack is available.
+
+**Commit subject**
+
+Fix DAPI geometry repair z-stack path
+
+---
+
 ## v3.3.3
 
 **What's new**

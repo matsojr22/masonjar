@@ -298,3 +298,77 @@ def test_repair_derivatives_with_io_fairshare(
     loaded = tiff.imread(orig)
     assert loaded.shape == (z, w, h)
     assert prev.stat().st_size > 4
+
+
+def test_repair_dapi_derivatives_flat_zstack(tmp_path: Path) -> None:
+    from apply_geometry import run_repair_jobs
+
+    bundle = tmp_path / "Brain_masonjar"
+    slice_id = "M1"
+    h, w = 8, 10
+    plane = np.arange(h * w, dtype=np.uint8).reshape(h, w)
+    orig = bundle / "data/original_scans" / f"{slice_id}.tif"
+    prev = bundle / "data/counting/_previews" / f"{slice_id}_dapi.png"
+    dapi = bundle / "data/counting/00_dapi" / f"{slice_id}.png"
+    orig.parent.mkdir(parents=True, exist_ok=True)
+    prev.parent.mkdir(parents=True, exist_ok=True)
+    dapi.parent.mkdir(parents=True, exist_ok=True)
+    tiff.imwrite(orig, plane, photometric="minisblack")
+    prev.write_bytes(b"old")
+    dapi.write_bytes(b"old")
+
+    cfg = {
+        "preview_scale": 0.5,
+        "repair_targets": [
+            {
+                "slice_id": slice_id,
+                "branch": "dapi",
+                "rel_path": "data/counting/_previews/M1_dapi.png",
+                "strategy": "derivatives_from_original",
+                "ops": ["rot90"],
+            },
+        ],
+    }
+    changed, _bytes, failed, total = run_repair_jobs(bundle, cfg)
+    assert failed == []
+    assert changed == 1
+    assert total == 1
+    assert dapi.stat().st_size > 4
+    assert prev.stat().st_size > 4
+
+
+def test_repair_dapi_fallback_no_zstack(tmp_path: Path) -> None:
+    import cv2
+
+    from apply_geometry import run_repair_jobs
+
+    bundle = tmp_path / "Brain_masonjar"
+    slice_id = "M1"
+    h, w = 4, 6
+    plane = np.arange(h * w, dtype=np.uint8).reshape(h, w)
+    prev = bundle / "data/counting/_previews" / f"{slice_id}_dapi.png"
+    dapi = bundle / "data/counting/00_dapi" / f"{slice_id}.png"
+    prev.parent.mkdir(parents=True, exist_ok=True)
+    dapi.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(prev), plane)
+    cv2.imwrite(str(dapi), plane)
+
+    cfg = {
+        "preview_scale": 0.5,
+        "repair_targets": [
+            {
+                "slice_id": slice_id,
+                "branch": "dapi",
+                "rel_path": "data/counting/_previews/M1_dapi.png",
+                "strategy": "derivatives_from_original",
+                "ops": ["rot90"],
+            },
+        ],
+    }
+    changed, _bytes, failed, total = run_repair_jobs(bundle, cfg)
+    assert failed == []
+    assert changed == 1
+    assert total == 1
+    after_prev = cv2.imread(str(prev), cv2.IMREAD_UNCHANGED)
+    expected = apply_ops_to_array(plane, [("rotate", 90)])
+    np.testing.assert_array_equal(after_prev, expected)
