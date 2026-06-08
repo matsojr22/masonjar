@@ -170,6 +170,73 @@ function testBuildRepairTargets() {
 	assert.deepStrictEqual(targets[0].ops, ["rot90"]);
 }
 
+function testWriteCziImportConfigIncludesGeometryHash() {
+	var bundle = tempBundle();
+	var czi = {
+		geometry: { S1: { ops: ["rot90"] } },
+		files: [],
+	};
+	geometryState.writeCziImportConfig(bundle, czi, { apply_source: "test" });
+	var cfgPath = path.join(bundle, ".masonjar", "czi_import_config.json");
+	var raw = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+	assert.strictEqual(raw.czi_import.apply_source, "test");
+	assert.strictEqual(raw.czi_import.geometry_hash, geometryState.geometryOnlyHash(czi));
+	assert.ok(raw.czi_import.config_fingerprint);
+}
+
+function testFinalizeGeometryAfterApplyClearsPending() {
+	var bundle = tempBundle();
+	var czi = {
+		geometry: {
+			S1: { ops: ["rot90"] },
+			S2: { ops: ["flipX"] },
+		},
+	};
+	geometryState.finalizeGeometryAfterApply(bundle, czi, {
+		sliceIds: ["S1", "S2"],
+		payload: { files_total: 4 },
+		applySource: "batch",
+	});
+	assert.strictEqual(orientGeometry.countNonIdentityGeometry(czi.geometry, ["S1", "S2"]), 0);
+	assert.ok(czi.geometry_applied_at);
+	assert.strictEqual(czi.geometry_applied_files_total, 4);
+	var cfg = JSON.parse(
+		fs.readFileSync(path.join(bundle, ".masonjar", "czi_import_config.json"), "utf8"),
+	);
+	assert.strictEqual(cfg.czi_import.apply_source, "batch");
+	assert.strictEqual(cfg.czi_import.geometry_hash, geometryState.geometryOnlyHash(czi));
+}
+
+function testReconcileClearsStalePendingAfterSuccessfulApply() {
+	var bundle = tempBundle();
+	var dapiDir = path.join(bundle, "data/counting/00_dapi");
+	fs.mkdirSync(dapiDir, { recursive: true });
+	fs.writeFileSync(path.join(dapiDir, "S1.png"), "png");
+	var czi = {
+		geometry: { S1: { ops: ["rot90"] } },
+		geometry_applied_at: "2026-01-01T00:00:00.000Z",
+		slice_order: [{ ordinal: 1, sliceId: "S1", path: "", scene_index: 0 }],
+	};
+	var hash = geometryState.geometryOnlyHash(czi);
+	fs.writeFileSync(
+		path.join(bundle, ".masonjar", geometryState.META_LAST_RESULT),
+		JSON.stringify({ ok: true, geometry_hash: hash, files_total: 2 }),
+		"utf8",
+	);
+	var projectData = { settings: { czi_import: czi } };
+	var result = geometryState.reconcileGeometryOnOpen(bundle, projectData);
+	assert.strictEqual(result.changed, true);
+	assert.strictEqual(geometryState.hasPendingGeometry(czi, ["S1"]), false);
+}
+
+function testBatchFinalizeHelperPath() {
+	var batchQueuePath = path.join(__dirname, "..", "batch_queue.js");
+	assert.ok(fs.existsSync(batchQueuePath), "batch_queue.js must exist for batch finalize wiring");
+	var src = fs.readFileSync(batchQueuePath, "utf8");
+	assert.ok(src.indexOf("finalizeBatchApplyGeometry") >= 0);
+	assert.ok(src.indexOf('path.join(__dirname, "js", "geometry_state")') >= 0);
+}
+
 function run() {
 	testHasPendingOps();
 	testInterruptedFromLastResult();
@@ -178,6 +245,10 @@ function run() {
 	testPartialPendingSubset();
 	testLegacyPartialSuspect();
 	testBuildRepairTargets();
+	testWriteCziImportConfigIncludesGeometryHash();
+	testFinalizeGeometryAfterApplyClearsPending();
+	testReconcileClearsStalePendingAfterSuccessfulApply();
+	testBatchFinalizeHelperPath();
 	console.log("test-geometry-state: PASS");
 }
 

@@ -225,7 +225,6 @@ class AnnotationViewer(QMainWindow):
         self.ccf_advanced_toggle.setChecked(False)
         self.ccf_advanced_toggle.setToolTip(CCF_ADVANCED_HELP)
         self.ccf_advanced_toggle.toggled.connect(self._on_ccf_advanced_toggled)
-        self._init_paint_region_controls()
 
         # --- Image views (central widget) ---
         self.img_view = QGraphicsView(self)
@@ -408,6 +407,7 @@ class AnnotationViewer(QMainWindow):
         self.img_view.setMouseTracking(True)
         self.img_view.viewport().installEventFilter(self)
 
+        self._init_paint_region_controls()
         self._update_paint_target_strip()
         self.show_image_with_overlay()
 
@@ -483,6 +483,8 @@ class AnnotationViewer(QMainWindow):
 
     def _update_paint_target_strip(self):
         """Refresh paint-target summary row (swatch, name, tier, adjustment, brush)."""
+        if not hasattr(self, "paint_swatch"):
+            return
         if self.selected_region_id is None:
             self.paint_swatch.setStyleSheet("background-color: #cccccc;")
             self.paint_target_name.setText("None")

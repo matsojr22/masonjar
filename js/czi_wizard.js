@@ -1540,20 +1540,18 @@ function finalizeGeometryAfterApply(payload) {
 			"WARNING: geometry for slice(s) without DAPI/_previews files: " + orphans.join(", "),
 		);
 	}
-	orientGeometry.resetGeometryMap(wizardState.cziImport.geometry, ids);
-	wizardState.cziImport.geometry_applied_at = new Date().toISOString();
-	if (payload && payload.files_total != null) {
-		wizardState.cziImport.geometry_applied_files_total = payload.files_total;
-	}
-	writeImportConfig();
+	geometryState.finalizeGeometryAfterApply(wizardState.bundleRoot, wizardState.cziImport, {
+		sliceIds: ids,
+		payload: payload,
+		applySource: "czi_wizard",
+		omitConfigKeys: wizardState.repairMode ? null : ["repair_mode", "repair_targets"],
+	});
 	persistCziSettings();
 	updateOrientApplySummary();
 	renderOrientationGrid();
 }
 
 function writeImportConfig() {
-	var meta = path.join(wizardState.bundleRoot, branding.META_DIR);
-	fs.mkdirSync(meta, { recursive: true });
 	var axonSel = qs("axonBitDepth");
 	if (axonSel) {
 		if (!wizardState.cziImport.bit_depth_by_role) {
@@ -1561,17 +1559,17 @@ function writeImportConfig() {
 		}
 		wizardState.cziImport.bit_depth_by_role.signal_axons = Number(axonSel.value) || 8;
 	}
-	var cfgPath = cziImport.importConfigPath(wizardState.bundleRoot);
-	var payload = Object.assign({}, wizardState.cziImport);
-	payload.config_fingerprint = cziImport.cziImportFingerprint(payload);
+	var extra = {};
 	if (wizardState.repairMode) {
-		payload.repair_mode = "previews";
-		payload.repair_targets = wizardState.repairTargets || [];
-	} else {
-		delete payload.repair_mode;
-		delete payload.repair_targets;
+		extra.repair_mode = "previews";
+		extra.repair_targets = wizardState.repairTargets || [];
 	}
-	fs.writeFileSync(cfgPath, JSON.stringify({ czi_import: payload }, null, 2), "utf8");
+	var cfgPath = geometryState.writeCziImportConfig(
+		wizardState.bundleRoot,
+		wizardState.cziImport,
+		extra,
+		wizardState.repairMode ? {} : { omitKeys: ["repair_mode", "repair_targets"] },
+	);
 	return cfgPath;
 }
 

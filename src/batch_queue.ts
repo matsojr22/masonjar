@@ -180,6 +180,34 @@ interface RunPythonOptions {
 interface RunPythonResult {
   error: string | null;
   noPklsWritten: boolean;
+  resultPayload?: Record<string, unknown>;
+}
+
+function geometryStateModule(): {
+  hasPendingGeometry: (cziImport: Record<string, unknown>, sliceIds: string[]) => boolean;
+  assessGeometryApplyState: (
+    bundleRoot: string,
+    cziImport: Record<string, unknown>,
+    options?: { sliceIds?: string[] },
+  ) => { policyState: string; sliceIds: string[] };
+  writeCziImportConfig: (
+    bundleRoot: string,
+    cziImport: Record<string, unknown>,
+    extra?: Record<string, unknown>,
+    opts?: { omitKeys?: string[] },
+  ) => string;
+  finalizeGeometryAfterApply: (
+    bundleRoot: string,
+    cziImport: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ) => Record<string, unknown>;
+  readMetaJson: (
+    bundleRoot: string,
+    name: string,
+  ) => Record<string, unknown> | null;
+  META_LAST_RESULT: string;
+} {
+  return require(path.join(__dirname, "js", "geometry_state"));
 }
 
 function runPython(
@@ -221,6 +249,7 @@ function runPython(
     let current = 0;
     let sawNoPkls = false;
     let resolved = false;
+    let resultPayload: Record<string, unknown> | undefined;
 
     function finish(error: string | null) {
       if (resolved) {
@@ -229,7 +258,7 @@ function runPython(
       resolved = true;
       releaseJob();
       currentBatchShell = null;
-      resolve({ error, noPklsWritten: sawNoPkls });
+      resolve({ error, noPklsWritten: sawNoPkls, resultPayload });
     }
 
     pyshell.on("stderr", (stderr: string) => {
@@ -250,6 +279,17 @@ function runPython(
       }
       if (message.indexOf("NO_PKLS_WRITTEN") >= 0) {
         sawNoPkls = true;
+      }
+      if (message.startsWith("RESULT:")) {
+        try {
+          resultPayload = JSON.parse(message.slice("RESULT:".length)) as Record<
+            string,
+            unknown
+          >;
+        } catch (_parseErr) {
+          /* ignore malformed RESULT */
+        }
+        return;
       }
       if (message.startsWith("LOG:")) {
         opts.onLine(message.slice(4));
@@ -558,14 +598,7 @@ function preflightJob(
   }
 
   if (stepId === "apply_geometry") {
-    const geometryState = require("./geometry_state") as {
-      hasPendingGeometry: (cziImport: Record<string, unknown>, sliceIds: string[]) => boolean;
-      assessGeometryApplyState: (
-        bundleRoot: string,
-        cziImport: Record<string, unknown>,
-        options?: { sliceIds?: string[] },
-      ) => { policyState: string; sliceIds: string[] };
-    };
+    const geometryState = geometryStateModule();
     const settings = (projectData?.settings || {}) as Record<string, unknown>;
     const cziImport = (settings.czi_import || {}) as Record<string, unknown>;
     const geoState = geometryState.assessGeometryApplyState(proj.path, cziImport);
@@ -772,6 +805,43 @@ function applyPostStepSideEffects(
     /* ignore */
   }
   return rel;
+}
+
+function finalizeBatchApplyGeometry(
+  proj: BatchProject,
+  resultPayload?: Record<string, unknown>,
+): void {
+  const geometryState = geometryStateModule();
+  let projectData: ProjectJsonShape | null;
+  try {
+    projectData = loadProjectJson(proj.path);
+  } catch {
+    return;
+  }
+  if (!projectData) {
+    return;
+  }
+  const settings = (projectData.settings || {}) as Record<string, unknown>;
+  const cziImport = settings.czi_import as Record<string, unknown> | undefined;
+  if (!cziImport || typeof cziImport !== "object") {
+    return;
+  }
+  const payload =
+    resultPayload ||
+    geometryState.readMetaJson(proj.path, geometryState.META_LAST_RESULT) ||
+    undefined;
+  if (payload && payload.ok === false) {
+    return;
+  }
+  geometryState.finalizeGeometryAfterApply(proj.path, cziImport, {
+    payload: payload || {},
+    applySource: "batch",
+  });
+  try {
+    saveProjectJson(proj.path, projectData);
+  } catch (_err) {
+    /* ignore */
+  }
 }
 
 function captureLineForTail(tail: string[], line: string) {
@@ -1110,13 +1180,10 @@ function buildJob(
     }
     const cziImport = (settings.czi_import || {}) as Record<string, unknown>;
     const metaPath = ensureMetaDir(proj.path);
-    const importCfgPath = path.join(metaPath, "czi_import_config.json");
-    let cfgPath = importCfgPath;
-    if (!fs.existsSync(importCfgPath)) {
-      const cfg = { czi_import: cziImport };
-      cfgPath = path.join(metaPath, "batch_apply_geometry.json");
-      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
-    }
+    const geometryState = geometryStateModule();
+    const cfgPath = geometryState.writeCziImportConfig(proj.path, cziImport, {
+      apply_source: "batch",
+    });
     const args = ["-b", proj.path, "-j", cfgPath];
     return {
       scriptName: "apply_geometry.py",
@@ -1604,6 +1671,9 @@ export async function runBatchQueue(
           job.finalOutAbs,
           job.branch,
         );
+        if (stepId === "apply_geometry") {
+          finalizeBatchApplyGeometry(proj, result.resultPayload);
+        }
       }
 
       const jobResult = makeJobResult(

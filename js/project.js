@@ -45,6 +45,7 @@ var state = {
 	project: null,
 	projectFilename: PROJECT_FILENAME,
 	metaDirName: META_DIR,
+	geometryWorkspaceBanner: null,
 };
 
 function nowIso() {
@@ -361,6 +362,7 @@ function clearActiveProject() {
 	state.project = null;
 	state.projectFilename = PROJECT_FILENAME;
 	state.metaDirName = META_DIR;
+	state.geometryWorkspaceBanner = null;
 	localStorage.removeItem(ACTIVE_KEY);
 }
 
@@ -416,7 +418,13 @@ function openProject(bundleRoot) {
 		data.processing.active_runs = reconcile.active_runs;
 		activeRunsMigrated = true;
 	}
+	var geometryState = require("./geometry_state");
+	var geometryReconcile = geometryState.reconcileGeometryOnOpen(bundleRoot, data);
+	if (geometryReconcile.changed) {
+		activeRunsMigrated = true;
+	}
 	setActiveProject(bundleRoot, data);
+	state.geometryWorkspaceBanner = geometryReconcile.workspaceBanner || null;
 	if (activeRunsMigrated) {
 		saveProjectJson();
 	}
@@ -1398,6 +1406,10 @@ function chooseNewBundleLocation(callback) {
 	});
 }
 
+function getGeometryWorkspaceBanner() {
+	return state.geometryWorkspaceBanner;
+}
+
 module.exports = {
 	PROJECT_FILENAME: PROJECT_FILENAME,
 	sanitizeProjectSlug: sanitizeProjectSlug,
@@ -1410,6 +1422,7 @@ module.exports = {
 	isActive: isActive,
 	getBundleRoot: getBundleRoot,
 	getProject: getProject,
+	getGeometryWorkspaceBanner: getGeometryWorkspaceBanner,
 	getStatusMessage: getStatusMessage,
 	resolveRolePath: resolveRolePath,
 	resolveLogicalPath: resolveLogicalPath,

@@ -76,6 +76,9 @@ function killBatchQueue() {
     }
 }
 exports.killBatchQueue = killBatchQueue;
+function geometryStateModule() {
+    return require(path.join(__dirname, "js", "geometry_state"));
+}
 function runPython(deps, opts) {
     return new Promise((resolve) => {
         if (batchAbort) {
@@ -107,6 +110,7 @@ function runPython(deps, opts) {
         let current = 0;
         let sawNoPkls = false;
         let resolved = false;
+        let resultPayload;
         function finish(error) {
             if (resolved) {
                 return;
@@ -114,7 +118,7 @@ function runPython(deps, opts) {
             resolved = true;
             releaseJob();
             currentBatchShell = null;
-            resolve({ error, noPklsWritten: sawNoPkls });
+            resolve({ error, noPklsWritten: sawNoPkls, resultPayload });
         }
         pyshell.on("stderr", (stderr) => {
             opts.onLine(stderr.replace(/\r?\n$/, ""));
@@ -134,6 +138,15 @@ function runPython(deps, opts) {
             }
             if (message.indexOf("NO_PKLS_WRITTEN") >= 0) {
                 sawNoPkls = true;
+            }
+            if (message.startsWith("RESULT:")) {
+                try {
+                    resultPayload = JSON.parse(message.slice("RESULT:".length));
+                }
+                catch (_parseErr) {
+                    /* ignore malformed RESULT */
+                }
+                return;
             }
             if (message.startsWith("LOG:")) {
                 opts.onLine(message.slice(4));
@@ -396,7 +409,7 @@ function preflightJob(deps, proj, stepId, plan, onLine) {
         ensureStructureMap(deps, onLine);
     }
     if (stepId === "apply_geometry") {
-        const geometryState = require("./geometry_state");
+        const geometryState = geometryStateModule();
         const settings = ((projectData === null || projectData === void 0 ? void 0 : projectData.settings) || {});
         const cziImport = (settings.czi_import || {});
         const geoState = geometryState.assessGeometryApplyState(proj.path, cziImport);
@@ -562,6 +575,40 @@ function applyPostStepSideEffects(proj, stepId, outputAbs, branch) {
         /* ignore */
     }
     return rel;
+}
+function finalizeBatchApplyGeometry(proj, resultPayload) {
+    const geometryState = geometryStateModule();
+    let projectData;
+    try {
+        projectData = (0, batch_paths_1.loadProjectJson)(proj.path);
+    }
+    catch (_a) {
+        return;
+    }
+    if (!projectData) {
+        return;
+    }
+    const settings = (projectData.settings || {});
+    const cziImport = settings.czi_import;
+    if (!cziImport || typeof cziImport !== "object") {
+        return;
+    }
+    const payload = resultPayload ||
+        geometryState.readMetaJson(proj.path, geometryState.META_LAST_RESULT) ||
+        undefined;
+    if (payload && payload.ok === false) {
+        return;
+    }
+    geometryState.finalizeGeometryAfterApply(proj.path, cziImport, {
+        payload: payload || {},
+        applySource: "batch",
+    });
+    try {
+        (0, batch_paths_1.saveProjectJson)(proj.path, projectData);
+    }
+    catch (_err) {
+        /* ignore */
+    }
 }
 function captureLineForTail(tail, line) {
     tail.push(line);
@@ -856,13 +903,10 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
         }
         const cziImport = (settings.czi_import || {});
         const metaPath = (0, batch_paths_1.ensureMetaDir)(proj.path);
-        const importCfgPath = path.join(metaPath, "czi_import_config.json");
-        let cfgPath = importCfgPath;
-        if (!fs.existsSync(importCfgPath)) {
-            const cfg = { czi_import: cziImport };
-            cfgPath = path.join(metaPath, "batch_apply_geometry.json");
-            fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
-        }
+        const geometryState = geometryStateModule();
+        const cfgPath = geometryState.writeCziImportConfig(proj.path, cziImport, {
+            apply_source: "batch",
+        });
         const args = ["-b", proj.path, "-j", cfgPath];
         return {
             scriptName: "apply_geometry.py",
@@ -1188,6 +1232,9 @@ function runBatchQueue(deps, plan, callbacks) {
                 let outputLeafRel;
                 if (status === "ok") {
                     outputLeafRel = applyPostStepSideEffects(proj, stepId, job.finalOutAbs, job.branch);
+                    if (stepId === "apply_geometry") {
+                        finalizeBatchApplyGeometry(proj, result.resultPayload);
+                    }
                 }
                 const jobResult = makeJobResult(proj, stepId, status, reason, startedAt, endedAt, elapsedMs, tail, job.finalOutAbs, outputLeafRel);
                 recordJob(jobResult);

@@ -569,6 +569,86 @@ function buildRepairTargetsFromQueue(queue) {
 	return targets;
 }
 
+function writeCziImportConfig(bundleRoot, importCfg, extra, opts) {
+	opts = opts || {};
+	var meta = path.join(bundleRoot, branding.META_DIR);
+	fs.mkdirSync(meta, { recursive: true });
+	var cfgPath = cziImport.importConfigPath(bundleRoot);
+	var payload = Object.assign({}, importCfg || {}, extra || {});
+	var omitKeys = opts.omitKeys || [];
+	for (var k = 0; k < omitKeys.length; k++) {
+		delete payload[omitKeys[k]];
+	}
+	payload.config_fingerprint = configFingerprint(payload) || cziImport.cziImportFingerprint(payload);
+	payload.geometry_hash = geometryOnlyHash(payload);
+	fs.writeFileSync(cfgPath, JSON.stringify({ czi_import: payload }, null, 2), "utf8");
+	return cfgPath;
+}
+
+function finalizeGeometryAfterApply(bundleRoot, importCfg, options) {
+	options = options || {};
+	var ids = options.sliceIds || resolveSliceIds(bundleRoot, importCfg);
+	if (!importCfg.geometry) {
+		importCfg.geometry = {};
+	}
+	orientGeometry.resetGeometryMap(importCfg.geometry, ids);
+	importCfg.geometry_applied_at = new Date().toISOString();
+	var payload = options.payload || {};
+	if (payload.files_total != null) {
+		importCfg.geometry_applied_files_total = payload.files_total;
+	} else if (options.files_total != null) {
+		importCfg.geometry_applied_files_total = options.files_total;
+	}
+	var configExtra = Object.assign({}, options.configExtra || {});
+	if (options.applySource) {
+		configExtra.apply_source = options.applySource;
+	}
+	var omitKeys = options.omitConfigKeys;
+	if (omitKeys && omitKeys.length) {
+		writeCziImportConfig(bundleRoot, importCfg, configExtra, { omitKeys: omitKeys });
+	} else {
+		writeCziImportConfig(bundleRoot, importCfg, configExtra);
+	}
+	return importCfg;
+}
+
+function reconcileGeometryOnOpen(bundleRoot, projectData) {
+	var result = { changed: false, workspaceBanner: null };
+	if (!projectData || !projectData.settings || !projectData.settings.czi_import) {
+		return result;
+	}
+	var cziImport = projectData.settings.czi_import;
+	var sliceIds = resolveSliceIds(bundleRoot, cziImport);
+	var last = readMetaJson(bundleRoot, META_LAST_RESULT);
+	var pending = hasPendingGeometry(cziImport, sliceIds);
+
+	if (pending && last && last.ok === true) {
+		var hash = geometryOnlyHash(cziImport);
+		if (!last.geometry_hash || last.geometry_hash === hash) {
+			if (!cziImport.geometry) {
+				cziImport.geometry = {};
+			}
+			orientGeometry.resetGeometryMap(cziImport.geometry, sliceIds);
+			writeCziImportConfig(bundleRoot, cziImport);
+			result.changed = true;
+			pending = false;
+		}
+	}
+
+	var geoState = assessGeometryApplyState(bundleRoot, cziImport, { sliceIds: sliceIds });
+	if (geoState.policyState === "interrupted" || geoState.policyState === "finalize_pending") {
+		result.workspaceBanner = {
+			policyState: geoState.policyState,
+			message: geometryStateBannerText(geoState),
+		};
+	}
+	return result;
+}
+
+function shouldShowGeometryWorkspaceBanner(workspaceBanner) {
+	return !!(workspaceBanner && workspaceBanner.message);
+}
+
 function batchGeometryPreflight(projectPath, cziImport) {
 	var bundleRoot = projectPath;
 	var state = assessGeometryApplyState(bundleRoot, cziImport || {});
@@ -618,4 +698,8 @@ module.exports = {
 	slicesNeedingReview: slicesNeedingReview,
 	buildRepairTargetsFromQueue: buildRepairTargetsFromQueue,
 	batchGeometryPreflight: batchGeometryPreflight,
+	writeCziImportConfig: writeCziImportConfig,
+	finalizeGeometryAfterApply: finalizeGeometryAfterApply,
+	reconcileGeometryOnOpen: reconcileGeometryOnOpen,
+	shouldShowGeometryWorkspaceBanner: shouldShowGeometryWorkspaceBanner,
 };

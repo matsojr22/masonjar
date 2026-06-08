@@ -22,6 +22,7 @@ from geometry_apply_progress import (
     record_completion,
     write_last_result,
 )
+from geometry_history import append_geometry_history, ops_to_js_list
 
 
 def compose_ops(rotate: int, flip_x: bool, flip_y: bool):
@@ -319,6 +320,7 @@ def run_transform_jobs(
     jobs: list[tuple[str, list, list[Path]]],
     progress: dict | None,
     resume: bool,
+    apply_source: str = "apply",
 ) -> tuple[int, int, list[str], int]:
     total_files = sum(len(targets) for _, _, targets in jobs)
     changed = 0
@@ -362,6 +364,17 @@ def run_transform_jobs(
                 changed += 1
                 bytes_total += size_after
                 print(f"Applied geometry [{file_index}/{total_files}] {rel}", flush=True)
+                append_geometry_history(
+                    bundle_root,
+                    {
+                        "kind": "file",
+                        "source": apply_source,
+                        "slice_id": slice_id,
+                        "ops": ops_to_js_list(ops),
+                        "file": rel_k,
+                        "ok": True,
+                    },
+                )
                 if progress is not None:
                     record_completion(bundle_root, progress, rel_k, slice_id)
             except Exception as exc:
@@ -372,7 +385,11 @@ def run_transform_jobs(
     return changed, bytes_total, failed, total_files
 
 
-def run_repair_jobs(bundle_root: Path, cfg: dict) -> tuple[int, int, list[str], int]:
+def run_repair_jobs(
+    bundle_root: Path,
+    cfg: dict,
+    apply_source: str = "repair",
+) -> tuple[int, int, list[str], int]:
     jobs = collect_repair_jobs(bundle_root, cfg)
     total_files = len(jobs)
     preview_scale = float(cfg.get("preview_scale") or 0.05)
@@ -417,6 +434,22 @@ def run_repair_jobs(bundle_root: Path, cfg: dict) -> tuple[int, int, list[str], 
             changed += 1
             bytes_total += tpath.stat().st_size if tpath.is_file() else 0
             print(f"Repaired geometry [{idx}/{total_files}] {rel}", flush=True)
+            try:
+                rel_key = str(rel).replace("\\", "/")
+            except Exception:
+                rel_key = str(rel)
+            append_geometry_history(
+                bundle_root,
+                {
+                    "kind": "file",
+                    "source": apply_source,
+                    "slice_id": slice_id,
+                    "ops": ops_to_js_list(ops),
+                    "file": rel_key,
+                    "strategy": strategy,
+                    "ok": True,
+                },
+            )
         except Exception as exc:
             failed.append(f"{rel}: {exc}")
             emit_log(f"[{idx}/{total_files}] FAILED {rel}: {exc}")
@@ -443,9 +476,14 @@ def main() -> int:
     geometry_hash = str(cfg.get("geometry_hash") or "")
     config_fingerprint = str(cfg.get("config_fingerprint") or "")
     resume = bool(cfg.get("resume_apply"))
+    apply_source = str(cfg.get("apply_source") or "apply")
 
     if repair_mode == "geometry":
-        changed, bytes_total, failed, total_files = run_repair_jobs(bundle_root, cfg)
+        changed, bytes_total, failed, total_files = run_repair_jobs(
+            bundle_root,
+            cfg,
+            apply_source=apply_source,
+        )
         elapsed = time.monotonic() - started
         result = {
             "ok": len(failed) == 0,
@@ -457,6 +495,18 @@ def main() -> int:
             "repair_mode": "geometry",
         }
         write_last_result(bundle_root, {**result, "geometry_hash": geometry_hash, "config_fingerprint": config_fingerprint})
+        if result["ok"]:
+            append_geometry_history(
+                bundle_root,
+                {
+                    "kind": "run",
+                    "source": apply_source,
+                    "repair_mode": "geometry",
+                    "ok": True,
+                    "changed": changed,
+                    "files_total": total_files,
+                },
+            )
         emit_result(result)
         print("Done!", flush=True)
         return 0 if not failed else 1
@@ -512,7 +562,13 @@ def main() -> int:
     else:
         emit_log(f"Resuming apply: {progress.get('completed', 0)}/{total_files} already done")
 
-    changed, bytes_total, failed, _ = run_transform_jobs(bundle_root, jobs, progress, resume)
+    changed, bytes_total, failed, _ = run_transform_jobs(
+        bundle_root,
+        jobs,
+        progress,
+        resume,
+        apply_source=apply_source,
+    )
 
     elapsed = time.monotonic() - started
     result = {
@@ -529,6 +585,17 @@ def main() -> int:
     )
     if result["ok"]:
         clear_progress(bundle_root)
+        append_geometry_history(
+            bundle_root,
+            {
+                "kind": "run",
+                "source": apply_source,
+                "ok": True,
+                "changed": changed,
+                "files_total": total_files,
+                "geometry_hash": geometry_hash,
+            },
+        )
     emit_result(result)
     print("Done!", flush=True)
     return 0 if not failed else 1

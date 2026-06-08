@@ -108,12 +108,7 @@ function loadCziImportConfig() {
 }
 
 function writeProbeConfig(extra) {
-	var cfgPath = cziImport.importConfigPath(state.bundleRoot);
-	var payload = Object.assign({}, state.cziImport, extra || {});
-	payload.config_fingerprint = cziImport.cziImportFingerprint(payload);
-	fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
-	fs.writeFileSync(cfgPath, JSON.stringify({ czi_import: payload }, null, 2), "utf8");
-	return cfgPath;
+	return geometryState.writeCziImportConfig(state.bundleRoot, state.cziImport, extra || {});
 }
 
 function writeRepairConfig(targets) {
@@ -121,9 +116,10 @@ function writeRepairConfig(targets) {
 	var payload = Object.assign({}, state.cziImport, {
 		repair_mode: "geometry",
 		repair_targets: targets,
-		geometry_hash: geometryState.geometryOnlyHash(state.cziImport),
-		config_fingerprint: cziImport.cziImportFingerprint(state.cziImport),
+		apply_source: "repair",
 	});
+	payload.config_fingerprint = cziImport.cziImportFingerprint(state.cziImport);
+	payload.geometry_hash = geometryState.geometryOnlyHash(state.cziImport);
 	fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
 	fs.writeFileSync(cfgPath, JSON.stringify({ czi_import: payload }, null, 2), "utf8");
 	return cfgPath;

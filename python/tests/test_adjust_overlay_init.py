@@ -66,4 +66,18 @@ def test_adjust_defers_repaint_until_overlay_flag():
     assert "if self._overlay_ready:" in src
     assert "self._overlay_ready = True" in src
     assert "from qt_image_utils import numpy_array_to_qimage" in src
-    assert ( _PY_DIR / "structure_catalog.py").is_file()
+    assert (_PY_DIR / "structure_catalog.py").is_file()
+
+
+def test_init_paint_region_controls_after_paint_swatch():
+    """Paint-target widgets must exist before hierarchy/area combo population."""
+    src = (_PY_DIR / "adjust.py").read_text(encoding="utf-8")
+    marker = "def initUI(self):\n        self.section_info_label"
+    idx = src.find(marker)
+    assert idx != -1
+    init_ui = src[idx:].split("\n    def ")[0]
+    swatch_pos = init_ui.find("self.paint_swatch")
+    init_paint_pos = init_ui.find("self._init_paint_region_controls()")
+    assert swatch_pos != -1 and init_paint_pos != -1
+    assert swatch_pos < init_paint_pos
+    assert 'if not hasattr(self, "paint_swatch"):' in src

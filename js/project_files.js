@@ -6,6 +6,7 @@ var pipelineRuns = require("./pipeline_runs");
 var activeRunControls = require("./active_run_controls");
 var dialogs = require("./dialogs");
 var importHandoff = require("./import_handoff");
+var geometryState = require("./geometry_state");
 
 var ROLE_DISPLAY_LABELS = {
 	max: "Max projection",
@@ -152,6 +153,53 @@ function renderImportInputRows(container, bundleRoot, proj) {
 			handoff.geometryAppliedAt,
 		);
 	}
+}
+
+function renderGeometryStateBanner() {
+	var banner = document.getElementById("geometryStateBanner");
+	if (!banner) {
+		return;
+	}
+	if (!project.isActive()) {
+		banner.classList.add("d-none");
+		banner.innerHTML = "";
+		return;
+	}
+	var workspaceBanner = project.getGeometryWorkspaceBanner();
+	if (!geometryState.shouldShowGeometryWorkspaceBanner(workspaceBanner)) {
+		var bundleRoot = project.getBundleRoot();
+		var proj = project.getProject();
+		var czi = proj.settings && proj.settings.czi_import;
+		if (czi) {
+			var geoState = geometryState.assessGeometryApplyState(bundleRoot, czi);
+			if (
+				geoState.policyState === "interrupted" ||
+				geoState.policyState === "finalize_pending"
+			) {
+				workspaceBanner = {
+					policyState: geoState.policyState,
+					message: geometryState.geometryStateBannerText(geoState),
+				};
+			}
+		}
+	}
+	if (!geometryState.shouldShowGeometryWorkspaceBanner(workspaceBanner)) {
+		banner.classList.add("d-none");
+		banner.innerHTML = "";
+		return;
+	}
+	banner.classList.remove("d-none");
+	banner.className =
+		"menu-pipeline-section mb-4 workspace-block text-start alert alert-warning";
+	banner.innerHTML =
+		'<h2 class="h6 mb-2">Orientation apply needs attention</h2>' +
+		'<p class="small mb-3">' +
+		workspaceBanner.message +
+		"</p>" +
+		'<div class="d-flex flex-wrap gap-2">' +
+		'<a class="btn btn-warning btn-sm" href="./geometry_repair_wizard.html">Check Orientation Consistency</a>' +
+		'<a class="btn btn-outline-secondary btn-sm" href="./orient.html">Orient slices</a>' +
+		"</div>";
 }
 
 function renderImportNextStepsBanner() {
@@ -314,6 +362,8 @@ function bindProjectFileControls(options) {
 		return;
 	}
 
+	var proj = project.getProject();
+
 	if (subsetSection) {
 		subsetSection.classList.remove("d-none");
 	}
@@ -329,11 +379,11 @@ function bindProjectFileControls(options) {
 		reimportCziBtn.classList.toggle("d-none", !hasCziImport);
 	}
 
+	renderGeometryStateBanner();
 	renderImportNextStepsBanner();
 	bindActiveRunControls("projectActiveRunsSection");
 	renderStepFailures();
 
-	var proj = project.getProject();
 	var proc = proj.processing || project.defaultProcessing();
 	if (subsetToggle) {
 		subsetToggle.checked = !!proc.subset_enabled;
@@ -459,5 +509,6 @@ module.exports = {
 	bindActiveRunControls: bindActiveRunControls,
 	populateSubsetList: populateSubsetList,
 	renderStepFailures: renderStepFailures,
+	renderGeometryStateBanner: renderGeometryStateBanner,
 	renderImportNextStepsBanner: renderImportNextStepsBanner,
 };

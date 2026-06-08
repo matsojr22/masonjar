@@ -6,6 +6,24 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.3.6
+
+**What's new**
+
+Viewer/Editor (Adjust) opens again after a crash on launch in v3.3.5.
+
+**Changes**
+
+- Fix startup crash when the paint-target toolbar initialized before its widgets were created.
+- Fix workspace menu error when opening a project with CZI import history.
+- Geometry apply recovery: workspace banner when a prior orient/geometry run was interrupted; audit log under `.masonjar/geometry_history.jsonl`.
+
+**Commit subject**
+
+Fix Viewer/Editor launch crash and workspace settings error
+
+---
+
 ## v3.3.5
 
 **What's new**

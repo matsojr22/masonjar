@@ -372,3 +372,57 @@ def test_repair_dapi_fallback_no_zstack(tmp_path: Path) -> None:
     after_prev = cv2.imread(str(prev), cv2.IMREAD_UNCHANGED)
     expected = apply_ops_to_array(plane, [("rotate", 90)])
     np.testing.assert_array_equal(after_prev, expected)
+
+
+def test_geometry_history_ops_to_js_list() -> None:
+    from geometry_history import ops_to_js_list
+
+    assert ops_to_js_list([("rotate", 90), ("flip_x", True), ("flip_y", True)]) == [
+        "rot90",
+        "flipX",
+        "flipY",
+    ]
+
+
+def test_apply_geometry_writes_history_on_success(tmp_path: Path) -> None:
+    import json
+    import subprocess
+    import sys
+
+    import cv2
+
+    bundle = tmp_path / "Brain_masonjar"
+    slice_id = "M1"
+    dapi = bundle / "data/counting/00_dapi" / f"{slice_id}.png"
+    prev = bundle / "data/counting/_previews" / f"{slice_id}_dapi.png"
+    for p in (dapi, prev):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(p), np.ones((4, 6), dtype=np.uint8) * 9)
+
+    meta = bundle / ".masonjar"
+    meta.mkdir(parents=True, exist_ok=True)
+    cfg = {
+        "geometry": {slice_id: {"ops": ["rot90"]}},
+        "channels": [],
+        "apply_source": "test",
+        "geometry_hash": "abc",
+        "config_fingerprint": "fp",
+    }
+    cfg_path = meta / "apply_test_config.json"
+    cfg_path.write_text(json.dumps({"czi_import": cfg}), encoding="utf-8")
+
+    script = REPO_PY / "apply_geometry.py"
+    proc = subprocess.run(
+        [sys.executable, str(script), "-b", str(bundle), "-j", str(cfg_path)],
+        cwd=str(REPO_PY),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    history_path = meta / "geometry_history.jsonl"
+    assert history_path.is_file()
+    lines = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(entry.get("kind") == "file" and entry.get("slice_id") == slice_id for entry in lines)
+    assert any(entry.get("kind") == "run" and entry.get("ok") is True for entry in lines)

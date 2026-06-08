@@ -175,14 +175,7 @@ function ensureSlicePlan() {
 }
 
 function writeImportConfig(extra) {
-	var meta = path.join(orientState.bundleRoot, branding.META_DIR);
-	fs.mkdirSync(meta, { recursive: true });
-	var cfgPath = cziImport.importConfigPath(orientState.bundleRoot);
-	var payload = Object.assign({}, orientState.cziImport, extra || {});
-	payload.config_fingerprint = cziImport.cziImportFingerprint(payload);
-	payload.geometry_hash = geometryState.geometryOnlyHash(payload);
-	fs.writeFileSync(cfgPath, JSON.stringify({ czi_import: payload }, null, 2), "utf8");
-	return cfgPath;
+	return geometryState.writeCziImportConfig(orientState.bundleRoot, orientState.cziImport, extra);
 }
 
 function persistGeometryToProject() {
@@ -484,12 +477,11 @@ function finalizeGeometryAfterApply(payload) {
 			"WARNING: geometry for slice(s) without DAPI/_previews files: " + orphans.join(", "),
 		);
 	}
-	orientGeometry.resetGeometryMap(orientState.cziImport.geometry, ids);
-	orientState.cziImport.geometry_applied_at = new Date().toISOString();
-	if (payload && payload.files_total != null) {
-		orientState.cziImport.geometry_applied_files_total = payload.files_total;
-	}
-	writeImportConfig();
+	geometryState.finalizeGeometryAfterApply(orientState.bundleRoot, orientState.cziImport, {
+		sliceIds: ids,
+		payload: payload,
+		applySource: "orient",
+	});
 	persistGeometryToProject();
 	updateOrientPreviewBanner();
 	updateOrientApplySummary();
@@ -535,7 +527,7 @@ function runApplyGeometry() {
 	}
 	verboseLog("Bundle: " + orientState.bundleRoot);
 	verboseLog("Slices with rotation/flip: " + geomCount + " of " + ids.length);
-	writeImportConfig();
+	writeImportConfig({ apply_source: "orient" });
 	persistGeometryToProject();
 	setActivity("Applying geometry…", 2);
 
