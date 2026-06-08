@@ -6,6 +6,24 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.3.5
+
+**What's new**
+
+You can re-import selected sections from the original CZI files when a few slices have bad counterstain (e.g. black DAPI) without re-running the full import. Use **Re-import sections from CZI** from the workspace, Image preprocessing menu, or Orient when blank DAPI is detected.
+
+**Changes**
+
+- New wizard: pick sections and channels, confirm overwrite, re-read only those slices from source `.czi` files.
+- Blank DAPI preview detection flags nearly black counterstain images and offers a direct link to re-import.
+- **Check Orientation Consistency** moved off the preprocess menu; open it from **Orient slices** (renamed from “Check orientation”).
+
+**Commit subject**
+
+Re-import selected CZI sections without full re-import
+
+---
+
 ## v3.3.4
 
 **What's new**

@@ -3,6 +3,7 @@
 var crypto = require("crypto");
 var fs = require("fs");
 var path = require("path");
+var url = require("url");
 var orientGeometry = require("./orient_geometry");
 
 var ROLE_DAPI = "dapi";
@@ -1635,6 +1636,10 @@ function auditCziImportCompletion(bundleRoot, cziImport, options) {
 		(extractComplete && missingZstacks.length === 0 && invalidPreviews.length > 0) ||
 		(extractComplete && lowResTiffIssues.length > 0) ||
 		(extractComplete && missingOrientDapiPreviews.length > 0);
+	var blankPreviews =
+		options.blankPreviews != null
+			? options.blankPreviews
+			: findBlankPreviews(bundleRoot, cziImport, {});
 
 	return {
 		extractComplete: extractComplete,
@@ -1643,6 +1648,7 @@ function auditCziImportCompletion(bundleRoot, cziImport, options) {
 		missingMaxRuns: missingMaxRuns,
 		lowResTiffIssues: lowResTiffIssues,
 		missingOrientDapiPreviews: missingOrientDapiPreviews,
+		blankPreviews: blankPreviews,
 		canSkipToOrient: canSkipToOrient,
 		needsPreviewRepair: needsPreviewRepair,
 		previewFormatVersion: previewFormatVersion,
@@ -1660,16 +1666,22 @@ function assessOrientPreviewHealth(bundleRoot, cziImport) {
 	var invalidOrient = (audit.invalidPreviews || []).filter(function (item) {
 		return item.role_key === ROLE_DAPI || !item.role_key;
 	});
+	var blankDapi = (audit.blankPreviews || []).filter(function (item) {
+		return item.role_key === ROLE_DAPI;
+	});
 	var needsRepair =
 		tiffIn00.length > 0 ||
 		invalidOrient.length > 0 ||
-		(audit.missingOrientDapiPreviews || []).length > 0;
+		(audit.missingOrientDapiPreviews || []).length > 0 ||
+		blankDapi.length > 0;
 	return {
 		audit: audit,
 		synced: synced,
 		tiffIn00: tiffIn00,
 		invalidOrient: invalidOrient,
 		missingOrient: audit.missingOrientDapiPreviews || [],
+		blankPreviews: audit.blankPreviews || [],
+		blankDapi: blankDapi,
 		needsRepair: needsRepair,
 		canApply: !needsRepair,
 	};
@@ -1727,7 +1739,15 @@ function orientPreviewBannerText(health) {
 	if (health.invalidOrient.length) {
 		parts.push(health.invalidOrient.length + " invalid or missing orient preview(s).");
 	}
-	parts.push("Run Repair previews to convert TIFFs, rebuild PNGs, and sync _previews.");
+	if (health.blankDapi && health.blankDapi.length) {
+		parts.push(
+			health.blankDapi.length +
+				" blank DAPI preview(s) detected. Use Re-import sections from CZI to re-read from source.",
+		);
+	}
+	if (health.tiffIn00.length || health.missingOrient.length || health.invalidOrient.length) {
+		parts.push("Run Repair previews to convert TIFFs, rebuild PNGs, and sync _previews.");
+	}
 	return parts.join(" ");
 }
 
@@ -1798,6 +1818,400 @@ function buildRepairTargetsFromAudit(audit, cziImport) {
 		addDapiTarget(audit.missingOrientDapiPreviews[m].slice_id);
 	}
 	return targets;
+}
+
+var BLANK_PREVIEW_MEAN_THRESHOLD = 8;
+
+function computeMeanLumaFromImageData(imageData) {
+	if (!imageData || !imageData.data || !imageData.data.length) {
+		return 0;
+	}
+	var data = imageData.data;
+	var sum = 0;
+	var n = 0;
+	for (var i = 0; i < data.length; i += 4) {
+		var r = data[i];
+		var g = data[i + 1];
+		var b = data[i + 2];
+		sum += 0.299 * r + 0.587 * g + 0.114 * b;
+		n += 1;
+	}
+	return n ? sum / n : 0;
+}
+
+function pngMeanLumaSync(absPath) {
+	if (!absPath || !fs.existsSync(absPath)) {
+		return null;
+	}
+	try {
+		var zlib = require("zlib");
+		var buf = fs.readFileSync(absPath);
+		if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) {
+			return null;
+		}
+		var pos = 8;
+		var width = 0;
+		var height = 0;
+		var colorType = 0;
+		var idatParts = [];
+		while (pos + 8 <= buf.length) {
+			var len = buf.readUInt32BE(pos);
+			var type = buf.toString("ascii", pos + 4, pos + 8);
+			var dataStart = pos + 8;
+			var dataEnd = dataStart + len;
+			if (type === "IHDR" && len >= 13) {
+				width = buf.readUInt32BE(dataStart);
+				height = buf.readUInt32BE(dataStart + 4);
+				colorType = buf[dataStart + 9];
+			} else if (type === "IDAT") {
+				idatParts.push(buf.slice(dataStart, dataEnd));
+			} else if (type === "IEND") {
+				break;
+			}
+			pos = dataEnd + 4;
+		}
+		if (!width || !height || !idatParts.length) {
+			return null;
+		}
+		var inflated = zlib.inflateSync(Buffer.concat(idatParts));
+		var bpp = colorType === 6 ? 4 : colorType === 2 ? 3 : colorType === 0 ? 1 : 0;
+		if (!bpp) {
+			return null;
+		}
+		var stride = width * bpp;
+		var sum = 0;
+		var count = 0;
+		var off = 0;
+		for (var y = 0; y < height; y++) {
+			off += 1;
+			for (var x = 0; x < width; x++) {
+				var r;
+				if (bpp === 1) {
+					r = inflated[off];
+					off += 1;
+				} else if (bpp === 3) {
+					r = inflated[off];
+					off += 3;
+				} else {
+					r = inflated[off];
+					off += 4;
+				}
+				sum += r;
+				count += 1;
+			}
+		}
+		return count ? sum / count : 0;
+	} catch (e) {
+		return null;
+	}
+}
+
+function measurePreviewBrightness(absPath) {
+	return new Promise(function (resolve) {
+		if (!absPath || !fs.existsSync(absPath)) {
+			resolve(null);
+			return;
+		}
+		if (typeof Image === "undefined") {
+			resolve(pngMeanLumaSync(absPath));
+			return;
+		}
+		var img = new Image();
+		img.onload = function () {
+			try {
+				var canvas = document.createElement("canvas");
+				canvas.width = img.width;
+				canvas.height = img.height;
+				var ctx = canvas.getContext("2d");
+				ctx.drawImage(img, 0, 0);
+				var data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+				resolve(computeMeanLumaFromImageData(data));
+			} catch (e) {
+				resolve(pngMeanLumaSync(absPath));
+			}
+		};
+		img.onerror = function () {
+			resolve(pngMeanLumaSync(absPath));
+		};
+		img.src = url.pathToFileURL(absPath).href;
+	});
+}
+
+function collectSliceIdsFromImport(cziImport) {
+	var ids = [];
+	var seen = {};
+	var items = iterKeptChannelScenes(cziImport || {});
+	for (var i = 0; i < items.length; i++) {
+		var sid = items[i].slice_id;
+		if (sid && !seen[sid]) {
+			seen[sid] = true;
+			ids.push(sid);
+		}
+	}
+	ids.sort(function (a, b) {
+		return naturalCompare({ sliceId: a }, { sliceId: b }, cziImport);
+	});
+	return ids;
+}
+
+function buildRepairTargetsForSelection(cziImport, sliceIds, roleKeys) {
+	var sliceSet = {};
+	for (var i = 0; i < (sliceIds || []).length; i++) {
+		sliceSet[sliceIds[i]] = true;
+	}
+	var roleSet = null;
+	if (roleKeys && roleKeys.length) {
+		roleSet = {};
+		for (var r = 0; r < roleKeys.length; r++) {
+			roleSet[roleKeys[r]] = true;
+		}
+	}
+	return iterKeptChannelScenes(cziImport)
+		.filter(function (item) {
+			if (!sliceSet[item.slice_id]) {
+				return false;
+			}
+			if (roleSet && !roleSet[item.role_key]) {
+				return false;
+			}
+			return true;
+		})
+		.map(function (item) {
+			return {
+				slice_id: item.slice_id,
+				channel_index: item.channel_index,
+				role_key: item.role_key,
+				file: item.file,
+				scene_index: item.scene_index,
+				czi_path: item.czi_path,
+			};
+		});
+}
+
+function maxTifPathForReimport(bundleRoot, roleKey, sliceId, project) {
+	var pipelineRuns = require("./pipeline_runs");
+	var rel = "";
+	if (project && project.processing && project.processing.active_runs) {
+		rel = project.processing.active_runs.max || "";
+	}
+	if (!rel && project && project.settings && project.settings.czi_import) {
+		var maxRuns = project.settings.czi_import.max_runs || {};
+		rel = maxRuns[roleKey] || "";
+	}
+	if (!rel) {
+		return "";
+	}
+	return path.join(bundleRoot, "data/counting/03_max", rel, sliceId + ".tif");
+}
+
+function listReimportOutputPaths(bundleRoot, item, cziImport, project) {
+	var paths = [];
+	var zPath = originalScansPath(bundleRoot, item.channel, item.slice_id);
+	if (zPath) {
+		paths.push(zPath);
+	}
+	var prevPath = orientPreviewPathForChannel(bundleRoot, item.slice_id, item.channel);
+	if (prevPath) {
+		paths.push(prevPath);
+	}
+	if (item.role_key === ROLE_DAPI) {
+		paths.push(dapiPreviewPath(bundleRoot, item.slice_id));
+	}
+	if (isSignalChannel(item.channel)) {
+		var maxTif = maxTifPathForReimport(bundleRoot, item.role_key, item.slice_id, project);
+		if (maxTif) {
+			paths.push(maxTif);
+		}
+	}
+	var unique = [];
+	var seen = {};
+	for (var i = 0; i < paths.length; i++) {
+		var p = paths[i];
+		if (p && !seen[p]) {
+			seen[p] = true;
+			unique.push(p);
+		}
+	}
+	return unique;
+}
+
+function validateReimportSources(targets) {
+	var missing = [];
+	for (var i = 0; i < (targets || []).length; i++) {
+		var t = targets[i];
+		var cziPath = t.czi_path || "";
+		if (!cziPath || !fs.existsSync(cziPath)) {
+			missing.push({ slice_id: t.slice_id, czi_path: cziPath, role_key: t.role_key });
+		}
+	}
+	return { ok: missing.length === 0, missing: missing };
+}
+
+function findBlankPreviews(bundleRoot, cziImport, opts) {
+	opts = opts || {};
+	var threshold = opts.threshold != null ? opts.threshold : BLANK_PREVIEW_MEAN_THRESHOLD;
+	var sliceSet = null;
+	if (opts.sliceIds && opts.sliceIds.length) {
+		sliceSet = {};
+		for (var si = 0; si < opts.sliceIds.length; si++) {
+			sliceSet[opts.sliceIds[si]] = true;
+		}
+	}
+	var roleSet = null;
+	if (opts.roleKeys && opts.roleKeys.length) {
+		roleSet = {};
+		for (var ri = 0; ri < opts.roleKeys.length; ri++) {
+			roleSet[opts.roleKeys[ri]] = true;
+		}
+	}
+	var meansMap = opts.meansMap || null;
+	var previewFormatVersion =
+		(cziImport && cziImport.preview_format_version) || PREVIEW_FORMAT_VERSION;
+	var blanks = [];
+	var items = iterKeptChannelScenes(cziImport || {});
+	for (var i = 0; i < items.length; i++) {
+		var item = items[i];
+		if (sliceSet && !sliceSet[item.slice_id]) {
+			continue;
+		}
+		if (roleSet && !roleSet[item.role_key]) {
+			continue;
+		}
+		var prevPath = orientPreviewPathForChannel(bundleRoot, item.slice_id, item.channel);
+		if (!prevPath || !isPreviewFileValid(prevPath, previewFormatVersion)) {
+			continue;
+		}
+		var mean = null;
+		if (meansMap) {
+			mean = meansMap[prevPath];
+			if (mean == null) {
+				mean = meansMap[item.slice_id + ":" + item.role_key];
+			}
+		} else {
+			mean = pngMeanLumaSync(prevPath);
+		}
+		if (mean == null || mean >= threshold) {
+			continue;
+		}
+		blanks.push({
+			slice_id: item.slice_id,
+			role_key: item.role_key,
+			channel_index: item.channel_index,
+			mean: mean,
+			path: prevPath,
+		});
+	}
+	return blanks;
+}
+
+function findBlankPreviewsAsync(bundleRoot, cziImport, opts) {
+	opts = opts || {};
+	var threshold = opts.threshold != null ? opts.threshold : BLANK_PREVIEW_MEAN_THRESHOLD;
+	var sliceSet = null;
+	if (opts.sliceIds && opts.sliceIds.length) {
+		sliceSet = {};
+		for (var si = 0; si < opts.sliceIds.length; si++) {
+			sliceSet[opts.sliceIds[si]] = true;
+		}
+	}
+	var roleSet = null;
+	if (opts.roleKeys && opts.roleKeys.length) {
+		roleSet = {};
+		for (var ri = 0; ri < opts.roleKeys.length; ri++) {
+			roleSet[opts.roleKeys[ri]] = true;
+		}
+	}
+	var previewFormatVersion =
+		(cziImport && cziImport.preview_format_version) || PREVIEW_FORMAT_VERSION;
+	var items = iterKeptChannelScenes(cziImport || {});
+	var jobs = [];
+	for (var i = 0; i < items.length; i++) {
+		var item = items[i];
+		if (sliceSet && !sliceSet[item.slice_id]) {
+			continue;
+		}
+		if (roleSet && !roleSet[item.role_key]) {
+			continue;
+		}
+		var prevPath = orientPreviewPathForChannel(bundleRoot, item.slice_id, item.channel);
+		if (!prevPath || !isPreviewFileValid(prevPath, previewFormatVersion)) {
+			continue;
+		}
+		jobs.push({ item: item, prevPath: prevPath });
+	}
+	return Promise.all(
+		jobs.map(function (job) {
+			return measurePreviewBrightness(job.prevPath).then(function (mean) {
+				return { job: job, mean: mean };
+			});
+		}),
+	).then(function (results) {
+		var blanks = [];
+		for (var r = 0; r < results.length; r++) {
+			var mean = results[r].mean;
+			if (mean == null || mean >= threshold) {
+				continue;
+			}
+			var item = results[r].job.item;
+			blanks.push({
+				slice_id: item.slice_id,
+				role_key: item.role_key,
+				channel_index: item.channel_index,
+				mean: mean,
+				path: results[r].job.prevPath,
+			});
+		}
+		return blanks;
+	});
+}
+
+function buildReextractConfig(cziImport, targets, project) {
+	var payload = JSON.parse(JSON.stringify(cziImport || {}));
+	payload.repair_mode = "reextract";
+	payload.repair_targets = (targets || []).slice();
+	var maxRuns = Object.assign({}, payload.max_runs || {});
+	if (project && project.processing && project.processing.active_runs) {
+		var activeMax = project.processing.active_runs.max;
+		if (activeMax) {
+			var primary =
+				payload.primary_signal_role ||
+				cziImport.primary_signal_role ||
+				ROLE_SIGNAL_SOMATA;
+			if (!maxRuns[primary]) {
+				maxRuns[primary] = activeMax;
+			}
+		}
+	}
+	payload.max_runs = maxRuns;
+	payload.config_fingerprint = cziImportFingerprint(payload);
+	return payload;
+}
+
+function listKeptChannelsForReimport(cziImport) {
+	var channels = (cziImport && cziImport.channels) || [];
+	var out = [];
+	var seen = {};
+	for (var i = 0; i < channels.length; i++) {
+		var ch = channels[i];
+		if (!ch.keep || ch.role === ROLE_UNUSED) {
+			continue;
+		}
+		if (ch.role === ROLE_OTHER && !sanitizeOtherName(ch.other_name)) {
+			continue;
+		}
+		var key = roleKeyForChannel(ch);
+		if (seen[key]) {
+			continue;
+		}
+		seen[key] = true;
+		out.push({
+			channel: ch,
+			role_key: key,
+			label: displayChannelLabelForChannel(ch),
+			index: ch.index,
+		});
+	}
+	return out;
 }
 
 module.exports = {
@@ -1878,4 +2292,17 @@ module.exports = {
 	auditCziImportCompletion: auditCziImportCompletion,
 	buildRepairTargetsFromAudit: buildRepairTargetsFromAudit,
 	iterKeptChannelScenes: iterKeptChannelScenes,
+	BLANK_PREVIEW_MEAN_THRESHOLD: BLANK_PREVIEW_MEAN_THRESHOLD,
+	computeMeanLumaFromImageData: computeMeanLumaFromImageData,
+	pngMeanLumaSync: pngMeanLumaSync,
+	measurePreviewBrightness: measurePreviewBrightness,
+	collectSliceIdsFromImport: collectSliceIdsFromImport,
+	buildRepairTargetsForSelection: buildRepairTargetsForSelection,
+	listReimportOutputPaths: listReimportOutputPaths,
+	validateReimportSources: validateReimportSources,
+	findBlankPreviews: findBlankPreviews,
+	findBlankPreviewsAsync: findBlankPreviewsAsync,
+	buildReextractConfig: buildReextractConfig,
+	listKeptChannelsForReimport: listKeptChannelsForReimport,
+	isPreviewFileValid: isPreviewFileValid,
 };

@@ -442,7 +442,7 @@ function geometryStateBannerText(state, previewHealth) {
 				state.pendingCount +
 				" of " +
 				state.sliceIds.length +
-				" slices. Use Check orientation — do not Apply."
+				" slices. Use Check Orientation Consistency — do not Apply."
 			);
 		}
 		if (state.signals && state.signals.indexOf("partial_pending_subset") >= 0) {
@@ -451,18 +451,18 @@ function geometryStateBannerText(state, previewHealth) {
 				state.pendingCount +
 				" of " +
 				state.sliceIds.length +
-				" slices after a prior apply. Use Check orientation — do not Apply."
+				" slices after a prior apply. Use Check Orientation Consistency — do not Apply."
 			);
 		}
 		return (
 			"Geometry apply was interrupted or files are inconsistent. " +
-			"Do not use Apply geometry — use Check orientation to audit and repair."
+			"Do not use Apply geometry — use Check Orientation Consistency to audit and repair."
 		);
 	}
 	if (state.policyState === "finalize_pending") {
 		return (
 			"Geometry files appear fully written but project settings were not finalized. " +
-			"Use Finalize only or Check orientation."
+			"Use Finalize only or Check Orientation Consistency."
 		);
 	}
 	return "";
@@ -576,7 +576,7 @@ function batchGeometryPreflight(projectPath, cziImport) {
 		return {
 			tone: "red",
 			label: "blocked",
-			reason: "Interrupted geometry — run Check orientation first.",
+			reason: "Interrupted geometry — run Check Orientation Consistency first.",
 		};
 	}
 	if (!hasPendingGeometry(cziImport || {}, state.sliceIds)) {

@@ -538,6 +538,46 @@ def max_runs_on_disk(bundle_root: Path, max_runs: dict[str, str]) -> bool:
     return True
 
 
+def refresh_max_slices_in_run(
+    bundle_root: Path,
+    role_key: str,
+    slice_ids: list[str],
+    max_run_rel: str,
+    cfg: dict,
+) -> int:
+    """Max-project selected slices into an existing run leaf."""
+    branch = branch_for_role_key(role_key)
+    if not branch or not max_run_rel:
+        return 0
+    in_dir = max_input_dir(bundle_root, role_key)
+    rel = str(max_run_rel).replace("\\", "/").strip("/")
+    out_dir = bundle_root / "data/counting/03_max" / rel
+    if not in_dir.is_dir() or not out_dir.is_dir():
+        emit_log(f"  skip max refresh {role_key}: missing input or output dir")
+        return 0
+    depth = bit_depth_for_role(cfg, role_key)
+    refreshed = 0
+    for sid in natural_sort_slice_ids(list({s for s in slice_ids if s})):
+        src = in_dir / f"{sid}.tif"
+        dst = out_dir / f"{sid}.tif"
+        if not src.is_file():
+            emit_log(f"  skip max refresh {sid}: missing {src.name}")
+            continue
+        emit_log(f"  max refresh {branch} <- {src.name} -> {rel}/{dst.name}")
+        max_project_file(src, dst, bit_depth=depth)
+        refreshed += 1
+    return refreshed
+
+
+def build_reextract_work(cfg: dict, repair_targets: list[dict], files_by_name: dict) -> list[dict]:
+    work: list[dict] = []
+    for target in repair_targets:
+        item = repair_target_to_work_item(cfg, target, files_by_name)
+        if item:
+            work.append(item)
+    return work
+
+
 def run_max_for_role_key(bundle_root: Path, role_key: str, slice_ids: list[str], cfg: dict) -> str:
     branch = branch_for_role_key(role_key)
     if not branch:
@@ -700,6 +740,30 @@ def main() -> int:
             state["done"] = i + 1
             write_import_state(bundle_root, state)
         work = fallback_work
+    elif repair_mode == "reextract":
+        emit_log(f"CZI re-extract mode ({len(repair_targets)} target(s))")
+        if not repair_targets:
+            emit_result({"ok": False, "error": "No re-extract targets"})
+            return 1
+        files_by_name = {}
+        for f in cfg.get("files") or []:
+            files_by_name[Path(f.get("path", "")).name] = f
+            files_by_name[f.get("basename", "")] = f
+        work = build_reextract_work(cfg, repair_targets, files_by_name)
+        if not work:
+            emit_result({"ok": False, "error": "No valid re-extract work items (check CZI paths)"})
+            return 1
+        repaired = 0
+        extracted_by_role_key = {}
+        state = {
+            "phase": "reextract",
+            "started": datetime.now(timezone.utc).isoformat(),
+            "total": len(work),
+            "done": 0,
+            "repair_mode": repair_mode,
+        }
+        write_import_state(bundle_root, state)
+        print(len(work), flush=True)
     else:
         work = build_work_items(cfg)
         if not work:
@@ -730,11 +794,11 @@ def main() -> int:
         }
         write_import_state(bundle_root, state)
         print(len(work), flush=True)
-    elif repair_mode != "previews":
+    elif repair_mode != "previews" and repair_mode != "reextract":
         emit_result({"ok": False, "error": "No channels marked to keep"})
         return 1
 
-    if repair_mode != "previews":
+    if repair_mode not in ("previews", "reextract"):
         extracted_by_role_key = {}
     czi_cache: dict[str, object] = {}
 
@@ -819,6 +883,19 @@ def main() -> int:
     skip_max = repair_mode == "previews" and max_runs_on_disk(bundle_root, max_runs)
     if skip_max:
         emit_log("Skipping max projection (existing max runs on disk)")
+    elif repair_mode == "reextract":
+        for role_key, slice_ids in extracted_by_role_key.items():
+            if role_key in (ROLE_DAPI, ROLE_UNUSED):
+                continue
+            if not branch_for_role_key(role_key):
+                continue
+            rel = str(max_runs.get(role_key) or "").strip()
+            if not rel:
+                emit_log(f"  skip max refresh {role_key}: no max run registered")
+                continue
+            n = refresh_max_slices_in_run(bundle_root, role_key, slice_ids, rel, cfg)
+            if n:
+                emit_log(f"  refreshed {n} max TIFF(s) for {role_key} in {rel}")
     else:
         for role_key, slice_ids in extracted_by_role_key.items():
             if role_key in (ROLE_DAPI, ROLE_UNUSED):

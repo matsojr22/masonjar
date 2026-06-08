@@ -427,7 +427,7 @@ function init() {
 			{ label: "Start", href: "./menu.html" },
 			{ label: "Workspace", href: "./workspace_menu.html" },
 			{ label: "Orient", href: "./orient.html" },
-			{ label: "Check orientation" },
+			{ label: "Check Orientation Consistency" },
 		],
 		"navTrail",
 	);

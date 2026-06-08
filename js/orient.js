@@ -278,6 +278,23 @@ function updateOrientPreviewBanner() {
 		repairBtn.classList.toggle("d-none", !health.canApply || !health.needsRepair);
 		repairBtn.disabled = previewRepairRunning || !geoState.allowPreviewRepair;
 	}
+	var reimportLink = qs("orientReimportCzi");
+	if (reimportLink) {
+		var showReimport =
+			health.blankDapi &&
+			health.blankDapi.length > 0 &&
+			orientState.cziImport &&
+			orientState.cziImport.files;
+		reimportLink.classList.toggle("d-none", !showReimport);
+		if (showReimport) {
+			var sliceParam = health.blankDapi
+				.map(function (b) {
+					return encodeURIComponent(b.slice_id);
+				})
+				.join(",");
+			reimportLink.href = "./czi_reimport_wizard.html?slices=" + sliceParam;
+		}
+	}
 	if (rebuildLink) {
 		rebuildLink.classList.toggle(
 			"d-none",
@@ -295,10 +312,10 @@ function updateOrientPreviewBanner() {
 		if (!health.canApply) {
 			/* repair banner carries the message */
 		} else if (geoState.policyState === "interrupted") {
-			status.textContent = "Apply is disabled — use Check orientation to audit and repair.";
+			status.textContent = "Apply is disabled — use Check Orientation Consistency to audit and repair.";
 		} else if (pending > 0 && !orientState.cziImport.geometry_applied_at) {
 			status.textContent =
-				"CSS preview — adjust slices, then Apply geometry. If a prior apply crashed, use Check orientation first.";
+				"CSS preview — adjust slices, then Apply geometry. If a prior apply crashed, use Check Orientation Consistency first.";
 		} else if (pending === 0) {
 			status.textContent = orientState.cziImport.geometry_applied_at
 				? "No pending changes. Tiles show on-disk orientation; adjust a slice and Apply again for further changes."
@@ -491,7 +508,7 @@ function runApplyGeometry() {
 	var geoState = getGeometryApplyState(ids);
 	if (geoState.policyState === "interrupted") {
 		return Promise.reject(
-			new Error("Geometry apply is blocked — use Check orientation to audit and repair."),
+			new Error("Geometry apply is blocked — use Check Orientation Consistency to audit and repair."),
 		);
 	}
 	if (

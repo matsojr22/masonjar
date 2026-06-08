@@ -1390,7 +1390,7 @@ function updateOrientPreviewBanner() {
 		if (geoMsg && geoState.policyState === "interrupted") {
 			geomBanner.innerHTML =
 				geoMsg +
-				' <a href="./geometry_repair_wizard.html">Check orientation</a>';
+				' <a href="./geometry_repair_wizard.html">Check Orientation Consistency</a>';
 			geomBanner.classList.remove("d-none");
 		} else {
 			geomBanner.textContent = "";
@@ -1410,7 +1410,7 @@ function updateOrientPreviewBanner() {
 			step5Hint.textContent = "";
 		} else if (geoState.policyState === "interrupted") {
 			step5Hint.innerHTML =
-				'Geometry apply is blocked. Open <a href="./geometry_repair_wizard.html">Check orientation</a> to audit and repair.';
+				'Geometry apply is blocked. Open <a href="./geometry_repair_wizard.html">Check Orientation Consistency</a> to audit and repair.';
 		} else if (pending === 0) {
 			step5Hint.textContent = wizardState.cziImport.geometry_applied_at
 				? "No pending changes. Review on-disk previews or adjust a slice before confirming again."
@@ -2121,7 +2121,7 @@ async function runApplyGeometry() {
 	);
 	if (geoState.policyState === "interrupted") {
 		throw new Error(
-			"Geometry apply is blocked — open Check orientation to audit and repair inconsistent files.",
+			"Geometry apply is blocked — open Check Orientation Consistency to audit and repair inconsistent files.",
 		);
 	}
 	if (

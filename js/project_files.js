@@ -296,6 +296,7 @@ function bindProjectFileControls(options) {
 	var subsetList = document.getElementById("subsetSliceList");
 	var rescanBtn = document.getElementById("rescanProject");
 	var addFilesBtn = document.getElementById("addFilesToRole");
+	var reimportCziBtn = document.getElementById("reimportCziSections");
 
 	if (!project.isActive()) {
 		if (subsetSection) {
@@ -306,6 +307,9 @@ function bindProjectFileControls(options) {
 		}
 		if (addFilesBtn) {
 			addFilesBtn.classList.add("d-none");
+		}
+		if (reimportCziBtn) {
+			reimportCziBtn.classList.add("d-none");
 		}
 		return;
 	}
@@ -318,6 +322,11 @@ function bindProjectFileControls(options) {
 	}
 	if (addFilesBtn) {
 		addFilesBtn.classList.remove("d-none");
+	}
+	if (reimportCziBtn) {
+		var hasCziImport =
+			proj.settings && proj.settings.czi_import && proj.settings.czi_import.files;
+		reimportCziBtn.classList.toggle("d-none", !hasCziImport);
 	}
 
 	renderImportNextStepsBanner();

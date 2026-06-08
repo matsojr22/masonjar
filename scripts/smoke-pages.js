@@ -17,6 +17,7 @@ const PAGES = [
 	"project_start.html",
 	"project_wizard.html",
 	"czi_wizard.html",
+	"czi_reimport_wizard.html",
 	"workspace_menu.html",
 	"menu_category.html",
 	"dapi_cleanup.html",
@@ -43,6 +44,11 @@ const DOM_ASSERTIONS = {
 		"renamingTableBody",
 		"channelTableBody",
 		"step3Next",
+	],
+	"czi_reimport_wizard.html": [
+		"sliceSelectList",
+		"channelSelectList",
+		"confirmTable",
 	],
 	"project_wizard.html": [
 		"step3",

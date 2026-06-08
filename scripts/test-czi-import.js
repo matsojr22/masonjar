@@ -807,10 +807,87 @@ function testPathToFileURLSpaces() {
 	assert.ok(href.indexOf("Matt") >= 0);
 }
 
+function writeBase64Png(filePath, b64) {
+	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	fs.writeFileSync(filePath, Buffer.from(b64, "base64"));
+}
+
+function testBuildRepairTargetsForSelection() {
+	var cziCfg = {
+		slice_order: [
+			{ ordinal: 1, sliceId: "M467_s006", path: "/scan/A.czi", scene_index: 0, basename: "A.czi" },
+			{ ordinal: 2, sliceId: "M467_s007", path: "/scan/B.czi", scene_index: 0, basename: "B.czi" },
+		],
+		files: [
+			{
+				basename: "A.czi",
+				path: "/scan/A.czi",
+				scenes: [{ index: 0, sliceId: "M467_s006" }],
+			},
+			{
+				basename: "B.czi",
+				path: "/scan/B.czi",
+				scenes: [{ index: 0, sliceId: "M467_s007" }],
+			},
+		],
+		channels: [
+			{ file: "A.czi", index: 0, role: cziImport.ROLE_DAPI, keep: true },
+			{ file: "A.czi", index: 1, role: cziImport.ROLE_SIGNAL_SOMATA, keep: true },
+			{ file: "B.czi", index: 0, role: cziImport.ROLE_DAPI, keep: true },
+		],
+	};
+	var targets = cziImport.buildRepairTargetsForSelection(
+		cziCfg,
+		["M467_s006"],
+		[cziImport.ROLE_DAPI],
+	);
+	assert.strictEqual(targets.length, 1);
+	assert.strictEqual(targets[0].slice_id, "M467_s006");
+	assert.strictEqual(targets[0].role_key, cziImport.ROLE_DAPI);
+	assert.strictEqual(targets[0].czi_path, "/scan/A.czi");
+}
+
+function testFindBlankPreviews() {
+	var bundle = fs.mkdtempSync(path.join(os.tmpdir(), "czi-blank-"));
+	var sliceId = "M467_s006";
+	var cziCfg = {
+		preview_format_version: cziImport.PREVIEW_FORMAT_VERSION,
+		slice_order: [{ ordinal: 1, sliceId: sliceId, path: "/scan/M.czi", scene_index: 0, basename: "M.czi" }],
+		files: [{ basename: "M.czi", path: "/scan/M.czi", scenes: [{ index: 0, sliceId: sliceId }] }],
+		channels: [{ file: "M.czi", index: 0, role: cziImport.ROLE_DAPI, keep: true }],
+	};
+	var blackPath = cziImport.orientDapiPreviewPath(bundle, sliceId);
+	var brightPath = cziImport.orientDapiPreviewPath(bundle, "M467_s007");
+	writeBase64Png(
+		blackPath,
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+	);
+	writeBase64Png(
+		brightPath,
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==",
+	);
+	var blackMean = cziImport.pngMeanLumaSync(blackPath);
+	var brightMean = cziImport.pngMeanLumaSync(brightPath);
+	assert.ok(blackMean != null && blackMean < cziImport.BLANK_PREVIEW_MEAN_THRESHOLD);
+	assert.ok(brightMean != null && brightMean > cziImport.BLANK_PREVIEW_MEAN_THRESHOLD);
+	var blanks = cziImport.findBlankPreviews(bundle, cziCfg, {});
+	assert.strictEqual(blanks.length, 1);
+	assert.strictEqual(blanks[0].slice_id, sliceId);
+}
+
+function testComputeMeanLumaFromImageData() {
+	var data = new Uint8ClampedArray([0, 0, 0, 255, 255, 255, 255, 255]);
+	var mean = cziImport.computeMeanLumaFromImageData({ data: data, width: 2, height: 1 });
+	assert.ok(mean > 100);
+}
+
 testLowResTiffAudit();
 testResolveOrientPreviewPath();
 testListOrientDisplayChannels();
 testCziImportFingerprintStable();
 testAuditCziImportCompletion();
 testPathToFileURLSpaces();
+testBuildRepairTargetsForSelection();
+testFindBlankPreviews();
+testComputeMeanLumaFromImageData();
 console.log("test-czi-import.js: OK");
