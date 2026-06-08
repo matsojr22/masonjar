@@ -9,6 +9,7 @@ var pipelineRuns = require("./pipeline_runs");
 var cziImport = require("./czi_import");
 var importHandoff = require("./import_handoff");
 var orientGeometry = require("./orient_geometry");
+var geometryState = require("./geometry_state");
 var branding = require("./branding");
 
 var ipc = require("electron").ipcRenderer;
@@ -2089,6 +2090,17 @@ async function runApplyGeometry() {
 	if (pending === 0) {
 		throw new Error("No pending geometry changes to apply.");
 	}
+	var sliceIds = cziImport.collectSliceIds(wizardState.cziImport);
+	var geoState = geometryState.assessGeometryApplyState(
+		wizardState.bundleRoot,
+		wizardState.cziImport,
+		{ sliceIds: sliceIds },
+	);
+	if (geoState.policyState === "interrupted") {
+		throw new Error(
+			"Geometry apply is blocked — open Rebuild geometry from Orient to repair inconsistent files.",
+		);
+	}
 	if (pending > 0 && wizardState.cziImport.geometry_applied_at) {
 		if (
 			!confirm(
@@ -2161,6 +2173,11 @@ async function runApplyGeometry() {
 			ipc.removeListener("applyGeometryResult", onResult);
 			geometryRunning = false;
 			updateWizardCancelVisibility();
+			geometryState.persistLastApplyResult(
+				wizardState.bundleRoot,
+				wizardState.cziImport,
+				payload || {},
+			);
 			if (!payload || payload.ok === false) {
 				var errMsg = (payload && payload.error) || "Geometry apply failed";
 				if (payload && payload.failed && payload.failed.length) {

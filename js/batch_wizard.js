@@ -1107,6 +1107,7 @@ function classifyPreflightCell(bundleRoot, stepId) {
 	var meta = registry.getStepMeta(stepId);
 	if (!meta) return { tone: "red", label: "?", reason: "Unknown step" };
 	if (meta.bundleWide) {
+		var geometryState = require("./geometry_state");
 		var projData;
 		try {
 			projData = project.readProjectJson(bundleRoot);
@@ -1115,21 +1116,7 @@ function classifyPreflightCell(bundleRoot, stepId) {
 		}
 		var settings = (projData && projData.settings) || {};
 		var cziImport = settings.czi_import || {};
-		var geom = cziImport.geometry || {};
-		var ids = Object.keys(geom);
-		var anyPending = false;
-		for (var i = 0; i < ids.length; i++) {
-			var g = geom[ids[i]];
-			if (!g) continue;
-			var rot = Number(g.rotate || 0) % 360;
-			if (rot !== 0 || g.flip_x || g.flip_y) {
-				anyPending = true;
-				break;
-			}
-		}
-		return anyPending
-			? { tone: "green", label: "ready", reason: ids.length + " slice(s) with pending geometry" }
-			: { tone: "amber", label: "no-op", reason: "No pending geometry — will skip." };
+		return geometryState.batchGeometryPreflight(bundleRoot, cziImport);
 	}
 	if (stepId === "intensity") {
 		var iPaths = project.resolvePathsForBundle(bundleRoot, "intensity");

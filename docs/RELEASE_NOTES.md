@@ -6,6 +6,25 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.3.0
+
+**What's new**
+
+Orient and CZI import now detect interrupted geometry applies and offer a **Rebuild geometry** wizard that audits every tissue section, flags cross-channel mismatches, and repairs only what you approve.
+
+**Changes**
+
+- Apply geometry is blocked when a prior run stopped partway; use **Rebuild geometry** from Orient instead of re-Applying blindly.
+- Repair wizard runs a full-series orientation audit (progress bar + log), then optional per-slice review before writing files.
+- **Finalize only** when files are done but project settings were not reset.
+- Batch **Apply geometry** respects the same interrupted-state checks.
+
+**Commit subject**
+
+Geometry repair wizard and interrupted-apply detection
+
+---
+
 ## v3.2.5
 
 **What's new**

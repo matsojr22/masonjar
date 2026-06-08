@@ -125,6 +125,16 @@ def test_transform_zstack_flip_x(tmp_path: Path) -> None:
         assert np.array_equal(loaded[zi], np.fliplr(stack[zi]))
 
 
+def test_geometry_progress_path_key(tmp_path: Path) -> None:
+    from geometry_apply_progress import path_key
+
+    bundle = tmp_path / "Brain_masonjar"
+    f = bundle / "data" / "counting" / "00_dapi" / "S1.png"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(b"x")
+    assert path_key(bundle, f) == "data/counting/00_dapi/S1.png"
+
+
 def test_double_apply_rot90_changes_pixels_twice(tmp_path: Path) -> None:
     """Applying the same rotation twice stacks transforms — geometry must reset after apply."""
     import cv2

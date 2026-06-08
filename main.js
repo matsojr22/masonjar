@@ -2085,7 +2085,9 @@ function runCziPythonScript(event, scriptName, args, killChannel, resultChannel)
         ? "czi_extract"
         : scriptName === "apply_geometry.py"
             ? "apply_geometry"
-            : "czi";
+            : scriptName === "geometry_fingerprint_probe.py"
+                ? "geometry_fingerprint_probe"
+                : "czi";
     const jobBundle = isProbe
         ? { options: Object.assign(Object.assign({}, partial), { env: pythonShellEnv() }), release: () => undefined }
         : mergeHeavyJobEnv(cziLabel, partial);
@@ -2304,6 +2306,13 @@ ipcMain.on("runApplyGeometry", function (event, data) {
     const geometryArgs = [];
     appendCziPathArgs(geometryArgs, bundleRoot, configPath);
     runCziPythonScript(event, "apply_geometry.py", geometryArgs, "killApplyGeometry", "applyGeometryResult");
+});
+ipcMain.on("runGeometryFingerprintProbe", function (event, data) {
+    const bundleRoot = data[0] || "";
+    const configPath = data[1] || "";
+    const probeArgs = [];
+    appendCziPathArgs(probeArgs, bundleRoot, configPath);
+    runCziPythonScript(event, "geometry_fingerprint_probe.py", probeArgs, "killGeometryFingerprintProbe", "geometryFingerprintResult");
 });
 function getBatchQueueDeps() {
     return {

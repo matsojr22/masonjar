@@ -11,6 +11,7 @@ var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var cziImport = require("./czi_import");
 var orientGeometry = require("./orient_geometry");
+var geometryState = require("./geometry_state");
 var branding = require("./branding");
 
 project.tryRestoreActiveProject();
@@ -173,12 +174,13 @@ function ensureSlicePlan() {
 	return ids;
 }
 
-function writeImportConfig() {
+function writeImportConfig(extra) {
 	var meta = path.join(orientState.bundleRoot, branding.META_DIR);
 	fs.mkdirSync(meta, { recursive: true });
 	var cfgPath = cziImport.importConfigPath(orientState.bundleRoot);
-	var payload = Object.assign({}, orientState.cziImport);
+	var payload = Object.assign({}, orientState.cziImport, extra || {});
 	payload.config_fingerprint = cziImport.cziImportFingerprint(payload);
+	payload.geometry_hash = geometryState.geometryOnlyHash(payload);
 	fs.writeFileSync(cfgPath, JSON.stringify({ czi_import: payload }, null, 2), "utf8");
 	return cfgPath;
 }
@@ -228,13 +230,23 @@ function populateOrientDisplayChannelSelect() {
 	select.value = orientState.displayChannel;
 }
 
+function getGeometryApplyState(ids) {
+	return geometryState.assessGeometryApplyState(orientState.bundleRoot, orientState.cziImport, {
+		sliceIds: ids,
+		previewHealth: cziImport.assessOrientPreviewHealth(orientState.bundleRoot, orientState.cziImport),
+	});
+}
+
 function updateOrientPreviewBanner() {
 	var health = cziImport.assessOrientPreviewHealth(
 		orientState.bundleRoot,
 		orientState.cziImport,
 	);
 	var banner = qs("orientPreviewBanner");
+	var geomBanner = qs("orientGeometryBanner");
 	var repairBtn = qs("orientRepairPreviews");
+	var rebuildLink = qs("orientRebuildGeometry");
+	var finalizeBtn = qs("orientFinalizeGeometry");
 	var applyBtn = qs("orientApply");
 	var status = qs("orientStatus");
 	var msg = cziImport.orientPreviewBannerText(health);
@@ -247,18 +259,43 @@ function updateOrientPreviewBanner() {
 			banner.classList.add("d-none");
 		}
 	}
-	if (repairBtn) {
-		repairBtn.classList.toggle("d-none", !health.needsRepair);
-		repairBtn.disabled = previewRepairRunning;
-	}
 	var ids = ensureSlicePlan();
+	var geoState = getGeometryApplyState(ids);
+	var geoMsg = geometryState.geometryStateBannerText(geoState, health);
+	if (geomBanner) {
+		if (geoMsg && !msg) {
+			geomBanner.textContent = geoMsg;
+			geomBanner.classList.remove("d-none");
+		} else if (geoMsg && geoState.policyState === "interrupted") {
+			geomBanner.textContent = geoMsg;
+			geomBanner.classList.remove("d-none");
+		} else {
+			geomBanner.textContent = "";
+			geomBanner.classList.add("d-none");
+		}
+	}
+	if (repairBtn) {
+		repairBtn.classList.toggle("d-none", !health.canApply || !health.needsRepair);
+		repairBtn.disabled = previewRepairRunning || !geoState.allowPreviewRepair;
+	}
+	if (rebuildLink) {
+		rebuildLink.classList.toggle(
+			"d-none",
+			!geoState.showRebuildWizard && geoState.policyState === "healthy",
+		);
+	}
+	if (finalizeBtn) {
+		finalizeBtn.classList.toggle("d-none", !geoState.canFinalizeOnly);
+	}
 	var pending = orientGeometry.countNonIdentityGeometry(orientState.cziImport.geometry, ids);
 	if (applyBtn && !geometryRunning) {
-		applyBtn.disabled = !health.canApply || pending === 0;
+		applyBtn.disabled = !geoState.allowApply || !health.canApply || pending === 0;
 	}
 	if (status && !geometryRunning) {
 		if (!health.canApply) {
 			/* repair banner carries the message */
+		} else if (geoState.policyState === "interrupted") {
+			status.textContent = "Apply is disabled — use Rebuild geometry to audit and repair.";
 		} else if (pending === 0) {
 			status.textContent = orientState.cziImport.geometry_applied_at
 				? "No pending changes. Tiles show on-disk orientation; adjust a slice and Apply again for further changes."
@@ -448,6 +485,12 @@ function runApplyGeometry() {
 	if (geomCount === 0) {
 		return Promise.reject(new Error("No pending geometry changes to apply."));
 	}
+	var geoState = getGeometryApplyState(ids);
+	if (geoState.policyState === "interrupted") {
+		return Promise.reject(
+			new Error("Geometry apply is blocked — open Rebuild geometry to repair inconsistent files."),
+		);
+	}
 	if (geomCount > 0 && orientState.cziImport.geometry_applied_at) {
 		if (
 			!confirm(
@@ -521,6 +564,7 @@ function runApplyGeometry() {
 			if (applyBtn) {
 				applyBtn.disabled = false;
 			}
+			geometryState.persistLastApplyResult(orientState.bundleRoot, orientState.cziImport, payload || {});
 			if (!payload || payload.ok === false) {
 				var errMsg = (payload && payload.error) || "Geometry apply failed";
 				if (payload && payload.failed && payload.failed.length) {
@@ -556,7 +600,9 @@ function runApplyGeometry() {
 		ipc.on("updateLoad", onProgress);
 		ipc.on("cziJobLog", onJobLog);
 		ipc.once("applyGeometryResult", onResult);
-		var cfgPath = writeImportConfig();
+		var cfgPath = writeImportConfig({
+			resume_apply: !!(geoState && geoState.canResume),
+		});
 		verboseLog("Config: " + cfgPath);
 		setActivity("Starting Python geometry apply…", 5);
 		ipc.send("runApplyGeometry", [
@@ -630,6 +676,17 @@ function init() {
 			alert(String(err.message || err));
 		});
 	});
+
+	var finalizeBtn = qs("orientFinalizeGeometry");
+	if (finalizeBtn) {
+		finalizeBtn.addEventListener("click", function () {
+			var sliceIds = ensureSlicePlan();
+			finalizeGeometryAfterApply({ ok: true, files_total: 0, changed: 0, finalize_only: true });
+			updateOrientPreviewBanner();
+			setActivity("Geometry settings finalized (no file changes).", 100);
+			verboseLog("Finalize only — pending geometry reset in project JSON.");
+		});
+	}
 }
 
 pageInit.onReady(function () {

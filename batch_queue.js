@@ -396,19 +396,14 @@ function preflightJob(deps, proj, stepId, plan, onLine) {
         ensureStructureMap(deps, onLine);
     }
     if (stepId === "apply_geometry") {
+        const geometryState = require("./geometry_state");
         const settings = ((projectData === null || projectData === void 0 ? void 0 : projectData.settings) || {});
         const cziImport = (settings.czi_import || {});
-        const geometryMap = (cziImport.geometry || {});
-        const ids = Object.keys(geometryMap);
-        const hasPending = ids.some((sid) => {
-            const g = geometryMap[sid];
-            if (!g) {
-                return false;
-            }
-            const rot = Number(g.rotate || 0) % 360;
-            return rot !== 0 || !!g.flip_x || !!g.flip_y;
-        });
-        if (!hasPending) {
+        const geoState = geometryState.assessGeometryApplyState(proj.path, cziImport);
+        if (geoState.policyState === "interrupted" || geoState.policyState === "finalize_pending") {
+            return { skip: true, reason: "interrupted geometry — run Rebuild geometry in Orient" };
+        }
+        if (!geometryState.hasPendingGeometry(cziImport, geoState.sliceIds)) {
             return { skip: true, reason: "no pending geometry" };
         }
     }
@@ -860,13 +855,14 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
             settings = {};
         }
         const cziImport = (settings.czi_import || {});
-        const cfg = {
-            project_root: proj.path,
-            geometry: cziImport.geometry || {},
-        };
         const metaPath = (0, batch_paths_1.ensureMetaDir)(proj.path);
-        const cfgPath = path.join(metaPath, "batch_apply_geometry.json");
-        fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
+        const importCfgPath = path.join(metaPath, "czi_import_config.json");
+        let cfgPath = importCfgPath;
+        if (!fs.existsSync(importCfgPath)) {
+            const cfg = { czi_import: cziImport };
+            cfgPath = path.join(metaPath, "batch_apply_geometry.json");
+            fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
+        }
         const args = ["-b", proj.path, "-j", cfgPath];
         return {
             scriptName: "apply_geometry.py",

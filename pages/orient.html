@@ -39,6 +39,7 @@
           applied to <code>00_dapi</code>, all <code>_previews</code>, z-stacks, and max projections.
         </div>
         <div id="orientPreviewBanner" class="alert alert-warning d-none small py-2 mb-3"></div>
+        <div id="orientGeometryBanner" class="alert alert-danger d-none small py-2 mb-3"></div>
         <div id="orientApplySummary" class="alert alert-success d-none small py-2 mb-3"></div>
         <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
           <label class="small mb-0" for="orientDisplayChannel">Display channel</label>
@@ -63,6 +64,12 @@
         <pre id="orientLog" class="wizard-log czi-extract-log small text-muted mb-3"></pre>
         <button type="button" class="btn btn-outline-warning d-none me-2" id="orientRepairPreviews">
           Repair previews
+        </button>
+        <a class="btn btn-warning d-none me-2" id="orientRebuildGeometry" href="./geometry_repair_wizard.html">
+          Rebuild geometry
+        </a>
+        <button type="button" class="btn btn-outline-secondary d-none me-2" id="orientFinalizeGeometry">
+          Finalize only
         </button>
         <button type="button" class="btn btn-primary" id="orientApply">Apply geometry</button>
         <a class="btn btn-outline-secondary ms-2" href="./workspace_menu.html">Workspace</a>

@@ -24,6 +24,8 @@ const PAGES = [
 	"settings.html",
 	"settings_network.html",
 	"batch_wizard.html",
+	"geometry_repair_wizard.html",
+	"orient.html",
 	"parcellation_wizard.html",
 	"tophat_wizard.html",
 	"sharpen_wizard.html",

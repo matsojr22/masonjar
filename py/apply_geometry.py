@@ -13,7 +13,15 @@ import numpy as np
 import tifffile as tiff
 
 from bundle_slice_paths import paths_for_slice, signal_branch_dirs_from_cfg
-from czi_common import emit_log, emit_result, load_import_config
+from czi_common import CANONICAL_REL, emit_log, emit_result, load_import_config
+from geometry_apply_progress import (
+    clear_progress,
+    is_completed,
+    load_progress,
+    path_key,
+    record_completion,
+    write_last_result,
+)
 
 
 def compose_ops(rotate: int, flip_x: bool, flip_y: bool):
@@ -167,31 +175,41 @@ def preflight_log(jobs: list[tuple[str, list, list[Path]]], bundle_root: Path) -
     return total_files
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Apply geometry to CZI import outputs")
-    parser.add_argument("-b", "--bundle", required=True)
-    parser.add_argument("-j", "--json", required=True, help="Import config or geometry-only JSON")
-    args = parser.parse_args()
-    args.bundle = str(args.bundle).strip()
-    args.json = str(args.json).strip()
+def _ops_from_js_list(op_list: list) -> list:
+    return ops_from_string_list(op_list)
 
-    started = time.monotonic()
-    bundle_root = Path(args.bundle).resolve()
-    try:
-        cfg = load_import_config(args.json)
-    except FileNotFoundError as exc:
-        emit_result({"ok": False, "error": str(exc)})
-        return 1
-    geometry = cfg.get("geometry") or {}
-    if not geometry:
-        emit_result({"ok": True, "changed": 0, "files_total": 0, "bytes_total": 0, "elapsed_sec": 0})
-        print("Done!", flush=True)
-        return 0
 
-    jobs = collect_geometry_jobs(bundle_root, geometry, cfg)
-    total_files = preflight_log(jobs, bundle_root)
-    print(total_files, flush=True)
+def collect_repair_jobs(bundle_root: Path, cfg: dict) -> list[tuple[str, list, Path, str]]:
+    """(slice_id, ops, path, strategy) from repair_targets."""
+    jobs: list[tuple[str, list, Path, str]] = []
+    for target in cfg.get("repair_targets") or []:
+        strategy = str(target.get("strategy") or "derivatives_from_original")
+        if strategy == "skip":
+            continue
+        slice_id = str(target.get("slice_id") or "")
+        rel = str(target.get("rel_path") or "").strip()
+        if not rel:
+            continue
+        op_list = target.get("ops") or []
+        ops = _ops_from_js_list(op_list) if op_list else []
+        path = bundle_root / rel
+        if strategy == "transform_original":
+            branch = str(target.get("branch") or "")
+            if branch:
+                orig = bundle_root / CANONICAL_REL["original_scans"] / branch / f"{slice_id}.tif"
+                if orig.is_file():
+                    path = orig
+        jobs.append((slice_id, ops, path, strategy))
+    return jobs
 
+
+def run_transform_jobs(
+    bundle_root: Path,
+    jobs: list[tuple[str, list, list[Path]]],
+    progress: dict | None,
+    resume: bool,
+) -> tuple[int, int, list[str], int]:
+    total_files = sum(len(targets) for _, _, targets in jobs)
     changed = 0
     bytes_total = 0
     failed: list[str] = []
@@ -199,6 +217,11 @@ def main() -> int:
 
     for slice_id, ops, targets in jobs:
         for tpath in targets:
+            rel_k = path_key(bundle_root, tpath)
+            if resume and progress and is_completed(progress, rel_k):
+                emit_log(f"skip completed {rel_k}")
+                file_index += 1
+                continue
             file_index += 1
             try:
                 rel = tpath.relative_to(bundle_root)
@@ -210,9 +233,8 @@ def main() -> int:
                 f"[{file_index}/{total_files}] read {rel} ({kind}, {size_before} bytes)",
             )
             read_start = time.monotonic()
-            before = None
             try:
-                before, after = transform_file(tpath, ops)
+                _before, after = transform_file(tpath, ops)
                 read_elapsed = time.monotonic() - read_start
                 if after.ndim == 2:
                     shape_desc = f"{after.shape[1]}x{after.shape[0]} {after.dtype}"
@@ -229,22 +251,135 @@ def main() -> int:
                 changed += 1
                 bytes_total += size_after
                 print(f"Applied geometry [{file_index}/{total_files}] {rel}", flush=True)
+                if progress is not None:
+                    record_completion(bundle_root, progress, rel_k, slice_id)
             except Exception as exc:
                 failed.append(f"{rel}: {exc}")
                 emit_log(f"[{file_index}/{total_files}] FAILED {rel}: {exc}")
                 print(f"Failed geometry [{file_index}/{total_files}] {rel}", flush=True)
 
-    elapsed = time.monotonic() - started
-    emit_result(
-        {
+    return changed, bytes_total, failed, total_files
+
+
+def run_repair_jobs(bundle_root: Path, cfg: dict) -> tuple[int, int, list[str], int]:
+    jobs = collect_repair_jobs(bundle_root, cfg)
+    total_files = len(jobs)
+    emit_log(f"Geometry repair: {total_files} target(s)")
+    print(total_files, flush=True)
+    changed = 0
+    bytes_total = 0
+    failed: list[str] = []
+    for i, (slice_id, ops, tpath, strategy) in enumerate(jobs):
+        idx = i + 1
+        try:
+            rel = tpath.relative_to(bundle_root)
+        except ValueError:
+            rel = Path(tpath.name)
+        if strategy == "skip" or not tpath.is_file():
+            emit_log(f"[{idx}/{total_files}] skip {rel}")
+            continue
+        emit_log(f"[{idx}/{total_files}] repair {strategy} {rel}")
+        try:
+            if ops:
+                _before, after = transform_file(tpath, ops)
+            else:
+                after = _read_image_array(tpath)
+            changed += 1
+            bytes_total += tpath.stat().st_size if tpath.is_file() else 0
+            print(f"Repaired geometry [{idx}/{total_files}] {rel}", flush=True)
+        except Exception as exc:
+            failed.append(f"{rel}: {exc}")
+            emit_log(f"[{idx}/{total_files}] FAILED {rel}: {exc}")
+    return changed, bytes_total, failed, total_files
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Apply geometry to CZI import outputs")
+    parser.add_argument("-b", "--bundle", required=True)
+    parser.add_argument("-j", "--json", required=True, help="Import config or geometry-only JSON")
+    args = parser.parse_args()
+    args.bundle = str(args.bundle).strip()
+    args.json = str(args.json).strip()
+
+    started = time.monotonic()
+    bundle_root = Path(args.bundle).resolve()
+    try:
+        cfg = load_import_config(args.json)
+    except FileNotFoundError as exc:
+        emit_result({"ok": False, "error": str(exc)})
+        return 1
+
+    repair_mode = cfg.get("repair_mode")
+    geometry_hash = str(cfg.get("geometry_hash") or "")
+    config_fingerprint = str(cfg.get("config_fingerprint") or "")
+    resume = bool(cfg.get("resume_apply"))
+
+    if repair_mode == "geometry":
+        changed, bytes_total, failed, total_files = run_repair_jobs(bundle_root, cfg)
+        elapsed = time.monotonic() - started
+        result = {
             "ok": len(failed) == 0,
             "changed": changed,
             "files_total": total_files,
             "bytes_total": bytes_total,
             "elapsed_sec": round(elapsed, 2),
             "failed": failed,
+            "repair_mode": "geometry",
         }
+        write_last_result(bundle_root, {**result, "geometry_hash": geometry_hash, "config_fingerprint": config_fingerprint})
+        emit_result(result)
+        print("Done!", flush=True)
+        return 0 if not failed else 1
+
+    geometry = cfg.get("geometry") or {}
+    if not geometry:
+        emit_result({"ok": True, "changed": 0, "files_total": 0, "bytes_total": 0, "elapsed_sec": 0})
+        print("Done!", flush=True)
+        return 0
+
+    jobs = collect_geometry_jobs(bundle_root, geometry, cfg)
+    total_files = preflight_log(jobs, bundle_root)
+    print(total_files, flush=True)
+
+    progress = load_progress(bundle_root)
+    if progress and (
+        progress.get("geometry_hash") != geometry_hash
+        or progress.get("config_fingerprint") != config_fingerprint
+    ):
+        progress = None
+    if not resume or not progress:
+        progress = {
+            "config_fingerprint": config_fingerprint,
+            "geometry_hash": geometry_hash,
+            "files_total": total_files,
+            "completed": 0,
+            "completed_paths": [],
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        from geometry_apply_progress import save_progress
+
+        save_progress(bundle_root, progress)
+    else:
+        emit_log(f"Resuming apply: {progress.get('completed', 0)}/{total_files} already done")
+
+    changed, bytes_total, failed, _ = run_transform_jobs(bundle_root, jobs, progress, resume)
+
+    elapsed = time.monotonic() - started
+    result = {
+        "ok": len(failed) == 0,
+        "changed": changed,
+        "files_total": total_files,
+        "bytes_total": bytes_total,
+        "elapsed_sec": round(elapsed, 2),
+        "failed": failed,
+    }
+    write_last_result(
+        bundle_root,
+        {**result, "geometry_hash": geometry_hash, "config_fingerprint": config_fingerprint},
     )
+    if result["ok"]:
+        clear_progress(bundle_root)
+    emit_result(result)
     print("Done!", flush=True)
     return 0 if not failed else 1
 

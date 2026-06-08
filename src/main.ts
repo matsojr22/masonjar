@@ -2406,7 +2406,9 @@ function runCziPythonScript(
       ? "czi_extract"
       : scriptName === "apply_geometry.py"
         ? "apply_geometry"
-        : "czi";
+        : scriptName === "geometry_fingerprint_probe.py"
+          ? "geometry_fingerprint_probe"
+          : "czi";
   const jobBundle = isProbe
     ? { options: { ...partial, env: pythonShellEnv() }, release: () => undefined }
     : mergeHeavyJobEnv(cziLabel, partial);
@@ -2652,6 +2654,20 @@ ipcMain.on("runApplyGeometry", function (event: any, data: any[]) {
     geometryArgs,
     "killApplyGeometry",
     "applyGeometryResult",
+  );
+});
+
+ipcMain.on("runGeometryFingerprintProbe", function (event: any, data: any[]) {
+  const bundleRoot = data[0] || "";
+  const configPath = data[1] || "";
+  const probeArgs: string[] = [];
+  appendCziPathArgs(probeArgs, bundleRoot, configPath);
+  runCziPythonScript(
+    event,
+    "geometry_fingerprint_probe.py",
+    probeArgs,
+    "killGeometryFingerprintProbe",
+    "geometryFingerprintResult",
   );
 });
 
