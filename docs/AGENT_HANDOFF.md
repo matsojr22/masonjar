@@ -1,6 +1,6 @@
 # Agent session handoff
 
-Last updated: 2026-06-05 (io-fairshare EPERM fix v3.2.5). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-07 (v3.2.5 published). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
 
@@ -9,7 +9,7 @@ Last updated: 2026-06-05 (io-fairshare EPERM fix v3.2.5). Use this file to resum
 | Item | Value |
 |------|--------|
 | `package.json` version | **3.2.5** |
-| Latest tag | `v3.2.5` (pre-release on GitHub, pending publish) |
+| Latest tag | `v3.2.5` (pre-release on GitHub, published) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
 
 **v3.2.5** — **io-fairshare EPERM fix**: [`src/io_fairshare.ts`](../src/io_fairshare.ts) `writeJsonAtomic` Windows lock fallback + in-place retry; `registerJob`/`touchJob`/heartbeat timer best-effort (no main-process crash). Tests: repeated `writeJsonAtomic` in `scripts/test-io-fairshare.js`.

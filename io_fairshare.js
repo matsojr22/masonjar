@@ -23,7 +23,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createHeavyJobHandle = exports.applyIoFairsharePythonEnv = exports.endNodeJobTracking = exports.beginNodeJobTracking = exports.unregisterJob = exports.touchJob = exports.registerJob = exports.newJobId = exports.getIoFairshareStatus = exports.isFairshareEnabled = exports.computeJobLimitMbps = exports.listRegistryEntries = exports.saveUserConfig = exports.loadUserConfig = exports.saveSharedConfig = exports.loadSharedConfig = exports.ensureCoordinatorDir = exports.detectLinkMbps = exports.parseLinkSpeedText = exports.mergeNasPathPrefixes = exports.normalizeNasPathPrefix = exports.getSharedConfigPath = exports.userConfigPath = exports.defaultCoordinatorDir = exports.resetLinkSpeedCache = void 0;
+exports.createHeavyJobHandle = exports.applyIoFairsharePythonEnv = exports.endNodeJobTracking = exports.beginNodeJobTracking = exports.unregisterJob = exports.touchJob = exports.registerJob = exports.newJobId = exports.getIoFairshareStatus = exports.isFairshareEnabled = exports.computeJobLimitMbps = exports.listRegistryEntries = exports.saveUserConfig = exports.loadUserConfig = exports.saveSharedConfig = exports.loadSharedConfig = exports.ensureCoordinatorDir = exports.detectLinkMbps = exports.parseLinkSpeedText = exports.writeJsonAtomic = exports.mergeNasPathPrefixes = exports.normalizeNasPathPrefix = exports.getSharedConfigPath = exports.userConfigPath = exports.defaultCoordinatorDir = exports.resetLinkSpeedCache = void 0;
 const crypto = __importStar(require("crypto"));
 const fs = __importStar(require("fs"));
 const os = __importStar(require("os"));
@@ -197,6 +197,7 @@ function warnRegistryBestEffort(message) {
     lastRegistryWarnAt = now;
     console.warn(message);
 }
+/** Atomic JSON write; falls back to in-place retry on Windows file locks. */
 function writeJsonAtomic(filePath, data) {
     const dir = path.dirname(filePath);
     fs.mkdirSync(dir, { recursive: true });
