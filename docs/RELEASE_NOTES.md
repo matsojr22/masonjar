@@ -6,6 +6,24 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v3.3.7
+
+**What's new**
+
+Multi-folder CZI imports (two or more source directories with the same `.czi` filenames) now extract and repair all sections correctly.
+
+**Changes**
+
+- Python extract resolves each channel row by full file path, not basename alone, so folder 2 slices are no longer mapped to folder 1’s CZI files.
+- Preview repair picks the DAPI channel for each slice from `slice_order`, fixing missing counterstain on later folders.
+- CZI wizard shows matched vs expected slice counts (e.g. `45 / 61`) and warns when DAPI and max pairing is incomplete.
+
+**Commit subject**
+
+Fix multi-folder CZI import when source folders share filenames
+
+---
+
 ## v3.3.6
 
 **What's new**

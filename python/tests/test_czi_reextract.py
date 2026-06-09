@@ -56,8 +56,10 @@ def test_build_reextract_work_resolves_targets(tmp_path: Path) -> None:
             "czi_path": str(czi_path),
         }
     ]
-    files_by_name = {"M467(6).czi": cfg["files"][0]}
-    work = ce.build_reextract_work(cfg, targets, files_by_name)
+    from czi_common import build_files_lookup
+
+    lookup = build_files_lookup(cfg["files"])
+    work = ce.build_reextract_work(cfg, targets, lookup)
     assert len(work) == 1
     assert work[0]["slice_id"] == "M467_s006"
     assert work[0]["czi_path"] == czi_path

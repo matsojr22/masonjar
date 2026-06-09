@@ -210,6 +210,46 @@ def slice_order_ordinal_map(cfg: Mapping[str, Any]) -> dict[tuple[str, int], int
     return mapping
 
 
+def build_files_lookup(files: list[Mapping[str, Any]] | None) -> dict[str, Any]:
+    """Path-aware file index matching js/czi_import.js buildFilesLookup."""
+    by_path: dict[str, dict] = {}
+    by_basename: dict[str, dict] = {}
+    basename_counts: dict[str, int] = {}
+    for entry in files or []:
+        if not isinstance(entry, Mapping):
+            continue
+        row = dict(entry)
+        path_str = str(row.get("path") or "").strip()
+        if path_str:
+            by_path[path_str] = row
+        basename = str(row.get("basename") or Path(path_str).name if path_str else "").strip()
+        if basename:
+            basename_counts[basename] = basename_counts.get(basename, 0) + 1
+            by_basename[basename] = row
+    return {
+        "by_path": by_path,
+        "by_basename": by_basename,
+        "basename_counts": basename_counts,
+    }
+
+
+def resolve_file_entry(file_key: str, lookup: Mapping[str, Any] | None) -> dict | None:
+    """Match js/czi_import.js resolveFileEntry: path first, basename only if unique."""
+    if not file_key or not lookup:
+        return None
+    key = str(file_key).strip()
+    by_path = lookup.get("by_path") or {}
+    if key in by_path:
+        return dict(by_path[key])
+    basename = Path(key).name
+    basename_counts = lookup.get("basename_counts") or {}
+    if basename_counts.get(basename) == 1:
+        by_basename = lookup.get("by_basename") or {}
+        hit = by_basename.get(basename)
+        return dict(hit) if hit else None
+    return None
+
+
 def suggest_role_from_label(label: str) -> str:
     text = str(label or "").strip()
     if re.search(r"dapi", text, re.I):

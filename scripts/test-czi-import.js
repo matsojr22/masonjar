@@ -623,6 +623,62 @@ testCollectMosaicInfo();
 testHasLikelyUnstitchedMosaic();
 testCountExtractWorkItems();
 
+function testRepairTargetsMultidirDapi() {
+	var imp = cziImport.buildDefaultCziImport("");
+	var makeFile = function (dirPath, n, scanIndex) {
+		var basename = "M514(" + n + ").czi";
+		return {
+			path: dirPath + "/" + basename,
+			basename: basename,
+			source_dir: dirPath,
+			scan_index: scanIndex,
+			scene_count: 1,
+			channels: [{ index: 0, label: "DAPI" }],
+			scenes: [{ index: 0, sliceId: basename.replace(/\.czi$/i, ""), originalSliceId: basename.replace(/\.czi$/i, "") }],
+		};
+	};
+	var dir0Files = [];
+	var dir1Files = [];
+	for (var n = 1; n <= 3; n++) {
+		dir0Files.push(makeFile("/day1", n, 0));
+		dir1Files.push(makeFile("/day2", n, 1));
+	}
+	cziImport.mergeProbeDirIntoImport(imp, { files: dir0Files }, "/day1", 0);
+	cziImport.mergeProbeDirIntoImport(imp, { files: dir1Files }, "/day2", 1);
+	imp.slice_numbering = cziImport.SLICE_NUMBERING_RENAME;
+	cziImport.buildSliceOrder(imp, "M514");
+	imp.channels = [];
+	for (var f = 0; f < imp.files.length; f++) {
+		var file = imp.files[f];
+		imp.channels.push({
+			file: file.path,
+			index: 0,
+			role: cziImport.ROLE_DAPI,
+			other_name: "",
+			keep: true,
+		});
+	}
+	var audit = {
+		missingOrientDapiPreviews: [{ slice_id: "M514_s004" }],
+		invalidPreviews: [],
+		lowResTiffIssues: [],
+	};
+	var targets = cziImport.buildRepairTargetsFromAudit(audit, imp);
+	assert.strictEqual(targets.length, 1);
+	assert.strictEqual(targets[0].slice_id, "M514_s004");
+	assert.ok(
+		String(targets[0].czi_path).indexOf("/day2/") >= 0,
+		"expected day2 CZI path, got " + targets[0].czi_path,
+	);
+	assert.notStrictEqual(
+		String(targets[0].czi_path).indexOf("/day1/"),
+		0,
+		"repair target must not use day1 CZI for folder-2 slice",
+	);
+}
+
+testRepairTargetsMultidirDapi();
+
 function testLowResTiffAudit() {
 	var bundle = fs.mkdtempSync(path.join(os.tmpdir(), "czi-tiff-audit-"));
 	var sliceId = "M528_s001";

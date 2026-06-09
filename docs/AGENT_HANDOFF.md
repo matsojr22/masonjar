@@ -1,6 +1,6 @@
 # Agent session handoff
 
-Last updated: 2026-06-08 (v3.3.6). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-08 (v3.3.7). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
 
@@ -8,9 +8,11 @@ Last updated: 2026-06-08 (v3.3.6). Use this file to resume work; long-term archi
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **3.3.6** |
-| Latest tag | `v3.3.6` (pending publish) |
+| `package.json` version | **3.3.7** |
+| Latest tag | `v3.3.7` (pending publish) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v3.3.7** — **Multi-folder CZI import**: [`py/czi_common.py`](../py/czi_common.py) `build_files_lookup` / `resolve_file_entry`; [`py/czi_extract.py`](../py/czi_extract.py) path-aware work items; [`js/czi_import.js`](../js/czi_import.js) `resolveChannelForSlice` for repair targets; [`js/czi_wizard.js`](../js/czi_wizard.js) matched/expected index note. Tests: `python/tests/test_czi_multidir_extract.py`, `scripts/test-czi-import.js`.
 
 **v3.3.6** — **Viewer/Editor launch fix**: [`py/adjust.py`](../py/adjust.py) `_init_paint_region_controls()` after paint-target strip; [`js/project_files.js`](../js/project_files.js) `proj` before `settings`. **Geometry on open**: [`js/geometry_state.js`](../js/geometry_state.js) `reconcileGeometryOnOpen`, workspace banner ([`pages/workspace_menu.html`](../pages/workspace_menu.html)); [`py/geometry_history.py`](../py/geometry_history.py) audit log from [`py/apply_geometry.py`](../py/apply_geometry.py). Tests: `python/tests/test_adjust_overlay_init.py`, `scripts/test-geometry-state.js`.
 

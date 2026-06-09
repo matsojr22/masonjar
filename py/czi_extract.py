@@ -42,6 +42,8 @@ from czi_common import (
     original_scans_path,
     preview_autoscale_to_uint8,
     read_czi_plane,
+    build_files_lookup,
+    resolve_file_entry,
     role_key_for_channel,
     signal_preview_path,
     slice_order_ordinal_map,
@@ -242,10 +244,7 @@ def slice_id_for_scene(file_entry: dict, scene_index: int) -> str:
 
 def build_work_items(cfg: dict) -> list[dict]:
     channels = [c for c in cfg.get("channels") or [] if c.get("keep") and c.get("role") != ROLE_UNUSED]
-    files_by_name = {}
-    for f in cfg.get("files") or []:
-        files_by_name[Path(f.get("path", "")).name] = f
-        files_by_name[f.get("basename", "")] = f
+    lookup = build_files_lookup(cfg.get("files") or [])
 
     items = []
     for ch in channels:
@@ -254,7 +253,7 @@ def build_work_items(cfg: dict) -> list[dict]:
         if ch.get("role") == "other" and not branch_for_channel(ch):
             continue
         file_key = ch.get("file") or ""
-        file_entry = files_by_name.get(file_key) or files_by_name.get(Path(file_key).name)
+        file_entry = resolve_file_entry(str(file_key), lookup)
         if not file_entry:
             continue
         czi_path = Path(file_entry["path"])
@@ -506,12 +505,12 @@ def channel_from_repair_target(cfg: dict, target: dict) -> dict | None:
     return None
 
 
-def repair_target_to_work_item(cfg: dict, target: dict, files_by_name: dict) -> dict | None:
+def repair_target_to_work_item(cfg: dict, target: dict, lookup: dict) -> dict | None:
     ch = channel_from_repair_target(cfg, target)
     if not ch:
         return None
     file_key = target.get("file") or ch.get("file") or ""
-    file_entry = files_by_name.get(file_key) or files_by_name.get(Path(file_key).name)
+    file_entry = resolve_file_entry(str(file_key), lookup)
     if not file_entry:
         return None
     czi_path = Path(target.get("czi_path") or file_entry.get("path") or "")
@@ -569,10 +568,10 @@ def refresh_max_slices_in_run(
     return refreshed
 
 
-def build_reextract_work(cfg: dict, repair_targets: list[dict], files_by_name: dict) -> list[dict]:
+def build_reextract_work(cfg: dict, repair_targets: list[dict], lookup: dict) -> list[dict]:
     work: list[dict] = []
     for target in repair_targets:
-        item = repair_target_to_work_item(cfg, target, files_by_name)
+        item = repair_target_to_work_item(cfg, target, lookup)
         if item:
             work.append(item)
     return work
@@ -701,10 +700,7 @@ def main() -> int:
             print("Done!", flush=True)
             return 0
         emit_log(f"Preview repair ({len(repair_targets)} target(s))")
-        files_by_name: dict[str, dict] = {}
-        for f in cfg.get("files") or []:
-            files_by_name[Path(f.get("path", "")).name] = f
-            files_by_name[f.get("basename", "")] = f
+        files_lookup = build_files_lookup(cfg.get("files") or [])
         fallback_work: list[dict] = []
         repaired = 0
         state = {
@@ -732,7 +728,7 @@ def main() -> int:
                 role_key = role_key_for_channel(ch)
                 extracted_by_role_key.setdefault(role_key, []).append(slice_id)
             else:
-                item = repair_target_to_work_item(cfg, target, files_by_name)
+                item = repair_target_to_work_item(cfg, target, files_lookup)
                 if item:
                     fallback_work.append(item)
                 else:
@@ -745,11 +741,8 @@ def main() -> int:
         if not repair_targets:
             emit_result({"ok": False, "error": "No re-extract targets"})
             return 1
-        files_by_name = {}
-        for f in cfg.get("files") or []:
-            files_by_name[Path(f.get("path", "")).name] = f
-            files_by_name[f.get("basename", "")] = f
-        work = build_reextract_work(cfg, repair_targets, files_by_name)
+        files_lookup = build_files_lookup(cfg.get("files") or [])
+        work = build_reextract_work(cfg, repair_targets, files_lookup)
         if not work:
             emit_result({"ok": False, "error": "No valid re-extract work items (check CZI paths)"})
             return 1

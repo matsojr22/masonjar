@@ -1751,6 +1751,44 @@ function orientPreviewBannerText(health) {
 	return parts.join(" ");
 }
 
+function sliceOrderEntryForSlice(cziImport, sliceId) {
+	var order = (cziImport && cziImport.slice_order) || [];
+	for (var i = 0; i < order.length; i++) {
+		if (order[i].sliceId === sliceId) {
+			return order[i];
+		}
+	}
+	return null;
+}
+
+function resolveChannelForSlice(cziImport, sliceId, role) {
+	if (!cziImport || !sliceId) {
+		return null;
+	}
+	var orderEntry = sliceOrderEntryForSlice(cziImport, sliceId);
+	if (!orderEntry || !orderEntry.path) {
+		return null;
+	}
+	var lookup = buildFilesLookup(cziImport.files || []);
+	var channels = cziImport.channels || [];
+	var orderPath = String(orderEntry.path);
+	for (var c = 0; c < channels.length; c++) {
+		var ch = channels[c];
+		if (!ch.keep || ch.role !== role) {
+			continue;
+		}
+		var fileRef = resolveFileEntry(ch.file || "", lookup);
+		if (fileRef && String(fileRef.path) === orderPath) {
+			return {
+				channel: ch,
+				fileRef: fileRef,
+				orderEntry: orderEntry,
+			};
+		}
+	}
+	return null;
+}
+
 function buildRepairTargetsFromAudit(audit, cziImport) {
 	var targets = (audit.invalidPreviews || []).map(function (item) {
 		return {
@@ -1766,46 +1804,26 @@ function buildRepairTargetsFromAudit(audit, cziImport) {
 	for (var t = 0; t < targets.length; t++) {
 		seen[targets[t].slice_id + ":" + targets[t].channel_index] = true;
 	}
-	var dapiChannel = null;
-	if (cziImport && cziImport.channels) {
-		for (var c = 0; c < cziImport.channels.length; c++) {
-			var ch = cziImport.channels[c];
-			if (ch.keep && ch.role === ROLE_DAPI) {
-				dapiChannel = ch;
-				break;
-			}
-		}
-	}
 	function addDapiTarget(sliceId) {
-		if (!dapiChannel || !sliceId) {
+		var resolved = resolveChannelForSlice(cziImport, sliceId, ROLE_DAPI);
+		if (!resolved) {
 			return;
 		}
-		var key = sliceId + ":" + dapiChannel.index;
+		var ch = resolved.channel;
+		var key = sliceId + ":" + ch.index;
 		if (seen[key]) {
 			return;
 		}
 		seen[key] = true;
-		var fileRef = null;
-		if (cziImport.files) {
-			var lookup = buildFilesLookup(cziImport.files);
-			fileRef = resolveFileEntry(dapiChannel.file || "", lookup);
-		}
-		var sceneIndex = 0;
-		if (fileRef && fileRef.scenes) {
-			for (var s = 0; s < fileRef.scenes.length; s++) {
-				if (fileRef.scenes[s].sliceId === sliceId) {
-					sceneIndex = fileRef.scenes[s].index;
-					break;
-				}
-			}
-		}
+		var sceneIndex =
+			resolved.orderEntry.scene_index != null ? resolved.orderEntry.scene_index : 0;
 		targets.push({
 			slice_id: sliceId,
-			channel_index: dapiChannel.index,
+			channel_index: ch.index,
 			role_key: ROLE_DAPI,
-			file: dapiChannel.file,
+			file: ch.file,
 			scene_index: sceneIndex,
-			czi_path: fileRef ? fileRef.path : "",
+			czi_path: resolved.fileRef.path || "",
 		});
 	}
 	for (var i = 0; i < (audit.lowResTiffIssues || []).length; i++) {
@@ -2290,6 +2308,8 @@ module.exports = {
 	findGeometryKeysWithoutPreviewFiles: findGeometryKeysWithoutPreviewFiles,
 	orientPreviewBannerText: orientPreviewBannerText,
 	auditCziImportCompletion: auditCziImportCompletion,
+	sliceOrderEntryForSlice: sliceOrderEntryForSlice,
+	resolveChannelForSlice: resolveChannelForSlice,
 	buildRepairTargetsFromAudit: buildRepairTargetsFromAudit,
 	iterKeptChannelScenes: iterKeptChannelScenes,
 	BLANK_PREVIEW_MEAN_THRESHOLD: BLANK_PREVIEW_MEAN_THRESHOLD,

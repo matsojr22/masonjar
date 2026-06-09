@@ -1617,30 +1617,76 @@ function setActiveMaxRuns() {
 /** After extract/repair: set active max run and rebuild file index (DAPI + max). */
 async function syncProjectIndexAfterExtract() {
 	if (!wizardState.bundleRoot) {
-		return { matchedCount: 0 };
+		return { matchedCount: 0, expected: 0, dapiOrphans: 0, maxOrphans: 0 };
 	}
 	setActiveMaxRuns();
 	await project.refreshProjectIndex(wizardState.bundleRoot);
 	var index = project.readProjectFileIndex(wizardState.bundleRoot);
 	var report = project.computeMatchReport(index, ["dapi", "max"]);
 	var matchedCount = (report.matchedSliceIds || []).length;
+	var expected = cziImport.collectSliceIds(wizardState.cziImport || {}).length;
+	var dapiOrphans = (report.orphansByRole && report.orphansByRole.dapi) || [];
+	var maxOrphans = (report.orphansByRole && report.orphansByRole.max) || [];
 	verboseExtractLog(
-		"File index updated: " + matchedCount + " slice(s) matched between DAPI and max.",
+		"File index updated: " +
+			matchedCount +
+			" / " +
+			expected +
+			" slice(s) matched between DAPI and max.",
 	);
-	return { matchedCount: matchedCount };
+	if (expected > 0 && matchedCount < expected) {
+		verboseExtractLog(
+			"WARNING: " +
+				(expected - matchedCount) +
+				" slice(s) missing DAPI+max pairing — multi-folder extract may be incomplete. Re-run extract or use Re-import sections from CZI.",
+		);
+		if (dapiOrphans.length) {
+			verboseExtractLog(
+				"  DAPI-only (no max): " +
+					dapiOrphans.slice(0, 8).join(", ") +
+					(dapiOrphans.length > 8 ? " …" : ""),
+			);
+		}
+		if (maxOrphans.length) {
+			verboseExtractLog(
+				"  Max-only (no DAPI): " +
+					maxOrphans.slice(0, 8).join(", ") +
+					(maxOrphans.length > 8 ? " …" : ""),
+			);
+		}
+	}
+	return {
+		matchedCount: matchedCount,
+		expected: expected,
+		dapiOrphans: dapiOrphans.length,
+		maxOrphans: maxOrphans.length,
+		orphansByRole: report.orphansByRole,
+	};
 }
 
-function updateExtractIndexNote(matchedCount) {
+function updateExtractIndexNote(info) {
 	var detail = qs("extractDetail");
 	if (!detail) {
 		return;
 	}
-	detail.textContent =
+	var matchedCount = typeof info === "number" ? info : info.matchedCount || 0;
+	var expected =
+		typeof info === "object" && info.expected != null ? info.expected : matchedCount;
+	var note =
 		"File index updated — " +
 		matchedCount +
+		" / " +
+		expected +
 		" slice(s) matched between DAPI and max. " +
 		"Refreshes again after you confirm geometry (finish step). " +
 		"Detailed lines also appear in the application log window.";
+	if (expected > 0 && matchedCount < expected) {
+		note +=
+			" Warning: " +
+			(expected - matchedCount) +
+			" slice(s) lack both DAPI and max — re-run extract or Re-import sections from CZI.";
+	}
+	detail.textContent = note;
 }
 
 function probeSingleDir(dir, scanIndex, folderProgress) {
@@ -2082,7 +2128,7 @@ async function runExtract(options) {
 			}
 			syncProjectIndexAfterExtract()
 				.then(function (info) {
-					updateExtractIndexNote(info.matchedCount);
+					updateExtractIndexNote(info);
 					resolve(payload);
 				})
 				.catch(function (indexErr) {
