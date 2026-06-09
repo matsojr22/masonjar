@@ -91,7 +91,9 @@ function loadPlan() {
 		tierId = plan.tierId || "areas";
 		stLevel = plan.stLevel != null ? plan.stLevel : 6;
 		ccfAdvanced = !!plan.ccfAdvanced;
-		includedRegionIds = (plan.includedRegionIds || plan.excludedRegionIds || []).slice();
+		// Legacy `excludedRegionIds` is the inverse set of included regions; do
+		// not load it as included (that inverts the selection). Re-pick instead.
+		includedRegionIds = (plan.includedRegionIds || []).slice();
 		if (plan.selectedSliceIds) {
 			for (var i = 0; i < plan.selectedSliceIds.length; i++) {
 				selectedSliceIds[plan.selectedSliceIds[i]] = true;

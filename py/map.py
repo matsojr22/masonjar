@@ -721,10 +721,24 @@ class AlignmentController:
                     positions += [self.atlas_slices[self.file_list[i]].ap_position]
                     continue
 
+                sample_path = Path(self.input_path) / self.file_list[i]
                 sample_img = cv2.imread(
-                    str(Path(self.input_path) / self.file_list[i]),
+                    str(sample_path),
                     cv2.IMREAD_GRAYSCALE,
                 )
+                if sample_img is None:
+                    # A missing/corrupt PNG would otherwise raise an opaque
+                    # TypeError inside cv2.resize and abort the whole session.
+                    print(
+                        f"LOG: align_predict_read_failed file={self.file_list[i]}",
+                        flush=True,
+                    )
+                    raise RuntimeError(
+                        f"Could not read alignment input image: {sample_path}. "
+                        "Ensure 00_dapi has a valid PNG for this slice "
+                        "(re-run DAPI cleanup or re-import this section), then "
+                        "restart Alignment."
+                    )
                 # match histogram
                 sample_img = cv2.resize(sample_img, (256, 256))
                 sample_img = sobel(sample_img)

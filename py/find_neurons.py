@@ -255,6 +255,8 @@ if __name__ == "__main__":
         device=device,
     )
 
+    written = 0
+    failed_reads = 0
     for file in files:
         file_path = os.path.join(input_dir, file)
         stripped, ext = file.split(".")[0], file.split(".")[-1]
@@ -279,6 +281,7 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Error reading {file}!", flush=True)
             print(e, flush=True)
+            failed_reads += 1
             continue
 
         # If multichannel, split into individual channels
@@ -380,5 +383,17 @@ if __name__ == "__main__":
 
         with open(output_dir / f"Predictions_{stripped}.pkl", "wb") as f:
             pickle.dump(predictions, f)
+        written += 1
+
+    if files and written == 0:
+        # Inputs existed but nothing was detected/written: a failed run, not a
+        # silent success (downstream Count would otherwise fail opaquely).
+        print(
+            f"DETECTION_NO_OUTPUT: 0 of {len(files)} images produced a "
+            f"Predictions PKL ({failed_reads} read failure(s)).",
+            flush=True,
+        )
+        print("Done!", flush=True)
+        raise SystemExit(1)
 
     print("Done!", flush=True)

@@ -94,14 +94,29 @@ def load_config(path: str) -> dict:
         return json.load(f)
 
 
+def _slice_stems_from_list(slice_list: str) -> list[str]:
+    """Read slice stems from a run slice list.
+
+    Project runs write JSON (``{"slice_ids": [...]}`` or a bare array); older
+    callers may pass one stem per line. Support both so a JSON file is not
+    mis-read as a single bogus stem like ``{``.
+    """
+    with open(slice_list, encoding="utf-8") as f:
+        raw = f.read().strip()
+    if raw[:1] in ("[", "{"):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                data = data.get("slice_ids", [])
+            return [str(x).strip() for x in data if str(x).strip()]
+        except (ValueError, TypeError):
+            pass
+    return [ln.strip() for ln in raw.splitlines() if ln.strip()]
+
+
 def list_input_files(input_dir: Path, slice_list: str | None) -> list[Path]:
     if slice_list and os.path.isfile(slice_list):
-        stems = []
-        with open(slice_list, encoding="utf-8") as f:
-            for line in f:
-                s = line.strip()
-                if s:
-                    stems.append(s)
+        stems = _slice_stems_from_list(slice_list)
         files = []
         for stem in stems:
             for ext in (".tif", ".tiff", ".TIF", ".TIFF"):
@@ -158,6 +173,15 @@ def run_batch(args) -> int:
             written.append(fpath.name)
         except Exception as e:
             print(f"LOG: Failed {fpath.name}: {e}", flush=True)
+
+    if not written:
+        # Inputs existed (guarded above) but every file failed.
+        print(
+            f"TOPHAT_NO_OUTPUT: 0 of {len(files)} files written.",
+            flush=True,
+        )
+        print("Done!", flush=True)
+        return 1
 
     print("Done!", flush=True)
     from run_manifest import write_run_manifest

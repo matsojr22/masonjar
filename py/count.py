@@ -43,8 +43,11 @@ def iou(boxA, boxB):
     boxA_area = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
     boxB_area = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
 
-    # Compute the IoU
-    iou_value = inter_area / float(boxA_area + boxB_area - inter_area)
+    # Compute the IoU (guard degenerate boxes so we never divide by zero)
+    denom = float(boxA_area + boxB_area - inter_area)
+    if denom <= 0:
+        return 0.0
+    iou_value = inter_area / denom
 
     return iou_value
 
@@ -208,23 +211,39 @@ if __name__ == "__main__":
             predictions = pickle.load(predictionPkl)
             predictions = [p for p in predictions]
             annotation = pickle.load(annotationPkl)
+            if not predictions:
+                # An empty/corrupt prediction file must not abort the whole run.
+                print(
+                    f"Skipping {pName}: no detection channels in prediction file.",
+                    flush=True,
+                )
+                sums.pop(pName, None)
+                region_areas.pop(pName, None)
+                continue
             predicted_size = predictions[0].image_dimensions
 
-            # Count the area of each region in the annotation
+            # image_dimensions is (height, width); resize_image_nearest_neighbor
+            # forwards new_size to SimpleITK SetSize, which expects (width, height).
+            target_height, target_width = int(predicted_size[0]), int(predicted_size[1])
             annotation_rescaled = resize_image_nearest_neighbor(
-                annotation, predicted_size
+                annotation, (target_width, target_height)
             )
 
             unique_ids, counts = np.unique(annotation_rescaled, return_counts=True)
             for unique_id, count in zip(unique_ids, counts):
-                name = regions[unique_id]["acronym"]
-                id_path = regions[unique_id]["id_path"].split("/")
+                region_info = regions.get(unique_id)
+                if region_info is None:
+                    # Background (label 0) or ids absent from the structure map.
+                    continue
+                name = region_info["acronym"]
+                id_path = region_info["id_path"].split("/")
                 if len(id_path) >= 2:
                     parent_id = np.uint32(id_path[-2])
                 else:
                     parent_id = unique_id
 
-                parent_name = regions[parent_id]["acronym"]
+                parent_info = regions.get(parent_id)
+                parent_name = parent_info["acronym"] if parent_info else name
                 region_areas[pName][name] = count
 
                 if not region_areas[pName].get(parent_name, False):
@@ -270,16 +289,15 @@ if __name__ == "__main__":
                 x, y, mX, mY = box[0], box[1], box[2], box[3]
                 xPos = int((mX - (mX - x) // 2))
                 yPos = int((mY - (mY - y) // 2))
-                try:
-                    atlas_id = annotation_rescaled[yPos, xPos]
-                except IndexError:
-                    # Resize was in the wrong order
-                    annotation_rescaled = resize_image_nearest_neighbor(
-                        annotation, predicted_size[::-1]
-                    )
-                    atlas_id = annotation_rescaled[yPos, xPos]
+                # Clamp to the annotation bounds (a box can sit on the edge).
+                yPos = min(max(yPos, 0), annotation_rescaled.shape[0] - 1)
+                xPos = min(max(xPos, 0), annotation_rescaled.shape[1] - 1)
+                atlas_id = annotation_rescaled[yPos, xPos]
 
-                region_info = regions[atlas_id]
+                region_info = regions.get(atlas_id)
+                if region_info is None:
+                    # Detection fell on background / an unmapped label; skip it.
+                    continue
                 acronym = region_info["acronym"]
                 if args.layers:
                     # Count the region as is

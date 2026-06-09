@@ -107,26 +107,43 @@ def run_preview(args) -> int:
     return 0
 
 
-def process_file(file, output_path, equalize: bool, radius: float, amount: float):
+def process_file(file, output_path, equalize: bool, radius: float, amount: float) -> bool:
     try:
         print(f"Processing {file}", flush=True)
         img = load_grayscale(Path(file))
         out = sharpen_image(img, radius, amount, equalize)
         stem = Path(file).stem
         extension = Path(file).suffix
-        cv2.imwrite(f"{output_path}/{stem}{extension}", out)
+        ok = cv2.imwrite(f"{output_path}/{stem}{extension}", out)
+        return bool(ok)
     except Exception as e:
         print(f"Failed to process {file}. Error: {e}", flush=True)
+        return False
+
+
+def _slice_stems_from_list(slice_list: str) -> list[str]:
+    """Read slice stems from a run slice list.
+
+    Project runs write JSON (``{"slice_ids": [...]}`` or a bare array); older
+    callers may pass one stem per line. Support both so a JSON file is not
+    mis-read as a single bogus stem like ``{``.
+    """
+    with open(slice_list, encoding="utf-8") as f:
+        raw = f.read().strip()
+    if raw[:1] in ("[", "{"):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                data = data.get("slice_ids", [])
+            return [str(x).strip() for x in data if str(x).strip()]
+        except (ValueError, TypeError):
+            pass
+    return [ln.strip() for ln in raw.splitlines() if ln.strip()]
 
 
 def list_input_files(input_path: Path, slice_list: str | None) -> list[Path]:
     if slice_list and os.path.isfile(slice_list):
-        stems = []
-        with open(slice_list, encoding="utf-8") as f:
-            for line in f:
-                s = line.strip()
-                if s:
-                    stems.append(s)
+        stems = _slice_stems_from_list(slice_list)
         files = []
         for stem in stems:
             for ext in (".tif", ".tiff"):
@@ -188,11 +205,22 @@ def run_batch(args) -> int:
             amount=amount,
         )
         futures = [executor.submit(fn, str(f)) for f in input_files]
+        written = 0
         for future in concurrent.futures.as_completed(futures):
             try:
-                future.result()
+                if future.result():
+                    written += 1
             except Exception as e:
                 print(f"An error occurred: {e}", flush=True)
+
+    if written == 0:
+        # Inputs existed (guarded above) but every file failed to write.
+        print(
+            f"SHARPEN_NO_OUTPUT: 0 of {len(input_files)} files written.",
+            flush=True,
+        )
+        print("Done!", flush=True)
+        return 1
 
     print("Done!", flush=True)
     from run_manifest import write_run_manifest

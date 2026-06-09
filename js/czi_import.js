@@ -1625,21 +1625,25 @@ function auditCziImportCompletion(bundleRoot, cziImport, options) {
 		}
 	}
 
+	var blankPreviews =
+		options.blankPreviews != null
+			? options.blankPreviews
+			: findBlankPreviews(bundleRoot, cziImport, {});
+	var blankPreviewCount = (blankPreviews && blankPreviews.length) || 0;
+
 	var canSkipToOrient =
 		extractComplete &&
 		missingZstacks.length === 0 &&
 		invalidPreviews.length === 0 &&
 		missingMaxRuns.length === 0 &&
 		lowResTiffIssues.length === 0 &&
-		missingOrientDapiPreviews.length === 0;
+		missingOrientDapiPreviews.length === 0 &&
+		blankPreviewCount === 0;
 	var needsPreviewRepair =
 		(extractComplete && missingZstacks.length === 0 && invalidPreviews.length > 0) ||
 		(extractComplete && lowResTiffIssues.length > 0) ||
-		(extractComplete && missingOrientDapiPreviews.length > 0);
-	var blankPreviews =
-		options.blankPreviews != null
-			? options.blankPreviews
-			: findBlankPreviews(bundleRoot, cziImport, {});
+		(extractComplete && missingOrientDapiPreviews.length > 0) ||
+		(extractComplete && blankPreviewCount > 0);
 
 	return {
 		extractComplete: extractComplete,
@@ -2007,14 +2011,17 @@ function buildRepairTargetsForSelection(cziImport, sliceIds, roleKeys) {
 }
 
 function maxTifPathForReimport(bundleRoot, roleKey, sliceId, project) {
-	var pipelineRuns = require("./pipeline_runs");
+	// Prefer the role-specific max run; the generic active_runs.max is the
+	// PRIMARY signal's run, so using it for nuclei/axons/other would resolve the
+	// wrong 03_max branch. Fall back to active max only when this role has no
+	// registered run (e.g. legacy single-signal imports).
 	var rel = "";
-	if (project && project.processing && project.processing.active_runs) {
-		rel = project.processing.active_runs.max || "";
-	}
-	if (!rel && project && project.settings && project.settings.czi_import) {
+	if (project && project.settings && project.settings.czi_import) {
 		var maxRuns = project.settings.czi_import.max_runs || {};
 		rel = maxRuns[roleKey] || "";
+	}
+	if (!rel && project && project.processing && project.processing.active_runs) {
+		rel = project.processing.active_runs.max || "";
 	}
 	if (!rel) {
 		return "";

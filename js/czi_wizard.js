@@ -1978,7 +1978,14 @@ async function tryResumeCziImportAfterStep1() {
 	if (audit.canSkipToOrient) {
 		verboseExtractLog("Resuming — extract already complete.");
 		await syncProjectIndexAfterExtract();
-		setStep(5);
+		// If geometry was already applied (oriented) and nothing is pending,
+		// land on the "what's next" step — otherwise step 5's Apply button is
+		// disabled (pending === 0) and there is no way forward. The step 5 pill
+		// stays available to review or re-orient.
+		var alreadyOriented =
+			!!(wizardState.cziImport && wizardState.cziImport.geometry_applied_at) &&
+			countNonIdentityGeometry() === 0;
+		setStep(alreadyOriented ? 6 : 5);
 		return true;
 	}
 	if (audit.needsPreviewRepair) {

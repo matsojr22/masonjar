@@ -384,12 +384,10 @@ function renderParamSection(stepId, body, params) {
 			'<p id="parcelRegionHint" class="small text-muted mb-0"></p>';
 		if (!state.parcellation.includedRegionIds.length && params.includedRegionIds) {
 			state.parcellation.includedRegionIds = params.includedRegionIds.slice();
-		} else if (
-			!state.parcellation.includedRegionIds.length &&
-			params.excludedRegionIds
-		) {
-			state.parcellation.includedRegionIds = params.excludedRegionIds.slice();
 		}
+		// NOTE: legacy `excludedRegionIds` is the INVERSE set of included regions
+		// and must not be copied into includedRegionIds (that silently inverts the
+		// selection). Legacy excluded-only plans start empty; re-pick regions.
 		setTimeout(initParcellationPicker, 0);
 		return;
 	}

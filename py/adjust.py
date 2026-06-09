@@ -252,9 +252,6 @@ class AnnotationViewer(QMainWindow):
         self.image_panel.setLayout(image_layout)
         self.setCentralWidget(self.image_panel)
 
-        self._update_section_labels()
-        self.rebuild_channel_combo()
-
         self.is_drawing = False
         self.last_draw_point = None
         self.img_view.viewport().setAttribute(
@@ -407,9 +404,12 @@ class AnnotationViewer(QMainWindow):
         self.img_view.setMouseTracking(True)
         self.img_view.viewport().installEventFilter(self)
 
+        self._update_section_labels()
+        channel_loaded = self.rebuild_channel_combo()
         self._init_paint_region_controls()
         self._update_paint_target_strip()
-        self.show_image_with_overlay()
+        if not channel_loaded:
+            self.show_image_with_overlay()
 
     def _toggle_parcel_dock(self):
         self.parcel_dock.setVisible(self.parcel_dock_button.isChecked())
@@ -443,8 +443,15 @@ class AnnotationViewer(QMainWindow):
         )
         self.setWindowTitle(f"Adjustment Viewer — {slice_id}")
 
-    def rebuild_channel_combo(self):
-        """Rebuild background channel combo for the current slice."""
+    def rebuild_channel_combo(self) -> bool:
+        """Rebuild background channel combo for the current slice.
+
+        Returns True when a channel image was loaded (switch_channel ran).
+        """
+        channel_combo = self.__dict__.get("channel_combo")
+        if channel_combo is None:
+            return False
+
         self.channel_combo.blockSignals(True)
         self.channel_combo.clear()
 
@@ -457,10 +464,12 @@ class AnnotationViewer(QMainWindow):
             self.channel_combo.addItem("No preview channels found", None)
             self.channel_combo.setEnabled(False)
             self.channel_combo.blockSignals(False)
-            self.status_bar.showMessage(
-                "No preview channels — add _previews PNGs or 00_dapi PNG for this slice."
-            )
-            return
+            status_bar = getattr(self, "status_bar", None)
+            if status_bar is not None:
+                status_bar.showMessage(
+                    "No preview channels — add _previews PNGs or 00_dapi PNG for this slice."
+                )
+            return False
 
         default_index = 0
         self.channel_combo.setEnabled(True)
@@ -473,6 +482,7 @@ class AnnotationViewer(QMainWindow):
         self.channel_combo.blockSignals(False)
         name, path = self.channel_sources[default_index]
         self.switch_channel(path, name)
+        return True
 
     def _on_channel_combo_changed(self, index: int):
         if index < 0 or index >= len(self.channel_sources):
@@ -570,7 +580,7 @@ class AnnotationViewer(QMainWindow):
             return []
         q = query.strip().lower()
         out: list[dict] = []
-        for node in self.catalog.get("byId", {}).values():
+        for node in self.catalog.get("by_id", {}).values():
             if not node:
                 continue
             hay = f"{node.get('acronym', '')} {node.get('name', '')}".lower()

@@ -1162,11 +1162,16 @@ ipcMain.on("runMax", function (event, data) {
         pythonPath: path.join(envPythonPath, pyCommand),
         scriptPath: pyScriptsPath,
         args: [
-            `-o ${data[1]}`,
-            `-i ${data[0]}`,
-            `-d ${data[2]}`,
-            `-t ${data[3]}`,
-            "-g False",
+            "-o",
+            String(data[1]),
+            "-i",
+            String(data[0]),
+            "-d",
+            String(data[2]),
+            "-t",
+            String(data[3]),
+            "-g",
+            "False",
         ],
     };
     const { options, release } = mergeHeavyJobEnv("max", partial);
@@ -1425,7 +1430,7 @@ ipcMain.on("runExportDualTif", function (event, data) {
         mode: "text",
         pythonPath: path.join(envPythonPath, pyCommand),
         scriptPath: pyScriptsPath,
-        args: [String.raw `-i ${data[0]}`, String.raw `-o ${data[1]}`],
+        args: ["-i", String(data[0]), "-o", String(data[1])],
     };
     const { options, release } = mergeHeavyJobEnv("dual", partial);
     let pyshell = new PythonShell("export_roi_dual_tif.py", options);
@@ -1471,10 +1476,14 @@ ipcMain.on("runExportDualTif", function (event, data) {
 ipcMain.on("runCount", function (event, data) {
     var structPath = path.join(appDir, "csv/structure_map.pkl");
     let custom_args = [
-        `-p ${data[0]}`,
-        `-a ${data[1]}`,
-        `-o ${data[2]}`,
-        `-m ${structPath}`,
+        "-p",
+        String(data[0]),
+        "-a",
+        String(data[1]),
+        "-o",
+        String(data[2]),
+        "-m",
+        structPath,
     ];
     appendSliceListArg(custom_args, data, 3);
     const partial = {
@@ -1530,11 +1539,16 @@ ipcMain.on("runCollate", function (event, data) {
         pythonPath: path.join(envPythonPath, pyCommand),
         scriptPath: pyScriptsPath,
         args: [
-            String.raw `-o ${data[1]}`,
-            String.raw `-i ${data[0]}`,
-            `-r ${data[2]}`,
-            String.raw `-s ${path.join(appDir, "csv/structure_map.pkl")}`,
-            "-g False",
+            "-o",
+            String(data[1]),
+            "-i",
+            String(data[0]),
+            "-r",
+            String(data[2] || ""),
+            "-s",
+            path.join(appDir, "csv/structure_map.pkl"),
+            "-g",
+            "False",
         ],
     };
     const { options, release } = mergeHeavyJobEnv("collate", partial);
@@ -1993,14 +2007,22 @@ ipcMain.on("runDetection", function (event, data) {
         modelPath = data[4];
     }
     let custom_args = [
-        `-i ${data[0]}`,
-        `-o ${data[1]}`,
-        `-c ${data[2]}`,
-        `-t ${data[3]}`,
-        `-a ${data[7]}`,
-        `-s ${sam_model_path}`,
-        `-e ${data[8]}`,
-        `-m ${modelPath}`,
+        "-i",
+        String(data[0]),
+        "-o",
+        String(data[1]),
+        "-c",
+        String(data[2]),
+        "-t",
+        String(data[3]),
+        "-a",
+        String(data[7]),
+        "-s",
+        sam_model_path,
+        "-e",
+        String(data[8]),
+        "-m",
+        modelPath,
     ];
     if (data[5]) {
         custom_args.push(`--multichannel`);

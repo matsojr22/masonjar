@@ -244,7 +244,18 @@ function readProjectJson(bundleRoot) {
 	var filename = findProjectFilename(bundleRoot);
 	var filePath = path.join(bundleRoot, filename);
 	var raw = fs.readFileSync(filePath, "utf8");
-	return JSON.parse(raw);
+	try {
+		return JSON.parse(raw);
+	} catch (parseErr) {
+		// A corrupt/truncated project file must not crash the whole renderer.
+		throw new Error(
+			"Project file is corrupt or not valid JSON: " +
+				filePath +
+				" (" +
+				(parseErr && parseErr.message ? parseErr.message : parseErr) +
+				")",
+		);
+	}
 }
 
 function loadProjectJson(bundleRoot) {

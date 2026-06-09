@@ -518,3 +518,16 @@ if __name__ == "__main__":
 
     if slices_processed > 0 and total_pkls_written == 0:
         sys.exit(1)
+    if slices_processed == 0 and len(intensityFiles) > 0:
+        # Inputs existed but nothing was processed (no slice matched an
+        # annotation PKL, or all were filtered out). That is a failed run, not
+        # a silent success.
+        msg = (
+            "NO_PKLS_WRITTEN: Isolate Regions processed 0 slices though "
+            f"{len(intensityFiles)} intensity image(s) were found. No slice "
+            "matched an alignment annotation PKL (or all were filtered out by "
+            "the slice list). Re-run Align or check the active slices run."
+        )
+        print(msg, flush=True)
+        print(msg, file=sys.stderr, flush=True)
+        sys.exit(1)

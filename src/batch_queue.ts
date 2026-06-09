@@ -243,7 +243,6 @@ function runPython(
       released = true;
       job.release();
     };
-    pyshell.on("close", releaseJob);
     pyshell.on("error", releaseJob);
     let total = 0;
     let current = 0;
@@ -260,6 +259,31 @@ function runPython(
       currentBatchShell = null;
       resolve({ error, noPklsWritten: sawNoPkls, resultPayload });
     }
+
+    // Safety net: python-shell emits "close" once the process ends. Without
+    // this, a kill (batch cancel) or a crash/non-zero exit that never printed
+    // "Done!" would leave the promise pending forever and hang the whole batch.
+    pyshell.on("close", () => {
+      releaseJob();
+      if (resolved) {
+        return;
+      }
+      if (batchAbort) {
+        // Cancellation is reported by the caller via batchAbort; not an error.
+        finish(null);
+        return;
+      }
+      const code = (pyshell as { exitCode?: number | null }).exitCode;
+      const signal = (pyshell as { exitSignal?: string | null }).exitSignal;
+      if ((typeof code === "number" && code !== 0) || signal) {
+        finish(
+          deps.describePythonShellFailure(null, code, signal) ||
+            `Python exited without completing (code ${code}, signal ${signal})`,
+        );
+      } else {
+        finish(null);
+      }
+    });
 
     pyshell.on("stderr", (stderr: string) => {
       opts.onLine(stderr.replace(/\r?\n$/, ""));
@@ -1354,20 +1378,24 @@ async function runCollate(
     `collate_stage_${Date.now()}`,
   );
   fs.mkdirSync(stage, { recursive: true });
-  for (const inp of inputs) {
-    const name = path.basename(path.dirname(inp));
+  inputs.forEach((inp, idx) => {
+    // Stage each project's count leaf under a unique subdir. collate.py walks
+    // the staging dir for every count_results.csv, so names only need to be
+    // distinct (the old code named them all "count", clobbering each other).
+    const leafName = path.basename(path.dirname(inp)) || "count";
+    const name = `${idx}_${leafName}`;
     const link = path.join(stage, name);
     try {
       fs.symlinkSync(inp, link, "dir");
     } catch (_err) {
-      // Fallback: copy the count_results.csv only.
+      // Fallback (e.g. Windows without symlink permission): copy the CSV only.
       const csv = path.join(inp, "count_results.csv");
       if (fs.existsSync(csv)) {
         fs.mkdirSync(link, { recursive: true });
         fs.copyFileSync(csv, path.join(link, "count_results.csv"));
       }
     }
-  }
+  });
 
   const args = [
     "-o",
@@ -1700,6 +1728,33 @@ export async function runBatchQueue(
         break outer;
       }
       completedJobs++;
+    }
+  }
+
+  // If cancelled mid-run, flush remaining (not-yet-started) project×step cells
+  // as cancelled so the summary matrix is complete and byStatus.cancelled is
+  // accurate (the UI documents "remaining jobs marked cancelled").
+  if (batchAbort) {
+    const cancelAt = new Date().toISOString();
+    for (const proj of projects) {
+      for (const stepId of perProjectSteps) {
+        if (byProject[proj.path] && byProject[proj.path][stepId]) {
+          continue;
+        }
+        const result = makeJobResult(
+          proj,
+          stepId,
+          "cancelled",
+          "Cancelled by user",
+          cancelAt,
+          cancelAt,
+          0,
+          [],
+        );
+        recordJob(result);
+        callbacks.onJobEnd(result);
+        completedJobs++;
+      }
     }
   }
 

@@ -1,222 +1,163 @@
-# Imports
+"""Collate counting results into a single experiment-wide summary.
+
+This reads one or more ``count_results.csv`` files produced by ``count.py`` and
+sums per-region detection counts (and region areas) across every section and
+project found under the input directory.
+
+Input (`-i`):
+    A directory. Every ``count_results.csv`` found anywhere beneath it (one per
+    project count leaf in batch mode, or a single project's count leaf in the
+    standalone Collate page) is aggregated.
+
+The legacy Tkinter GUI and the old semicolon-delimited "objects" CSV ingestion
+were removed -- they predated the modern ``count_results.csv`` format and the
+.masonjar project model.
+"""
+
 import pipeline_io_bootstrap  # noqa: F401
-import csv
-from tkinter import ttk
-from tkinter import filedialog
-from tkinter import *
-from pathlib import Path
-from belljarGUI import Page, GuiController
 import argparse
+import csv
 import pickle
+from pathlib import Path
 
 
-class FileLocations(ttk.Frame, Page):
-    def __init__(self, parent, controller):
-        ttk.Frame.__init__(self, parent)
-
-        self.parent = parent
-        self.controller = controller
-
-        label1 = ttk.Label(self, text="All Objects File")
-        label1.grid(row=0, column=0, padx=10, pady=10)
-
-        label2 = ttk.Label(self, text="Output File")
-        label2.grid(row=1, column=0, padx=10, pady=10)
-
-        label3 = ttk.Label(self, text="Safe Structure File")
-        label3.grid(row=2, column=0, padx=10, pady=10)
-
-        self.objectsEntry = ttk.Entry(self)
-        self.objectsEntry.grid(row=0, column=1, padx=10, pady=10)
-
-        self.resultEntry = ttk.Entry(self)
-        self.resultEntry.grid(row=1, column=1, padx=10, pady=10)
-
-        self.structuresEntry = ttk.Entry(self)
-        self.structuresEntry.grid(row=2, column=1, padx=10, pady=10)
-
-        button2 = ttk.Button(
-            self,
-            text="Browse",
-            command=lambda: self.browseObjectFiles(self.objectsEntry),
-        )
-
-        button2.grid(row=0, column=2, padx=10, pady=10)
-
-        button3 = ttk.Button(
-            self, text="Save As", command=lambda: self.saveFiles(self.resultEntry)
-        )
-
-        button3.grid(row=1, column=2)
-
-        button4 = ttk.Button(
-            self,
-            text="Browse",
-            command=lambda: self.browseStructuresFiles(self.structuresEntry),
-        )
-
-        button4.grid(row=2, column=2, padx=10, pady=10)
-
-        button1 = ttk.Button(
-            self,
-            text="Done",
-            command=lambda: collateCount(
-                self.controller.objectsFile,
-                self.controller.structuresFile,
-                self.controller.resultsFile,
-            ),
-        )
-
-        button1.grid(row=3, column=2, padx=10, pady=20)
-
-    def browseObjectFiles(self, entry):
-        filename = filedialog.askopenfilename(
-            initialdir="Z:/",
-            title="Select a File",
-            filetypes=(("CSV Files", "*.csv"), ("all files", "*.*")),
-        )
-        # Change label contents
-        entry.delete(0, END)
-        entry.insert(0, filename)
-        self.controller.objectsFile = filename
-
-    def browseStructuresFiles(self, entry):
-        filename = filedialog.askopenfilename(
-            initialdir="../csv",
-            title="Select a File",
-            filetypes=(("CSV Files", "*.csv"), ("all files", "*.*")),
-        )
-        # Change label contents
-        entry.delete(0, END)
-        entry.insert(0, filename)
-        self.controller.structuresFile = filename
-
-    def saveFiles(self, entry):
-        filename = filedialog.asksaveasfilename(
-            initialdir="Z:/",
-            defaultextension=".csv",
-            title="Select a File",
-            filetypes=(("CSV Files", "*.csv"), ("all files", "*.*")),
-        )
-        # Change label contents
-        entry.delete(0, END)
-        entry.insert(0, filename)
-        self.controller.resultsFile = filename
-
-    def didAppear(self):
-        super().didAppear(self)
-        self.controller.update()
+def _norm_acronyms(raw: str) -> set[str]:
+    """Parse an optional region filter (comma/semicolon separated acronyms)."""
+    if not raw:
+        return set()
+    tokens = raw.replace(";", ",").split(",")
+    return {t.strip() for t in tokens if t.strip()}
 
 
-def collateCount(objectsFile, safeRegions, resultFile):
-    # Reading in objects
-    objects = {}
-    with open(objectsFile) as objectFile:
-        objectReader = csv.reader(objectFile, delimiter=";")
-        next(objectReader)  # Skip Line 1
-        for row in objectReader:
-            section = row[0]
-            if objects.get(section) != None:
-                if objects[section].get(row[6]) != None:
-                    objects[section][row[6]] += 1
-                else:
-                    objects[section][row[6]] = 1
-            else:
-                objects[section] = {row[6]: 1}
+def _read_totals_block(csv_path: Path) -> dict[str, tuple[int, int]]:
+    """Return {acronym: (count, area)} from the Totals block of a count CSV.
 
-    # Reading in regions
-    regions = {}
-    with open(args.structures.strip(), "rb") as f:
+    count_results.csv layout (per count.py):
+        <section blocks ...>
+        Totals
+        Region Acronym, Region Name, Count, Area (px)
+        <acronym>, <name>, <count>, <area>
+        ...
+        (blank)
+        Colocalization Matrix (by Section)
+        ...
+    """
+    out: dict[str, tuple[int, int]] = {}
+    in_totals = False
+    header_seen = False
+    with open(csv_path, newline="") as f:
+        for row in csv.reader(f):
+            if not row:
+                # Blank line ends the Totals block.
+                if in_totals and header_seen:
+                    break
+                continue
+            first = row[0].strip()
+            if first == "Totals":
+                in_totals = True
+                header_seen = False
+                continue
+            if not in_totals:
+                continue
+            if first == "Region Acronym":
+                header_seen = True
+                continue
+            if first.startswith("Colocalization"):
+                break
+            if not header_seen:
+                continue
+            acronym = first
+            try:
+                count = int(row[2]) if len(row) > 2 and row[2] != "" else 0
+            except ValueError:
+                count = 0
+            try:
+                area = int(row[3]) if len(row) > 3 and row[3] != "" else 0
+            except ValueError:
+                area = 0
+            prev = out.get(acronym, (0, 0))
+            out[acronym] = (prev[0] + count, prev[1] + area)
+    return out
+
+
+def collate_counts(input_dir: str, structures_path: str, output_dir: str, region_filter: str):
+    input_path = Path(input_dir.strip())
+    out_path = Path(output_dir.strip())
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    with open(structures_path.strip(), "rb") as f:
         regions = pickle.load(f)
-    # Now count things up
-    sums = {}
-    total = 0
-    for obj in objects.items():
-        for data in obj[1].items():
-            region, count = int(data[0]), data[1]
-            parent = regions[region]["parent"]
-            total += count
-            if "layer" in regions[region]["name"].lower():
-                if parent != None:
-                    if sums.get(parent) != None:
-                        sums[parent] += count
-                    else:
-                        sums[parent] = count
-            else:
-                if sums.get(region) != None:
-                    sums[region] += count
-                else:
-                    sums[region] = count
+    acronym_to_id = {v["acronym"]: k for k, v in regions.items()}
 
-    # Write the results
-    outputPath = Path(args.output.strip())
-    with open(outputPath / "count_results.csv", "w", newline="") as resultFile:
-        print("Writing output...", flush=True)
-        lines = []
-        runningTotals = {}
-        for r, count in sums.items():
-            if runningTotals.get(r, False):
-                runningTotals[r] += count
-            else:
-                runningTotals[r] = count
+    wanted = _norm_acronyms(region_filter)
 
-        lines.append(["Totals"])
-        for r, count in runningTotals.items():
-            lines.append([regions[r]["name"], regions[r]["acronym"], count])
-        # Write out the rows
-        resultWriter = csv.writer(resultFile)
-        resultWriter.writerows(lines)
-
+    csv_files = sorted(input_path.rglob("count_results.csv"))
+    print(f"Found {len(csv_files)} count_results.csv file(s) under {input_path}", flush=True)
+    if not csv_files:
+        print("No count_results.csv files found to collate.", flush=True)
         print("Done!", flush=True)
-        from run_manifest import write_run_manifest
+        raise SystemExit(1)
 
-        write_run_manifest(
-            args.output.strip(),
-            {
-                "step": "collate",
-                "input": args.input.strip(),
-                "structures": args.structures.strip(),
-                "output_dir": args.output.strip(),
-            },
-        )
+    totals: dict[str, list[int]] = {}
+    for csv_path in csv_files:
+        print(f"Collating {csv_path}...", flush=True)
+        block = _read_totals_block(csv_path)
+        for acronym, (count, area) in block.items():
+            if wanted and acronym not in wanted:
+                continue
+            agg = totals.setdefault(acronym, [0, 0])
+            agg[0] += count
+            agg[1] += area
+
+    output_file = out_path / "collated_results.csv"
+    with open(output_file, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Region Acronym", "Region Name", "Total Count", "Total Area (px)"])
+        for acronym in sorted(totals):
+            region_id = acronym_to_id.get(acronym)
+            region_name = (
+                regions[region_id]["name"]
+                if region_id is not None and region_id in regions
+                else "Unknown"
+            )
+            count, area = totals[acronym]
+            writer.writerow([acronym, region_name, count, area])
+
+    print(f"Wrote {output_file}", flush=True)
+    print("Done!", flush=True)
+
+    from run_manifest import write_run_manifest
+
+    write_run_manifest(
+        str(out_path),
+        {
+            "step": "collate",
+            "input": str(input_path),
+            "structures": structures_path.strip(),
+            "output_dir": str(out_path),
+            "sources": len(csv_files),
+            "regions": sorted(totals.keys()),
+        },
+    )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Process z-stack images")
+    parser = argparse.ArgumentParser(description="Collate count results across sections/projects")
+    parser.add_argument("-o", "--output", help="output directory", default="")
     parser.add_argument(
-        "-o",
-        "--output",
-        help="output directory, only use if graphical false",
-        default="",
+        "-i", "--input", help="directory containing count_results.csv file(s)", default=""
     )
     parser.add_argument(
-        "-i", "--input", help="input directory, only use if graphical false", default=""
+        "-r", "--regions", help="optional region acronym filter (comma separated)", default=""
     )
+    parser.add_argument("-s", "--structures", help="structure_map.pkl path", default="")
     parser.add_argument(
-        "-r", "--regions", help="which regions to include in output", default=""
+        "-g",
+        "--graphical",
+        help="deprecated/ignored (legacy Tk GUI removed)",
+        default="False",
     )
-    parser.add_argument("-s", "--structures", help="structures file", default="")
-    parser.add_argument(
-        "-g", "--graphical", help="provides prompts when true", default=True
-    )
-
     args = parser.parse_args()
 
-    if args.graphical == True:
-        globals = {
-            "objectsFile": "",
-            "resultsFile": "",
-            "structuresFile": "",
-        }
-
-        app = GuiController(
-            pages=[
-                FileLocations,
-            ],
-            firstPage=FileLocations,
-            globals=globals,
-        )
-        app.mainloop()
-    else:
-        print("2", flush=True)
-        collateCount(args.input.strip(), args.structures.strip(), args.output.strip())
+    print("2", flush=True)
+    collate_counts(args.input, args.structures, args.output, args.regions)

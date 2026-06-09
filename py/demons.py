@@ -239,7 +239,11 @@ def resize_image_nearest_neighbor(input_image, new_size):
 
     Parameters:
         input_image (SimpleITK.Image): The input image to be resized.
-        new_size (tuple or list): The desired size (in pixels) as (height, width, [depth]).
+        new_size (tuple or list): The desired size (in pixels) as (width, height,
+            [depth]) -- this is forwarded directly to SimpleITK ``SetSize``,
+            which uses (x, y, z) ordering. The returned numpy array therefore has
+            shape (height, width). Callers must pass (width, height), NOT
+            (height, width).
 
     Returns:
         SimpleITK.Image: The resized image, maintaining the original data type.

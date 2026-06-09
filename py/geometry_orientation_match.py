@@ -277,6 +277,7 @@ def probe_slice_channels(
         channel_results.append(entry)
 
     unique_variants = set(variants.values())
+    non_identity_variants = unique_variants - {"identity"}
     structural_confidence = float(np.mean(confidences)) if confidences else 0.0
     issue = "ok"
     needs_manual = False
@@ -285,6 +286,14 @@ def probe_slice_channels(
         needs_manual = True
     elif structural_confidence < MIN_CONFIDENCE_MARGIN:
         issue = "low_confidence"
+        needs_manual = True
+    elif non_identity_variants:
+        # Every channel agrees on the SAME non-identity orientation: the on-disk
+        # pixels are consistently mis-oriented relative to the reference. This is
+        # not "ok" -- it must be surfaced for review/repair instead of being
+        # silently skipped. Kept manual (user confirms) so repair never bakes a
+        # pixel transform unattended on data we could not validate here.
+        issue = "consistent_reorient"
         needs_manual = True
 
     auto_repairable = issue not in ("ok",) and not needs_manual

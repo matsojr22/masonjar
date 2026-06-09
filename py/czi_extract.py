@@ -826,6 +826,7 @@ def main() -> int:
             czi_cache[key] = czi
         return czi_cache[key]
 
+    failed_items: list[str] = []
     for i, item in enumerate(work or []):
         czi_path = item["czi_path"]
         ch = item["channel"]
@@ -839,31 +840,47 @@ def main() -> int:
             f"file={czi_path.name} scene={scene_index} ch={channel_index}"
         )
         emit_progress(f"Extracting {czi_path.name} scene {scene_index} ch {channel_index}")
-        czi = get_czi(czi_path)
-        z_idxs = z_indices_with_data(czi, scene_index, channel_index)
-        out_path = original_scans_path(bundle_root, ch, slice_id)
-        preview_path = None
-        if role == ROLE_DAPI:
+        # Isolate per-item failures: one bad scene/channel/plane must not abort
+        # the entire import (which would lose all remaining work).
+        try:
+            czi = get_czi(czi_path)
+            z_idxs = z_indices_with_data(czi, scene_index, channel_index)
+            out_path = original_scans_path(bundle_root, ch, slice_id)
             preview_path = None
-        elif branch_for_channel(ch):
-            preview_path = signal_preview_path(bundle_root, slice_id, ch)
+            if role == ROLE_DAPI:
+                preview_path = None
+            elif branch_for_channel(ch):
+                preview_path = signal_preview_path(bundle_root, slice_id, ch)
 
-        extract_z_stack(
-            czi,
-            scene_index,
-            channel_index,
-            z_idxs,
-            out_path,
-            preview_path,
-            preview_scale,
-            slice_id=slice_id,
-            bundle_root=bundle_root,
-            cfg=cfg,
-            role_key=role_key,
-        )
-        extracted_by_role_key.setdefault(role_key, []).append(slice_id)
+            extract_z_stack(
+                czi,
+                scene_index,
+                channel_index,
+                z_idxs,
+                out_path,
+                preview_path,
+                preview_scale,
+                slice_id=slice_id,
+                bundle_root=bundle_root,
+                cfg=cfg,
+                role_key=role_key,
+            )
+            extracted_by_role_key.setdefault(role_key, []).append(slice_id)
+        except Exception as exc:
+            failed_items.append(f"{slice_id} (role={role_key} ch={channel_index})")
+            emit_log(
+                f"  ERROR extracting {slice_id} role={role_key} "
+                f"ch={channel_index} from {czi_path.name}: {exc}"
+            )
         state["done"] = i + 1
         write_import_state(bundle_root, state)
+
+    if failed_items:
+        emit_log(
+            f"WARNING: {len(failed_items)} extraction item(s) failed and were "
+            f"skipped: {', '.join(failed_items[:20])}"
+            + (" …" if len(failed_items) > 20 else "")
+        )
 
     for czi in czi_cache.values():
         close = getattr(czi, "close", None)

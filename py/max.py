@@ -13,16 +13,27 @@ def process_file(file, outputDirectory, topHat=False, dendrite=False):
     try:
         print(f"Processing {file}", flush=True)
         img = tiff.imread(file)
-        channel_dim = np.argmin(img.shape)
-        # Max projection
-        img = np.max(img, axis=channel_dim)
         # Get filename stem
         stem = file.split(".")[0]
+        if img.ndim == 2:
+            # Single-plane image (e.g. sparse-Z counterstain): nothing to
+            # project. np.argmin over (H, W) would otherwise collapse a spatial
+            # axis and produce a 1-D line.
+            projected = img
+        elif img.ndim == 3:
+            # Project over the smallest axis (Z or channel), keeping H x W.
+            channel_dim = int(np.argmin(img.shape))
+            projected = np.max(img, axis=channel_dim)
+        else:
+            raise ValueError(
+                f"Unsupported image with {img.ndim} dimensions (shape {img.shape})"
+            )
         # Save the processed image
-        cv2.imwrite(f"{outputDirectory}/{stem}.tif", img)
-
+        cv2.imwrite(f"{outputDirectory}/{stem}.tif", projected)
+        return True
     except Exception as e:
         print(f"Failed to process {file}. Error: {e}", flush=True)
+        return False
 
 
 if __name__ == "__main__":
@@ -58,16 +69,29 @@ if __name__ == "__main__":
         outputDirectory = args.output.strip()
 
     os.chdir(inputDirectory)
-    files = os.listdir(".")
-    files.sort()
+    # Only project real TIFF files; skip subdirectories (.masonjar meta, run
+    # leaves), run_manifest.json, and any non-image entries.
+    files = sorted(
+        f
+        for f in os.listdir(".")
+        if os.path.isfile(f) and f.lower().endswith((".tif", ".tiff"))
+    )
     if len(files) == 0:
         print(1, flush=True)
-        print("No files found in input directory", flush=True)
+        print("No TIFF files found in input directory", flush=True)
         exit(1)
     # Pass number of files to electron
     print(len(files), flush=True)
+    written = 0
     for file in files:
-        process_file(file, outputDirectory, args.tophat, args.dendrite)
+        if process_file(file, outputDirectory, args.tophat, args.dendrite):
+            written += 1
+
+    if written == 0:
+        # Inputs existed but none projected: a failed run, not a silent success.
+        print(f"MAX_NO_OUTPUT: 0 of {len(files)} files projected.", flush=True)
+        print("Done!")
+        exit(1)
 
     print("Done!")
     from run_manifest import write_run_manifest

@@ -132,7 +132,10 @@ function resolveSliceIds(bundleRoot, importCfg) {
 			}
 		}
 	}
-	out.sort();
+	// Natural sort (s2 before s10), matching CZI import / Orient ordering.
+	out.sort(function (a, b) {
+		return cziImport.naturalCompare({ sliceId: a }, { sliceId: b });
+	});
 	return out;
 }
 
