@@ -9,7 +9,7 @@ Last updated: 2026-06-08 (v3.3.7). Use this file to resume work; long-term archi
 | Item | Value |
 |------|--------|
 | `package.json` version | **3.3.7** |
-| Latest tag | `v3.3.7` (pending publish) |
+| Latest tag | `v3.3.7` (Windows zip published pre-release) |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
 
 **v3.3.7** — **Multi-folder CZI import**: [`py/czi_common.py`](../py/czi_common.py) `build_files_lookup` / `resolve_file_entry`; [`py/czi_extract.py`](../py/czi_extract.py) path-aware work items; [`js/czi_import.js`](../js/czi_import.js) `resolveChannelForSlice` for repair targets; [`js/czi_wizard.js`](../js/czi_wizard.js) matched/expected index note. Tests: `python/tests/test_czi_multidir_extract.py`, `scripts/test-czi-import.js`.
