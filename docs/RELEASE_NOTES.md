@@ -6,6 +6,22 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.0.1
+
+**What's new**
+
+The Windows download now extracts into a single folder named `masonjar-win32-x64`, so unzipping in Downloads no longer scatters app files into that folder.
+
+**Changes**
+
+- Windows zip layout: all app files live under `masonjar-win32-x64/` at the top level of the archive.
+
+**Commit subject**
+
+Windows zip extracts into masonjar-win32-x64 folder
+
+---
+
 ## v4.0.0
 
 **What's new**

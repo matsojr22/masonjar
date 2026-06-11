@@ -51,8 +51,8 @@ Orientation auto-bake (auto_repairable is conservative/review-only), file-handle
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **4.0.0** |
-| Latest tag | `v4.0.0` |
+| `package.json` version | **4.0.1** |
+| Latest tag | `v4.0.1` |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
 
 **v4.0.0** — **Major:** per-section Align layout (`py/align_tissue_layout.py`, `py/map.py`, `-w auto`); Viewer/Editor Paint `QDockWidget` + file index ENAMETOOLONG fix (`js/file_index.js`); tissue cleanup Apply hang + keep brush; CUDA torch pin (`py/requirements.txt` `2.7.1+cu118`); count/collate/batch/CZI fixes from `experimental/masonjar-debug-fixes` merged to `main`.

@@ -22,6 +22,7 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { unzipSync } = require("cross-zip");
 
 const REPO_ROOT = path.join(__dirname, "..");
 const FORGE_MAKE = path.join(
@@ -242,6 +243,99 @@ function findArtifacts(version) {
 	return [...new Set(found)].sort();
 }
 
+/** Electron Forge maker-zip puts app files at zip root; wrap in masonjar-win32-x64/ for extract. */
+function windowsZipParentFolderName(zipPath, version) {
+	const base = path.basename(zipPath, ".zip");
+	const suffix = "-" + version;
+	if (base.endsWith(suffix)) {
+		return base.slice(0, -suffix.length);
+	}
+	return base;
+}
+
+function isWindowsReleaseZip(zipPath) {
+	const rel = path.relative(OUT_MAKE, zipPath).split(path.sep).join("/");
+	return /^zip\/win32\/x64\/.*\.zip$/i.test(rel);
+}
+
+function createWindowsZipFromFolder(folderPath, zipPath) {
+	if (fs.existsSync(zipPath)) {
+		fs.unlinkSync(zipPath);
+	}
+	if (process.platform === "win32") {
+		const psPath = folderPath.replace(/'/g, "''");
+		const psZip = zipPath.replace(/'/g, "''");
+		const script =
+			"Compress-Archive -LiteralPath '" +
+			psPath +
+			"' -DestinationPath '" +
+			psZip +
+			"' -Force";
+		const r = spawnSync(
+			"powershell.exe",
+			["-NoLogo", "-NoProfile", "-Command", script],
+			{ stdio: "inherit" },
+		);
+		if (r.status !== 0) {
+			throw new Error("Compress-Archive failed for " + zipPath);
+		}
+		return;
+	}
+	const parent = path.dirname(folderPath);
+	const name = path.basename(folderPath);
+	const r = spawnSync("tar", ["-a", "-c", "-f", zipPath, "-C", parent, name], {
+		stdio: "inherit",
+	});
+	if (r.status !== 0) {
+		throw new Error("tar failed creating " + zipPath);
+	}
+}
+
+function wrapWindowsReleaseZipFile(zipPath, version) {
+	const parentName = windowsZipParentFolderName(zipPath, version);
+	const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mj-zipwrap-"));
+	try {
+		const extracted = path.join(tmpRoot, "extracted");
+		const wrapped = path.join(tmpRoot, parentName);
+		fs.mkdirSync(extracted, { recursive: true });
+		unzipSync(zipPath, extracted);
+
+		const top = fs.readdirSync(extracted);
+		if (
+			top.length === 1 &&
+			top[0] === parentName &&
+			fs.statSync(path.join(extracted, top[0])).isDirectory()
+		) {
+			console.log("Windows zip already wrapped:", path.basename(zipPath));
+			return;
+		}
+
+		fs.mkdirSync(wrapped, { recursive: true });
+		for (const ent of top) {
+			fs.renameSync(path.join(extracted, ent), path.join(wrapped, ent));
+		}
+
+		const outTmp = zipPath.replace(/\.zip$/i, "") + ".wrap-tmp.zip";
+		createWindowsZipFromFolder(wrapped, outTmp);
+		if (fs.existsSync(zipPath)) {
+			fs.unlinkSync(zipPath);
+		}
+		fs.renameSync(outTmp, zipPath);
+		console.log("Wrapped Windows zip with top-level folder:", parentName + "/");
+	} finally {
+		fs.rmSync(tmpRoot, { recursive: true, force: true });
+	}
+}
+
+function wrapWindowsReleaseZips(artifacts, version) {
+	for (const zipPath of artifacts) {
+		if (!isWindowsReleaseZip(zipPath)) {
+			continue;
+		}
+		wrapWindowsReleaseZipFile(zipPath, version);
+	}
+}
+
 function writeManifest(version, targets, artifacts) {
 	const lines = [
 		"# Mason Jar release artifacts",
@@ -369,6 +463,7 @@ function main() {
 	}
 
 	const artifacts = findArtifacts(version);
+	wrapWindowsReleaseZips(artifacts, version);
 	writeManifest(version, targets, artifacts);
 
 	console.log("\n=== Build complete ===\n");
@@ -428,4 +523,14 @@ function main() {
 	}
 }
 
-main();
+if (require.main === module) {
+	main();
+}
+
+module.exports = {
+	wrapWindowsReleaseZips,
+	wrapWindowsReleaseZipFile,
+	windowsZipParentFolderName,
+	isWindowsReleaseZip,
+	OUT_MAKE,
+};
