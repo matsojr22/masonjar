@@ -1,6 +1,6 @@
 # Agent session handoff
 
-Last updated: 2026-06-08 (v3.3.7). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-11 (v4.0.0). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
 
@@ -51,9 +51,11 @@ Orientation auto-bake (auto_repairable is conservative/review-only), file-handle
 
 | Item | Value |
 |------|--------|
-| `package.json` version | **3.3.7** |
-| Latest tag | `v3.3.7` (Windows zip published pre-release) |
+| `package.json` version | **4.0.0** |
+| Latest tag | `v4.0.0` |
 | GitHub releases | https://github.com/matsojr22/masonjar/releases |
+
+**v4.0.0** — **Major:** per-section Align layout (`py/align_tissue_layout.py`, `py/map.py`, `-w auto`); Viewer/Editor Paint `QDockWidget` + file index ENAMETOOLONG fix (`js/file_index.js`); tissue cleanup Apply hang + keep brush; CUDA torch pin (`py/requirements.txt` `2.7.1+cu118`); count/collate/batch/CZI fixes from `experimental/masonjar-debug-fixes` merged to `main`.
 
 **v3.3.7** — **Multi-folder CZI import**: [`py/czi_common.py`](../py/czi_common.py) `build_files_lookup` / `resolve_file_entry`; [`py/czi_extract.py`](../py/czi_extract.py) path-aware work items; [`js/czi_import.js`](../js/czi_import.js) `resolveChannelForSlice` for repair targets; [`js/czi_wizard.js`](../js/czi_wizard.js) matched/expected index note. Tests: `python/tests/test_czi_multidir_extract.py`, `scripts/test-czi-import.js`.
 

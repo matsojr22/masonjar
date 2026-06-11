@@ -9,8 +9,11 @@ scipy
 imagecodecs
 scikit-image
 tifffile
-torch
-torchvision
+# Pin +cu118 on Windows/Linux — unpinned torch resolves to CPU-only wheels on PyPI (e.g. 2.12+cpu).
+torch==2.7.1+cu118; sys_platform != "darwin"
+torchvision==0.22.1+cu118; sys_platform != "darwin"
+torch>=2.5.0; sys_platform == "darwin"
+torchvision>=0.20.0; sys_platform == "darwin"
 ultralytics
 sahi~=0.11.0
 pyqt6

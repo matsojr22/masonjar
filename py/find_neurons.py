@@ -207,6 +207,14 @@ if __name__ == "__main__":
     else:
         device = "cpu"
 
+    if device == "cpu" and not force_cpu:
+        print(
+            f"LOG: detect_device=cpu torch={torch.__version__} "
+            f"cuda_built={torch.backends.cuda.is_built()} "
+            f"cuda_available={torch.cuda.is_available()}",
+            flush=True,
+        )
+
     # Pruning
     endings = ["png", "jpg", "jpeg", "tif", "tiff"]
     files = os.listdir(input_dir)

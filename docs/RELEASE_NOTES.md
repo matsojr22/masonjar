@@ -6,6 +6,31 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.0.0
+
+**What's new**
+
+Align Sections now handles mixed whole-brain and single-hemisphere series automatically — each section is detected and can be overridden in Napari. Viewer/Editor has a redesigned Paint panel (floatable dock) so region picking and brush tools stay accessible on smaller screens. Cell detection uses your NVIDIA GPU again on Windows after a fix to the bundled PyTorch install.
+
+**Changes**
+
+- **Align:** Automatic per-section layout (whole vs left hemisphere); Section layout override in Napari; layouts flow through to Isolate Regions.
+- **Viewer/Editor:** Paint controls in a floatable dock; slim header for section navigation, channel, overlay, and Allow Adjustment.
+- **Viewer/Editor:** File index rebuild after large align runs no longer fails on Windows, so DAPI/annotation pairing works again.
+- **Tissue edge cleanup:** Apply step no longer hangs; Keep brush to add tissue; mask polarity fix for DAPI counterstain.
+- **Cell detection:** Pin CUDA PyTorch on Windows/Linux so detection uses the GPU instead of CPU-only wheels.
+- **Pipeline:** Count, collate, batch, CZI import, max/sharpen/tophat slice lists, align warp retries, and related fixes from the 3.3.x line.
+
+**Commit subject**
+
+Mason Jar 4.0 — mixed-section align, Viewer/Editor Paint dock, GPU detection
+
+**Commit body**
+
+Major release combining automatic per-section align layout, Viewer/Editor UI and index fixes, tissue cleanup reliability, CUDA PyTorch for cell detection, and accumulated pipeline hardening from experimental validation on real M457 data.
+
+---
+
 ## v3.3.7
 
 **What's new**
