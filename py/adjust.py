@@ -193,7 +193,7 @@ class AnnotationViewer(QMainWindow):
         self.section_info_label = QLabel("", self)
         self.section_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # --- Paint region controls (wired into toolbars below) ---
+        # --- Paint region controls (wired into paint dock below) ---
         self.area_search_box = QLineEdit(self)
         self.area_search_box.setPlaceholderText("Acronym or region name")
         self.area_search_box.setToolTip("Search atlas regions by acronym or name")
@@ -225,6 +225,44 @@ class AnnotationViewer(QMainWindow):
         self.ccf_advanced_toggle.setChecked(False)
         self.ccf_advanced_toggle.setToolTip(CCF_ADVANCED_HELP)
         self.ccf_advanced_toggle.toggled.connect(self._on_ccf_advanced_toggled)
+
+        # --- Paint target strip (must exist before _init_paint_region_controls) ---
+        self.paint_swatch = QLabel(self)
+        self.paint_swatch.setFixedSize(18, 18)
+        self.paint_swatch.setFrameShape(QFrame.Shape.Box)
+        self.paint_target_name = QLabel("None", self)
+        self.paint_tier_context = QLabel("", self)
+        self.paint_adjust_badge = QLabel("OFF", self)
+        self.paint_brush_size_label = QLabel(f"Brush {self.brush_size}px", self)
+
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setRange(0, 255)
+        self.opacity_slider.setValue(self.opacity)
+        self.opacity_slider.valueChanged.connect(self.update_opacity)
+        self.opacity_label = QLabel("Opacity", self)
+
+        self.zoom_label = QLabel(f"Zoom {self.zoom_level}%", self)
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setRange(100, 1000)
+        self.zoom_slider.setValue(self.zoom_level)
+        self.zoom_slider.valueChanged.connect(self.update_zoom)
+
+        self.brush_label = QLabel(f"Brush {self.brush_size}", self)
+        self.brush_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brush_slider.setRange(1, 10)
+        self.brush_slider.setValue(self.brush_size)
+        self.brush_slider.valueChanged.connect(self.update_brush)
+
+        self.refresh_button = QPushButton("Refresh drawings", self)
+        self.refresh_button.setToolTip(
+            "Redraw annotation overlay from current edits "
+            "(does not change region IDs)."
+        )
+        self.refresh_button.clicked.connect(self.refresh_drawings)
+        self.undo_button = QPushButton("Undo", self)
+        self.undo_button.clicked.connect(self.undo_last_delta)
+        self.save_button = QPushButton("Save", self)
+        self.save_button.clicked.connect(self.save_changes)
 
         # --- Image views (central widget) ---
         self.img_view = QGraphicsView(self)
@@ -261,6 +299,22 @@ class AnnotationViewer(QMainWindow):
             Qt.WidgetAttribute.WA_AcceptTouchEvents, False
         )
 
+        # --- Paint dock ---
+        self.paint_dock = QDockWidget("Paint", self)
+        self.paint_dock.setObjectName("PaintDock")
+        self.paint_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+        paint_inner = QWidget(self)
+        paint_layout = QVBoxLayout()
+        paint_layout.setContentsMargins(4, 4, 4, 4)
+        self._init_paint_controls(paint_layout)
+        paint_inner.setLayout(paint_layout)
+        self.paint_dock.setWidget(paint_inner)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.paint_dock)
+
         # --- Parcellation dock ---
         self.parcel_dock = QDockWidget("Parcellation", self)
         self.parcel_dock.setObjectName("ParcellationDock")
@@ -277,123 +331,52 @@ class AnnotationViewer(QMainWindow):
         self.parcel_dock.setWidget(parcel_inner)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.parcel_dock)
 
-        # --- Toolbars ---
-        info_toolbar = QToolBar("Section", self)
-        info_toolbar.setMovable(False)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, info_toolbar)
-        info_toolbar.addWidget(self.section_info_label)
-
-        paint_toolbar = QToolBar("Paint", self)
-        paint_toolbar.setMovable(False)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, paint_toolbar)
-        paint_toolbar.addWidget(QLabel("Search:", self))
-        paint_toolbar.addWidget(self.area_search_box)
-        paint_toolbar.addSeparator()
-        paint_toolbar.addWidget(QLabel("Tier:", self))
-        paint_toolbar.addWidget(self.tier_combo)
-        paint_toolbar.addWidget(self.level_combo)
-        paint_toolbar.addWidget(QLabel("Area:", self))
-        paint_toolbar.addWidget(self.area_combo)
-        paint_toolbar.addWidget(self.ccf_advanced_toggle)
-
-        controls_toolbar = QToolBar("Controls", self)
-        controls_toolbar.setMovable(False)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, controls_toolbar)
+        # --- Header toolbar (navigation + view essentials only) ---
+        header_toolbar = QToolBar("Header", self)
+        header_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, header_toolbar)
+        header_toolbar.addWidget(self.section_info_label)
+        header_toolbar.addSeparator()
 
         self.channel_combo = QComboBox(self)
         self.channel_combo.setMinimumWidth(180)
         self.channel_combo.currentIndexChanged.connect(self._on_channel_combo_changed)
-        controls_toolbar.addWidget(QLabel("Channel:", self))
-        controls_toolbar.addWidget(self.channel_combo)
+        header_toolbar.addWidget(QLabel("Channel:", self))
+        header_toolbar.addWidget(self.channel_combo)
 
         self.prev_button = QPushButton("Previous", self)
         self.prev_button.clicked.connect(self.prev_image)
         self.next_button = QPushButton("Next", self)
         self.next_button.clicked.connect(self.next_image)
-        controls_toolbar.addWidget(self.prev_button)
-        controls_toolbar.addWidget(self.next_button)
-        controls_toolbar.addSeparator()
+        header_toolbar.addWidget(self.prev_button)
+        header_toolbar.addWidget(self.next_button)
+        header_toolbar.addSeparator()
 
         self.overlay_toggle = QPushButton("Toggle Overlay", self)
         self.overlay_toggle.clicked.connect(self.toggle_overlay)
-        controls_toolbar.addWidget(self.overlay_toggle)
-        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self.opacity_slider.setRange(0, 255)
-        self.opacity_slider.setValue(self.opacity)
-        self.opacity_slider.setMaximumWidth(120)
-        self.opacity_slider.valueChanged.connect(self.update_opacity)
-        self.opacity_label = QLabel("Opacity", self)
-        controls_toolbar.addWidget(self.opacity_label)
-        controls_toolbar.addWidget(self.opacity_slider)
+        header_toolbar.addWidget(self.overlay_toggle)
 
-        self.zoom_label = QLabel(f"Zoom {self.zoom_level}%", self)
-        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setRange(100, 1000)
-        self.zoom_slider.setValue(self.zoom_level)
-        self.zoom_slider.setMaximumWidth(120)
-        self.zoom_slider.valueChanged.connect(self.update_zoom)
-        controls_toolbar.addWidget(self.zoom_label)
-        controls_toolbar.addWidget(self.zoom_slider)
-
-        self.brush_label = QLabel(f"Brush {self.brush_size}", self)
-        self.brush_slider = QSlider(Qt.Orientation.Horizontal)
-        self.brush_slider.setRange(1, 10)
-        self.brush_slider.setValue(self.brush_size)
-        self.brush_slider.setMaximumWidth(80)
-        self.brush_slider.valueChanged.connect(self.update_brush)
-        controls_toolbar.addWidget(self.brush_label)
-        controls_toolbar.addWidget(self.brush_slider)
-        controls_toolbar.addSeparator()
-
-        self.refresh_button = QPushButton("Refresh drawings", self)
-        self.refresh_button.setToolTip(
-            "Redraw annotation overlay from current edits "
-            "(does not change region IDs)."
-        )
-        self.refresh_button.clicked.connect(self.refresh_drawings)
-        self.undo_button = QPushButton("Undo", self)
-        self.undo_button.clicked.connect(self.undo_last_delta)
-        self.save_button = QPushButton("Save", self)
-        self.save_button.clicked.connect(self.save_changes)
         self.allow_adjustment = QCheckBox("Allow Adjustment", self)
         self.allow_adjustment.setChecked(False)
         self.allow_adjustment.stateChanged.connect(
             lambda _state: self._update_paint_target_strip()
         )
-        controls_toolbar.addWidget(self.refresh_button)
-        controls_toolbar.addWidget(self.undo_button)
-        controls_toolbar.addWidget(self.save_button)
-        controls_toolbar.addWidget(self.allow_adjustment)
+        header_toolbar.addWidget(self.allow_adjustment)
+        header_toolbar.addSeparator()
 
-        dock_toolbar = QToolBar("Dock", self)
-        dock_toolbar.setMovable(False)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, dock_toolbar)
+        self.paint_dock_button = QPushButton("Paint", self)
+        self.paint_dock_button.setCheckable(True)
+        self.paint_dock_button.setChecked(True)
+        self.paint_dock_button.clicked.connect(self._toggle_paint_dock)
+        header_toolbar.addWidget(self.paint_dock_button)
+        self.paint_dock.visibilityChanged.connect(self._on_paint_dock_visibility)
+
         self.parcel_dock_button = QPushButton("Parcellation", self)
         self.parcel_dock_button.setCheckable(True)
         self.parcel_dock_button.setChecked(True)
         self.parcel_dock_button.clicked.connect(self._toggle_parcel_dock)
-        dock_toolbar.addWidget(self.parcel_dock_button)
+        header_toolbar.addWidget(self.parcel_dock_button)
         self.parcel_dock.visibilityChanged.connect(self._on_parcel_dock_visibility)
-
-        # --- Paint target strip ---
-        target_toolbar = QToolBar("Target", self)
-        target_toolbar.setMovable(False)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, target_toolbar)
-        self.paint_swatch = QLabel(self)
-        self.paint_swatch.setFixedSize(18, 18)
-        self.paint_swatch.setFrameShape(QFrame.Shape.Box)
-        self.paint_target_name = QLabel("None", self)
-        self.paint_tier_context = QLabel("", self)
-        self.paint_adjust_badge = QLabel("OFF", self)
-        self.paint_brush_size_label = QLabel(f"Brush {self.brush_size}px", self)
-        target_toolbar.addWidget(QLabel("Paint:", self))
-        target_toolbar.addWidget(self.paint_swatch)
-        target_toolbar.addWidget(self.paint_target_name)
-        target_toolbar.addSeparator()
-        target_toolbar.addWidget(self.paint_tier_context)
-        target_toolbar.addSeparator()
-        target_toolbar.addWidget(self.paint_adjust_badge)
-        target_toolbar.addWidget(self.paint_brush_size_label)
 
         # Status bar
         self.status_bar = QStatusBar()
@@ -410,6 +393,14 @@ class AnnotationViewer(QMainWindow):
         self._update_paint_target_strip()
         if not channel_loaded:
             self.show_image_with_overlay()
+
+    def _toggle_paint_dock(self):
+        self.paint_dock.setVisible(self.paint_dock_button.isChecked())
+
+    def _on_paint_dock_visibility(self, visible: bool):
+        self.paint_dock_button.blockSignals(True)
+        self.paint_dock_button.setChecked(visible)
+        self.paint_dock_button.blockSignals(False)
 
     def _toggle_parcel_dock(self):
         self.parcel_dock.setVisible(self.parcel_dock_button.isChecked())
@@ -810,6 +801,82 @@ class AnnotationViewer(QMainWindow):
 
     def _current_slice_id(self) -> str:
         return self.pairs[self.current_index][2]
+
+    def _init_paint_controls(self, ui_layout):
+        """Region picker, paint target, view sliders, and brush/edit controls."""
+        region_group = QGroupBox("Region picker", self)
+        region_layout = QVBoxLayout()
+
+        search_row = QHBoxLayout()
+        search_row.addWidget(QLabel("Search:", self))
+        self.area_search_box.setMinimumWidth(160)
+        search_row.addWidget(self.area_search_box, 1)
+        region_layout.addLayout(search_row)
+
+        tier_row = QHBoxLayout()
+        tier_row.addWidget(QLabel("Tier:", self))
+        tier_row.addWidget(self.tier_combo, 1)
+        region_layout.addLayout(tier_row)
+
+        level_row = QHBoxLayout()
+        level_row.addWidget(QLabel("Level:", self))
+        level_row.addWidget(self.level_combo, 1)
+        region_layout.addLayout(level_row)
+
+        area_row = QHBoxLayout()
+        area_row.addWidget(QLabel("Area:", self))
+        area_row.addWidget(self.area_combo, 1)
+        region_layout.addLayout(area_row)
+
+        region_layout.addWidget(self.ccf_advanced_toggle)
+        region_group.setLayout(region_layout)
+        ui_layout.addWidget(region_group)
+
+        target_group = QGroupBox("Paint target", self)
+        target_layout = QVBoxLayout()
+        target_top = QHBoxLayout()
+        target_top.addWidget(self.paint_swatch)
+        target_top.addWidget(self.paint_target_name, 1)
+        target_layout.addLayout(target_top)
+        target_layout.addWidget(self.paint_tier_context)
+        target_meta = QHBoxLayout()
+        target_meta.addWidget(self.paint_adjust_badge)
+        target_meta.addWidget(self.paint_brush_size_label)
+        target_meta.addStretch()
+        target_layout.addLayout(target_meta)
+        target_group.setLayout(target_layout)
+        ui_layout.addWidget(target_group)
+
+        view_group = QGroupBox("View", self)
+        view_layout = QVBoxLayout()
+        opacity_row = QHBoxLayout()
+        opacity_row.addWidget(self.opacity_label)
+        opacity_row.addWidget(self.opacity_slider, 1)
+        view_layout.addLayout(opacity_row)
+        zoom_row = QHBoxLayout()
+        zoom_row.addWidget(self.zoom_label)
+        zoom_row.addWidget(self.zoom_slider, 1)
+        view_layout.addLayout(zoom_row)
+        view_group.setLayout(view_layout)
+        ui_layout.addWidget(view_group)
+
+        brush_group = QGroupBox("Brush & edits", self)
+        brush_layout = QVBoxLayout()
+        brush_row = QHBoxLayout()
+        brush_row.addWidget(self.brush_label)
+        brush_row.addWidget(self.brush_slider, 1)
+        brush_layout.addLayout(brush_row)
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(self.refresh_button)
+        btn_row.addWidget(self.undo_button)
+        btn_row.addWidget(self.save_button)
+        btn_row.addStretch()
+        brush_layout.addLayout(btn_row)
+        brush_group.setLayout(brush_layout)
+        ui_layout.addWidget(brush_group)
+
+        ui_layout.addStretch()
+        self._paint_controls_group = region_group
 
     def _init_parcellation_controls(self, ui_layout):
         """Parcellation level controls (separate from paint-brush hierarchy)."""

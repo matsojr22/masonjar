@@ -19,6 +19,7 @@ from annotation_match import (
     load_parcellation_context,
     resolve_output_targets,
 )
+from align_layout_manifest import intensity_whole_for_slice, load_align_slice_layouts
 from structure_catalog import load_catalog
 
 LEGACY_VIS_RSP_ACRONYMS = [
@@ -274,6 +275,13 @@ if __name__ == "__main__":
     dapi_dir_path = Path(dapi_dir_raw) if dapi_dir_raw else None
 
     annotation_dir = Path(annotationPath)
+    align_slice_layouts = load_align_slice_layouts(annotation_dir)
+    if align_slice_layouts:
+        print(
+            f"LOG: intensity_per_slice_layouts={len(align_slice_layouts)} "
+            f"from align manifest",
+            flush=True,
+        )
     print(f"LOG: intensity_dir={intensityPath}", flush=True)
     print(f"LOG: annotation_dir={annotationPath}", flush=True)
 
@@ -421,6 +429,16 @@ if __name__ == "__main__":
                 for tid in slice_targets
             }
 
+            slice_is_whole = intensity_whole_for_slice(
+                stem, is_whole, align_slice_layouts
+            )
+            if align_slice_layouts:
+                slice_mode = "whole" if slice_is_whole else "hemisphere"
+                print(
+                    f"LOG: intensity_slice_mode slice={stem} mode={slice_mode}",
+                    flush=True,
+                )
+
             for parent_id, label_ids in matching_ids.items():
                 for label_id in label_ids:
                     verts = np.where(annotation_recaled == np.uint32(label_id))
@@ -430,7 +448,7 @@ if __name__ == "__main__":
                         # Integer tuple keys so sparse dicts match after pickle and in export_roi_dual_tif.
                         vkey = (int(point[0]), int(point[1]))
                         # check if whole
-                        if not is_whole:
+                        if not slice_is_whole:
                             intensities[parent_id][vkey] = intensity[point]
                             if dapi_resized is not None:
                                 dapi_intensities[parent_id][vkey] = int(

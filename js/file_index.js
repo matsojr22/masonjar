@@ -193,20 +193,20 @@ function orientationFromMeta(meta) {
 	};
 }
 
-function fetchMetadataBatch(filePaths, appRoot) {
-	if (!filePaths.length) {
-		return Promise.resolve({});
-	}
-	var py = resolveEnvPython();
-	var script = path.join(appRoot || path.join(__dirname, ".."), "py", "index_metadata.py");
-	if (!fs.existsSync(py) || !fs.existsSync(script)) {
-		return Promise.resolve({});
-	}
+var METADATA_BATCH_SIZE = 40;
+
+function fetchMetadataBatchChunk(py, script, filePaths) {
 	return new Promise(function (resolve) {
 		var chunks = [];
-		var proc = childProcess.spawn(py, [script].concat(filePaths), {
-			stdio: ["ignore", "pipe", "pipe"],
-		});
+		var proc;
+		try {
+			proc = childProcess.spawn(py, [script].concat(filePaths), {
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+		} catch (err) {
+			resolve({});
+			return;
+		}
 		proc.stdout.on("data", function (d) {
 			chunks.push(d);
 		});
@@ -229,6 +229,33 @@ function fetchMetadataBatch(filePaths, appRoot) {
 			resolve({});
 		});
 	});
+}
+
+function fetchMetadataBatch(filePaths, appRoot) {
+	if (!filePaths.length) {
+		return Promise.resolve({});
+	}
+	var py = resolveEnvPython();
+	var script = path.join(appRoot || path.join(__dirname, ".."), "py", "index_metadata.py");
+	if (!fs.existsSync(py) || !fs.existsSync(script)) {
+		return Promise.resolve({});
+	}
+	var batches = [];
+	for (var b = 0; b < filePaths.length; b += METADATA_BATCH_SIZE) {
+		batches.push(filePaths.slice(b, b + METADATA_BATCH_SIZE));
+	}
+	return batches.reduce(function (chain, batch) {
+		return chain.then(function (map) {
+			return fetchMetadataBatchChunk(py, script, batch).then(function (chunkMap) {
+				for (var key in chunkMap) {
+					if (Object.prototype.hasOwnProperty.call(chunkMap, key)) {
+						map[key] = chunkMap[key];
+					}
+				}
+				return map;
+			});
+		});
+	}, Promise.resolve({}));
 }
 
 function scanImageFiles(dir, options) {
@@ -726,15 +753,10 @@ function buildFileIndex(bundleRoot, roles, options) {
 		}
 		var dir = resolveIndexLeafDir(bundleRoot, roles, role, activeRuns);
 		roleDirs[role] = dir;
-		if (role === "predictions") {
+		if (role === "predictions" || role === "slices") {
 			continue;
 		}
-		if (role === "slices") {
-			var slicesPaths = listSlicesRoleFilePaths(dir, 0);
-			for (var sf = 0; sf < slicesPaths.images.length; sf++) {
-				pathsForMeta.push(slicesPaths.images[sf]);
-			}
-		} else if (FLAT_INDEX_ROLES.indexOf(role) >= 0 || role === "dapi") {
+		if (FLAT_INDEX_ROLES.indexOf(role) >= 0 || role === "dapi") {
 			var flatImgs = listImageFiles(dir);
 			for (var df = 0; df < flatImgs.length; df++) {
 				pathsForMeta.push(flatImgs[df]);
@@ -762,42 +784,10 @@ function buildFileIndex(bundleRoot, roles, options) {
 			}
 			if (scanRole === "slices") {
 				var slicesFiles = listSlicesRoleFilePaths(scanDir, 0);
-				var slicesSeen = {};
-				var scanned = scanImageFilesFromPaths(slicesFiles.images, metaMap);
-				for (var si = 0; si < scanned.length; si++) {
-					var row = scanned[si];
-					var sliceId = sliceIdFromFilename(row.basename);
-					slicesSeen[sliceId] = true;
-					var relPath = path
-						.relative(bundleRoot, row.absPath)
-						.split(path.sep)
-						.join("/");
-					files.push({
-						sliceId: sliceId,
-						role: "slices",
-						relPath: relPath,
-						basename: row.basename,
-						size: row.size,
-						mtime: row.mtime,
-						metadata: row.metadata,
-						orientation: row.orientation,
-						outputs: {
-							slices: {
-								relPath: relPath,
-								exists: true,
-								mtime: row.mtime,
-							},
-						},
-					});
-				}
 				for (var pi = 0; pi < slicesFiles.pkls.length; pi++) {
 					var pklAbs = slicesFiles.pkls[pi];
 					var pklBase = path.basename(pklAbs);
 					var pklSliceId = sliceStemFromAnnotationPklBasename(pklBase);
-					if (slicesSeen[pklSliceId]) {
-						continue;
-					}
-					slicesSeen[pklSliceId] = true;
 					var stPkl = fs.statSync(pklAbs);
 					var relPkl = path
 						.relative(bundleRoot, pklAbs)

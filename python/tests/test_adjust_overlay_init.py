@@ -143,5 +143,17 @@ def test_initui_completes_with_empty_channels(tmp_path, viewer_class, qapp):
 
     assert hasattr(viewer, "channel_combo")
     assert hasattr(viewer, "status_bar")
+    assert hasattr(viewer, "paint_dock")
+    assert hasattr(viewer, "paint_dock_button")
     assert viewer.channel_sources == []
     assert viewer.channel_combo.isEnabled() is False
+
+
+def test_paint_controls_use_dock_not_top_toolbars():
+    """Paint UI lives in QDockWidget, not stacked top toolbars."""
+    src = (_PY_DIR / "adjust.py").read_text(encoding="utf-8")
+    assert 'QDockWidget("Paint"' in src
+    assert "def _init_paint_controls(self, ui_layout):" in src
+    assert 'QToolBar("Paint"' not in src
+    assert 'QToolBar("Target"' not in src
+    assert 'QToolBar("Controls"' not in src

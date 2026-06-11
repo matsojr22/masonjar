@@ -309,9 +309,14 @@ function buildRunSlug(stepId, context) {
 	}
 	if (stepId === "align") {
 		var spacing = context.spacing != null ? "_sp" + String(context.spacing) : "";
-		var hem = context.whole === false || context.whole === "False" ? "_half" : "_whole";
+		var layoutTok = "_auto";
+		if (context.whole === "False") {
+			layoutTok = "_half";
+		} else if (context.whole === "True") {
+			layoutTok = "_whole";
+		}
 		var leg = context.legacy === true || context.legacy === "True" ? "_leg" : "";
-		return sanitizeSlugPart(span + spacing + hem + leg + subset);
+		return sanitizeSlugPart(span + spacing + layoutTok + leg + subset);
 	}
 	if (stepId === "intensity") {
 		var mode = context.whole === false || context.whole === "False" ? "_hemi" : "_whole";

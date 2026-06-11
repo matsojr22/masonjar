@@ -29,6 +29,18 @@ function testBuildRunSlugStability() {
 	});
 	assert.strictEqual(slug1, slug2);
 	assert.ok(slug1.indexOf("M528") >= 0);
+	assert.ok(slug1.indexOf("_whole") >= 0);
+}
+
+function testBuildRunSlugAlignAuto() {
+	var slug = pipelineRuns.buildRunSlug("align", {
+		sortedStems: ["M457_s001", "M457_s061"],
+		spacing: 10,
+		whole: "auto",
+		legacy: "False",
+		subsetCount: 2,
+	});
+	assert.ok(slug.indexOf("_auto") >= 0, slug);
 }
 
 function testResolveRunLeaf() {
@@ -281,6 +293,7 @@ function testRemoveRunForRoleClearsActive() {
 
 var tests = [
 	testBuildRunSlugStability,
+	testBuildRunSlugAlignAuto,
 	testResolveRunLeaf,
 	testDiscoverOutputRuns,
 	testDiscoverCziMaxRunDepth,

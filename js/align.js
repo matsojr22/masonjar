@@ -14,25 +14,31 @@ var outdir = document.getElementById("outdir");
 var loadbar = document.getElementById("loadbar");
 var loadmessage = document.getElementById("loadmessage");
 var back = document.getElementById("back");
+var autoMode = document.getElementById("auto");
 var whole = document.getElementById("whole");
 var half = document.getElementById("half");
 var spacing = document.getElementById("spacing");
 var legacy = document.getElementById("legacy");
 var flatOutput = document.getElementById("flatOutput");
-var alignmentMethod = "True";
+var alignmentMethod = "auto";
 var useLegacy = "False";
 var methods = document.querySelector("#methods");
 var lastRunRel = "";
 
 pipelineRun.ensureRunModeUi("runModePanel", "align");
 
+autoMode.addEventListener("click", function () {
+	methods.textContent = "Automatic (recommended)";
+	alignmentMethod = "auto";
+});
+
 whole.addEventListener("click", function () {
-	methods.textContent = "Both Hemispheres";
+	methods.textContent = "Both hemispheres (all sections)";
 	alignmentMethod = "True";
 });
 
 half.addEventListener("click", function () {
-	methods.textContent = "Single Hemisphere";
+	methods.textContent = "Single hemisphere (all sections)";
 	alignmentMethod = "False";
 });
 

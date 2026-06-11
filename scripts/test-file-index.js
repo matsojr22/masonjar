@@ -240,6 +240,40 @@ function testSlicesRoleIndexesActiveRunOnly() {
 		});
 }
 
+function testSlicesRoleIgnoresWarpedTiffs() {
+	var bundle = helpers.tmpDir("mj-slices-warp-");
+	var roles = {
+		dapi: "data/counting/00_dapi",
+		slices: "data/counting/01_slices",
+	};
+	var activeLeaf = path.join(bundle, roles.slices, "align", "run_warp");
+	fs.mkdirSync(path.join(bundle, roles.dapi), { recursive: true });
+	fs.mkdirSync(activeLeaf, { recursive: true });
+	helpers.touchImage(path.join(bundle, roles.dapi), "M457_s001.png");
+	fs.writeFileSync(path.join(activeLeaf, "Annotation_M457_s001.pkl"), "x");
+	for (var i = 0; i < 80; i++) {
+		helpers.touchImage(activeLeaf, "Composite_M457_s" + String(i + 1).padStart(3, "0") + ".tif");
+		helpers.touchImage(activeLeaf, "Atlas_M457_s" + String(i + 1).padStart(3, "0") + ".tif");
+	}
+	var activeRuns = pipelineRuns.defaultActiveRuns();
+	activeRuns.slices = "align/run_warp";
+	return fileIndex
+		.buildFileIndex(bundle, roles, {
+			appRoot: path.join(__dirname, ".."),
+			activeRuns: activeRuns,
+		})
+		.then(function (index) {
+			var sliceRows = index.files.filter(function (row) {
+				return row.role === "slices";
+			});
+			assert.strictEqual(sliceRows.length, 1, "only annotation PKLs should index");
+			assert.strictEqual(sliceRows[0].sliceId, "M457_s001");
+			var report = fileIndex.computeMatchReport(index, ["dapi", "slices"]);
+			assert.deepStrictEqual(report.matchedSliceIds, ["M457_s001"]);
+			helpers.rmDir(bundle);
+		});
+}
+
 var tests = [
 	testSliceIdFromFilename,
 	testListImageFiles,
@@ -249,6 +283,7 @@ var tests = [
 	testGetProcessingSliceIds,
 	testOutputExistsAlignStemMatch,
 	testSlicesRoleIndexesActiveRunOnly,
+	testSlicesRoleIgnoresWarpedTiffs,
 ];
 
 function runAll() {

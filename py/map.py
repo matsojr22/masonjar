@@ -8,6 +8,11 @@ import pickle
 from pathlib import Path
 from demons import register_to_atlas
 from slice_atlas import slice_3d_volume, add_outlines, mask_slice_by_region
+from align_tissue_layout import (
+    crop_planar_for_hemisphere,
+    detect_tissue_layout,
+    parse_layout_mode,
+)
 from model import TissuePredictor
 import nrrd
 import SimpleITK as sitk
@@ -205,11 +210,19 @@ class AtlasSlice:
         self.linked = True
         self.region = region
         self.hemisphere = hemisphere
+        self.layout_confidence = 1.0
+        self.layout_low_confidence = False
+        self.layout_overridden = False
         self.image = None
         self.sam_image = None
         self.label = None
         self.mask = None
         self.eraser_window = None
+
+    def layout_label(self) -> str:
+        if self.hemisphere == "L":
+            return "Left hemi"
+        return "Whole brain"
 
     def set_mask(self):
         """Set the mask of the slice"""
@@ -240,6 +253,8 @@ class AtlasSlice:
         self.label = slice_3d_volume(
             annotation, self.ap_position, self.x_angle, self.y_angle
         ).astype(np.uint32)
+        self.image = crop_planar_for_hemisphere(self.image, self.hemisphere)
+        self.label = crop_planar_for_hemisphere(self.label, self.hemisphere)
 
     def get_registered(self, tissue):
         """
@@ -277,7 +292,8 @@ class AlignmentController:
 
     Args:
         nrrd_path (str): path to nrrd files
-        is_whole (bool): if we are using the whole brain or just half
+        is_whole (bool): deprecated; use layout_mode instead
+        layout_mode (str): auto | whole | hemi — per-section or forced layout
         input_path (str): path to input images
         output_path (str): path to output alignments
         model_path (str): path to tissue predictor model
@@ -296,9 +312,14 @@ class AlignmentController:
         sam_path,
         spacing=None,
         is_whole=True,
+        layout_mode=None,
         use_legacy=False,
         slice_filter=None,
     ):
+        if layout_mode is None:
+            layout_mode = "whole" if is_whole else "hemi"
+        else:
+            layout_mode = parse_layout_mode(str(layout_mode))
         self.nrrd_path = nrrd_path
         self.input_path = input_path
         self.output_path = output_path
@@ -313,7 +334,7 @@ class AlignmentController:
         self.model_path = model_path
         self.sam_path = Path(sam_path).expanduser()
         self.spacing = spacing
-        self.is_whole = is_whole
+        self.layout_mode = layout_mode
         self.use_legacy = use_legacy
         self.slice_filter = slice_filter
         self.viewer = napari.Viewer(
@@ -332,9 +353,8 @@ class AlignmentController:
             Path(self.nrrd_path) / annotation_name,
         )[0]
 
-        if not self.is_whole:
-            self.atlas = self.atlas[:, :, : self.atlas.shape[2] // 2]
-            self.annotation = self.annotation[:, :, : self.annotation.shape[2] // 2]
+        # Always keep the full atlas volume; per-section hemisphere cropping happens
+        # in AtlasSlice.set_slice so mixed whole/hemi series work in one session.
 
         # Atlas layer
         self.atlas_layer = self.viewer.add_image(
@@ -402,6 +422,14 @@ class AlignmentController:
             ]
         )
         self.region_selection.currentIndexChanged.connect(self.que_update_slice)
+
+        self.layout_tags = {
+            "Whole brain": "W",
+            "Left hemisphere": "L",
+        }
+        self.layout_selection = QComboBox()
+        self.layout_selection.addItems(list(self.layout_tags.keys()))
+        self.layout_selection.currentIndexChanged.connect(self.que_update_layout)
 
         self.parcel_selection = QComboBox()
         self.parcel_advanced = QCheckBox("Parcellation: Advanced CCF levels")
@@ -475,6 +503,8 @@ class AlignmentController:
                 self.progress_bar,
                 QLabel("Region"),
                 self.region_selection,
+                QLabel("Section layout"),
+                self.layout_selection,
                 QLabel("Parcellation (all sections on Finish)"),
                 self.parcel_selection,
                 self.parcel_advanced,
@@ -502,6 +532,7 @@ class AlignmentController:
                     self.atlas_slices[self.file_list[self.current_section]].region
                 )
             )
+            self._sync_layout_selection_from_slice()
 
         print("Awaiting fine tuning...", flush=True)
 
@@ -598,7 +629,20 @@ class AlignmentController:
         n = idx + 1
         m = self.num_slices
         line1 = f"Slice {n:02d} of {m:02d}"
-        self.section_info_label.setText(f"{line1}\n{fname}")
+        current = self.atlas_slices.get(fname)
+        layout_line = ""
+        if current is not None:
+            src = "override" if current.layout_overridden else "auto"
+            layout_line = (
+                f"Layout: {current.layout_label()} ({src}, "
+                f"conf {current.layout_confidence:.2f})"
+            )
+            if current.layout_low_confidence and not current.layout_overridden:
+                layout_line += "\nReview layout (low confidence)"
+        text = f"{line1}\n{fname}"
+        if layout_line:
+            text += f"\n{layout_line}"
+        self.section_info_label.setText(text)
         title = f"Atlas Alignment — {line1} — {fname}"
         self.viewer.title = title
         try:
@@ -649,6 +693,10 @@ class AlignmentController:
                 old_y = atlas_slice.y_angle
                 old_pos = atlas_slice.ap_position
                 old_region = atlas_slice.region
+                old_hemi = getattr(atlas_slice, "hemisphere", "W")
+                old_conf = float(getattr(atlas_slice, "layout_confidence", 1.0))
+                old_low = bool(getattr(atlas_slice, "layout_low_confidence", False))
+                old_over = bool(getattr(atlas_slice, "layout_overridden", False))
                 old_mask = atlas_slice.mask
 
                 self.atlas_slices[old_name] = AtlasSlice(
@@ -657,7 +705,11 @@ class AlignmentController:
                     old_x,
                     old_y,
                     region=old_region,
+                    hemisphere=old_hemi,
                 )
+                self.atlas_slices[old_name].layout_confidence = old_conf
+                self.atlas_slices[old_name].layout_low_confidence = old_low
+                self.atlas_slices[old_name].layout_overridden = old_over
                 self.atlas_slices[old_name].mask = old_mask
                 self.atlas_slices[old_name].set_slice(self.atlas, self.annotation)
 
@@ -765,16 +817,42 @@ class AlignmentController:
                 delta_pos = 0
             self.predicted_delta = delta_pos
 
-            hemi = "W" if self.is_whole else "L"
+            hemi = "W" if self.layout_mode == "whole" else "L"
+            force_uniform = self.layout_mode in ("whole", "hemi")
 
             for i in range(self.num_slices):
+                if self.file_list[i] in self.atlas_slices.keys():
+                    continue
+                sample_path = Path(self.input_path) / self.file_list[i]
+                slice_conf = 1.0
+                slice_low = False
+                if force_uniform:
+                    slice_hemi = hemi
+                else:
+                    detected = detect_tissue_layout(sample_path)
+                    slice_hemi = detected.hemisphere
+                    slice_conf = detected.confidence
+                    slice_low = detected.low_confidence
+                    print(
+                        "LOG: align_layout_detect "
+                        f"slice={self._slice_id_from_filename(self.file_list[i])} "
+                        f"layout={detected.layout} hemi={slice_hemi} "
+                        f"confidence={detected.confidence:.3f} "
+                        f"left_frac={detected.metrics.get('left_frac')} "
+                        f"bbox_ratio={detected.metrics.get('bbox_width_ratio')}",
+                        flush=True,
+                    )
+
                 predicted_slice = AtlasSlice(
                     self.file_list[i],
                     positions[i],
                     average_x,
                     average_y,
-                    hemisphere=hemi,
+                    hemisphere=slice_hemi,
                 )
+                predicted_slice.layout_confidence = slice_conf
+                predicted_slice.layout_low_confidence = slice_low
+                predicted_slice.layout_overridden = False
 
                 predicted_slice.set_slice(self.atlas, self.annotation)
                 self.atlas_slices[self.file_list[i]] = predicted_slice
@@ -882,6 +960,7 @@ class AlignmentController:
                 self.atlas_slices[self.file_list[self.current_section]].region
             )
         )
+        self._sync_layout_selection_from_slice()
 
         self.mask_button.setText(
             "Set Mask"
@@ -890,6 +969,17 @@ class AlignmentController:
         )
 
         self.update_section_header()
+
+    def _sync_layout_selection_from_slice(self):
+        if not self.file_list or self.num_slices == 0:
+            return
+        current = self.atlas_slices[self.file_list[self.current_section]]
+        hemi = getattr(current, "hemisphere", "W")
+        label = "Left hemisphere" if hemi == "L" else "Whole brain"
+        self.layout_selection.blockSignals(True)
+        idx = list(self.layout_tags.keys()).index(label)
+        self.layout_selection.setCurrentIndex(idx)
+        self.layout_selection.blockSignals(False)
 
     def update_linkage(self):
         """Update the linkage of the current slice"""
@@ -916,6 +1006,11 @@ class AlignmentController:
 
         self.slice_update_timer.singleShot(500, self.update_slice)
 
+    def que_update_layout(self):
+        if self.slice_update_timer.isActive():
+            self.slice_update_timer.stop()
+        self.slice_update_timer.singleShot(500, self.update_layout)
+
     def que_update_position(self):
         """Queue an update to the display"""
         # Check if timer active
@@ -932,6 +1027,16 @@ class AlignmentController:
         current_slice.region = self.region_tags[self.region_selection.currentText()]
         current_slice.set_slice(self.atlas, self.annotation)
         self.set_all_angles()
+        self.update_display()
+
+    def update_layout(self):
+        """Update the tissue layout (hemisphere) of the current slice."""
+        current_slice = self.atlas_slices[self.file_list[self.current_section]]
+        label = self.layout_selection.currentText()
+        current_slice.hemisphere = self.layout_tags[label]
+        current_slice.layout_overridden = True
+        current_slice.layout_low_confidence = False
+        current_slice.set_slice(self.atlas, self.annotation)
         self.update_display()
 
     def update_position(self):
@@ -1069,6 +1174,7 @@ class AlignmentController:
         self.y_angle_spinbox.valueChanged.disconnect(self.que_update_slice)
         self.ap_position_spinbox.valueChanged.disconnect(self.que_update_position)
         self.region_selection.currentIndexChanged.disconnect(self.que_update_slice)
+        self.layout_selection.currentIndexChanged.disconnect(self.que_update_layout)
         self.next_button.clicked.disconnect(self.next_section)
         self.previous_button.clicked.disconnect(self.previous_section)
         self.finish_button.clicked.disconnect(self.finish)
@@ -1210,7 +1316,8 @@ class AlignmentController:
             "step": "align",
             "input_dir": self.input_path,
             "output_dir": self.output_path,
-            "whole": self.is_whole,
+            "layout_mode": self.layout_mode,
+            "whole": self.layout_mode == "whole",
             "spacing": self.spacing,
             "legacy": self.use_legacy,
             "slice_filter": sorted(self.slice_filter)
@@ -1218,7 +1325,22 @@ class AlignmentController:
             else None,
             "warp_ok": warp_ok,
             "warp_failed": warp_failed,
+            "slice_layouts": {},
         }
+        for section_name, atlas_slice in self.atlas_slices.items():
+            slice_id = self._slice_id_from_filename(section_name)
+            manifest_payload["slice_layouts"][slice_id] = {
+                "hemisphere": getattr(atlas_slice, "hemisphere", "W"),
+                "layout_confidence": float(
+                    getattr(atlas_slice, "layout_confidence", 1.0)
+                ),
+                "layout_low_confidence": bool(
+                    getattr(atlas_slice, "layout_low_confidence", False)
+                ),
+                "layout_overridden": bool(
+                    getattr(atlas_slice, "layout_overridden", False)
+                ),
+            }
         write_run_manifest(self.output_path, manifest_payload)
 
         report_dir = Path(self.output_path) / ".masonjar"
@@ -1285,7 +1407,7 @@ if __name__ == "__main__":
         model_path=args.model.strip(),
         sam_path=args.sam.strip(),
         spacing=args.spacing if args.spacing else None,
-        is_whole=args.whole.strip().lower() == "true",
+        layout_mode=parse_layout_mode(str(args.whole)),
         use_legacy=args.legacy.strip().lower() == "true",
         slice_filter=slice_filter,
     )
