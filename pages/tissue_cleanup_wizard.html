@@ -26,8 +26,12 @@
         border-radius: 0.375rem;
         background: #1a1a1a;
         cursor: default;
+        position: relative;
       }
       #tissueCanvasViewport.erase-mode {
+        cursor: crosshair;
+      }
+      #tissueCanvasViewport.keep-mode {
         cursor: crosshair;
       }
       #tissueCanvasViewport.trace-mode {
@@ -35,6 +39,9 @@
       }
       #tissueCanvas {
         display: block;
+        position: absolute;
+        top: 0;
+        left: 0;
         transform-origin: 0 0;
       }
       .tool-bar .btn.active {
@@ -83,10 +90,11 @@
           <button type="button" class="btn btn-outline-primary d-none" id="traceDoneBtn" disabled>
             Done tracing
           </button>
-          <button type="button" class="btn btn-outline-secondary" id="eraserBtn">Eraser</button>
+          <button type="button" class="btn btn-outline-danger" id="eraserBtn">Eraser (remove)</button>
+          <button type="button" class="btn btn-outline-success" id="keepBrushBtn">Keep brush (add)</button>
           <button type="button" class="btn btn-outline-secondary" id="resetSliceBtn">Reset</button>
           <button type="button" class="btn btn-outline-secondary" id="undoBtn">Undo</button>
-          <label class="ms-2 small mb-0" for="eraserSize">Eraser</label>
+          <label class="ms-2 small mb-0" for="eraserSize">Brush size</label>
           <input type="range" id="eraserSize" min="4" max="48" value="16" class="form-range" style="width: 8rem" />
           <label class="ms-2 small mb-0" for="edgeShrinkPx">Edge shrink</label>
           <input

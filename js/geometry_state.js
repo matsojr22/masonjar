@@ -162,114 +162,6 @@ function previewPathsForSlice(bundleRoot, sliceId) {
 	return paths;
 }
 
-function sliceMtimeSplit(bundleRoot, sliceId, thresholdSec) {
-	thresholdSec = thresholdSec == null ? 60 : thresholdSec;
-	var mtimes = [];
-	var previews = previewPathsForSlice(bundleRoot, sliceId);
-	for (var i = 0; i < previews.length; i++) {
-		try {
-			mtimes.push(fs.statSync(previews[i].abs_path).mtimeMs);
-		} catch (e) {
-			/* skip */
-		}
-	}
-	var dapiPng = path.join(bundleRoot, DAPI_REL, sliceId + ".png");
-	if (fs.existsSync(dapiPng)) {
-		try {
-			mtimes.push(fs.statSync(dapiPng).mtimeMs);
-		} catch (e2) {
-			/* skip */
-		}
-	}
-	if (mtimes.length < 2) {
-		return false;
-	}
-	mtimes.sort(function (a, b) {
-		return a - b;
-	});
-	var span = (mtimes[mtimes.length - 1] - mtimes[0]) / 1000;
-	return span > thresholdSec;
-}
-
-function slicePreviewDapiMtimeMismatch(bundleRoot, sliceId, thresholdMs) {
-	thresholdMs = thresholdMs == null ? 1000 : thresholdMs;
-	var dapiPng = path.join(bundleRoot, DAPI_REL, sliceId + ".png");
-	if (!fs.existsSync(dapiPng)) {
-		return false;
-	}
-	var dapiM;
-	try {
-		dapiM = fs.statSync(dapiPng).mtimeMs;
-	} catch (e) {
-		return false;
-	}
-	var previews = previewPathsForSlice(bundleRoot, sliceId);
-	for (var i = 0; i < previews.length; i++) {
-		try {
-			if (Math.abs(fs.statSync(previews[i].abs_path).mtimeMs - dapiM) > thresholdMs) {
-				return true;
-			}
-		} catch (e2) {
-			/* skip */
-		}
-	}
-	return false;
-}
-
-function outputsNewerThanGeometryConfig(bundleRoot) {
-	var cfgPath = path.join(bundleRoot, branding.META_DIR, "czi_import_config.json");
-	if (!fs.existsSync(cfgPath)) {
-		return false;
-	}
-	var cfgMtime;
-	try {
-		cfgMtime = fs.statSync(cfgPath).mtimeMs;
-	} catch (e) {
-		return false;
-	}
-	var scanRoots = [
-		path.join(bundleRoot, "data", "original_scans"),
-		path.join(bundleRoot, "data", "counting", "03_max"),
-	];
-	for (var r = 0; r < scanRoots.length; r++) {
-		var root = scanRoots[r];
-		if (!fs.existsSync(root)) {
-			continue;
-		}
-		var stack = [root];
-		while (stack.length) {
-			var dir = stack.pop();
-			var entries;
-			try {
-				entries = fs.readdirSync(dir);
-			} catch (e2) {
-				continue;
-			}
-			for (var i = 0; i < entries.length; i++) {
-				var full = path.join(dir, entries[i]);
-				var st;
-				try {
-					st = fs.statSync(full);
-				} catch (e3) {
-					continue;
-				}
-				if (st.isDirectory()) {
-					stack.push(full);
-					continue;
-				}
-				var lower = entries[i].toLowerCase();
-				if (!lower.endsWith(".tif") && !lower.endsWith(".tiff")) {
-					continue;
-				}
-				if (st.mtimeMs > cfgMtime + 1000) {
-					return true;
-				}
-			}
-		}
-	}
-	return false;
-}
-
 function progressMatches(cziImport, progress) {
 	if (!progress) {
 		return false;
@@ -321,61 +213,18 @@ function assessGeometryApplyState(bundleRoot, cziImport, options) {
 		}
 	}
 
+	// Re-applying when a completed apply already baked the files would stack
+	// transforms on already-transformed images. This is the only "pending after
+	// apply" danger we can detect reliably (geometry_applied_at is an explicit
+	// flag set by finalize, not a guess). The previous mtime-spread and
+	// config-pending heuristics (legacy_partial_suspect / mtime_split /
+	// partial_pending_subset) false-positived on every fresh multi-channel import
+	// — they could not distinguish normal extraction timing or in-progress editing
+	// from a genuine interrupted apply — so they were removed. Interrupted/failed
+	// applies are caught by the explicit progress / last-result meta files above.
 	if (cziImport.geometry_applied_at && pendingCount > 0) {
 		signals.push("reapply_stack_risk");
 		policyState = "interrupted";
-	}
-
-	if (
-		pendingCount > 0 &&
-		pendingCount < sliceIds.length &&
-		(cziImport.geometry_applied_at || outputsNewerThanGeometryConfig(bundleRoot))
-	) {
-		signals.push("partial_pending_subset");
-		policyState = "interrupted";
-	}
-
-	var hasProgressMeta = !!(progress && progressOk);
-	var hasLastResultMeta = !!(lastResult && progressOk);
-	if (
-		!hasProgressMeta &&
-		!hasLastResultMeta &&
-		pendingCount > 0 &&
-		!cziImport.geometry_applied_at
-	) {
-		for (var ls = 0; ls < sliceIds.length; ls++) {
-			var sid = sliceIds[ls];
-			if (!orientGeometry.geometryHasPending(cziImport.geometry[sid])) {
-				continue;
-			}
-			if (sliceMtimeSplit(bundleRoot, sid) || slicePreviewDapiMtimeMismatch(bundleRoot, sid)) {
-				signals.push("legacy_partial_suspect");
-				policyState = "interrupted";
-				break;
-			}
-		}
-	}
-
-	if (
-		signals.indexOf("manifest_incomplete") < 0 &&
-		signals.indexOf("last_result_failed") < 0 &&
-		signals.indexOf("finalize_pending") < 0 &&
-		signals.indexOf("legacy_partial_suspect") < 0 &&
-		pendingCount > 0 &&
-		!cziImport.geometry_applied_at
-	) {
-		for (var s = 0; s < sliceIds.length; s++) {
-			if (
-				orientGeometry.geometryHasPending(cziImport.geometry[sliceIds[s]]) &&
-				sliceMtimeSplit(bundleRoot, sliceIds[s])
-			) {
-				signals.push("mtime_split");
-				if (policyState === "healthy") {
-					policyState = "interrupted";
-				}
-				break;
-			}
-		}
 	}
 
 	var previewBlocked = previewHealth && previewHealth.needsRepair;

@@ -28,27 +28,35 @@ from tissue_mask import (  # noqa: E402
 
 
 def _synthetic_blob(size: int = 128) -> np.ndarray:
-    gray = np.full((size, size), 220, dtype=np.uint8)
-    cv2.circle(gray, (size // 2, size // 2), size // 3, 40, -1)
+    """Bright tissue blob on a dark background (DAPI fluorescence shape)."""
+    gray = np.full((size, size), 40, dtype=np.uint8)
+    cv2.circle(gray, (size // 2, size // 2), size // 3, 220, -1)
     return gray
 
 
-def test_isolate_tissue_mask_finds_dark_blob() -> None:
+def test_isolate_tissue_mask_finds_bright_blob() -> None:
     gray = _synthetic_blob()
     mask = isolate_tissue_mask(gray)
     assert mask.shape == gray.shape
-    assert mask[gray < 100].mean() > 0.9
-    assert mask[gray > 200].mean() < 0.1
+    assert mask[gray > 200].mean() > 0.9
+    assert mask[gray < 100].mean() < 0.1
 
 
 def test_ensure_keep_mask_polarity_inverts_when_background_marked_keep() -> None:
     gray = _synthetic_blob()
-    wrong = np.zeros_like(gray, dtype=np.uint8)
-    wrong[gray < 100] = 0
-    wrong[gray >= 100] = 255
+    # Wrong keep mask marks the dark background as keep; polarity fix must invert it
+    # so the bright tissue blob is kept.
+    wrong = np.where(gray < 100, 255, 0).astype(np.uint8)
     fixed = ensure_keep_mask_polarity(gray, wrong)
-    assert int(fixed[gray < 100].mean()) >= 200
-    assert int(fixed[gray > 200].mean()) < 50
+    assert int(fixed[gray > 200].mean()) >= 200
+    assert int(fixed[gray < 100].mean()) < 50
+
+
+def test_ensure_keep_mask_polarity_keeps_correct_bright_mask() -> None:
+    gray = _synthetic_blob()
+    correct = np.where(gray > 127, 255, 0).astype(np.uint8)
+    out = ensure_keep_mask_polarity(gray, correct)
+    assert np.array_equal(out, correct)
 
 
 def test_auto_keep_mask_uint8() -> None:
@@ -110,10 +118,12 @@ def test_ensure_keep_mask_polarity_inverts_when_tissue_is_brighter() -> None:
     from tissue_mask import ensure_keep_mask_polarity
 
     gray = _synthetic_blob()
+    # Keep mask marks the dark background (wrong); tissue is the brighter blob, so the
+    # polarity fix must invert it to keep the bright tissue.
     inverted = np.where(gray < 100, 255, 0).astype(np.uint8)
     corrected = ensure_keep_mask_polarity(gray, inverted)
-    assert corrected[gray < 100].mean() > 200
-    assert corrected[gray > 200].mean() < 50
+    assert corrected[gray > 200].mean() > 200
+    assert corrected[gray < 100].mean() < 50
 
 
 def test_paths_for_slice_includes_sharpen_tophat(tmp_path: Path) -> None:
@@ -136,6 +146,6 @@ def test_paths_for_slice_includes_sharpen_tophat(tmp_path: Path) -> None:
         tiff.imwrite(p, np.ones((4, 4), dtype=np.uint8))
     cfg = {"channels": [{"role": "signal_somata", "keep": True}]}
     paths = paths_for_slice(bundle, slice_id, cfg)
-    rels = {str(p.relative_to(bundle)) for p in paths}
+    rels = {str(p.relative_to(bundle)).replace("\\", "/") for p in paths}
     assert "data/counting/03_max/somata/sharpen/M528_r3_a2/M528_s001.tif" in rels
     assert "data/counting/03_max/somata/tophat/top10_from_max/M528_s001.tif" in rels

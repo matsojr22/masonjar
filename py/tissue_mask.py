@@ -38,7 +38,11 @@ def isolate_tissue_mask(
     blurred = cv2.GaussianBlur(gray_u8, (5, 5), 0)
     _, otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     mask = otsu > 0
-    if float(np.mean(gray_u8[mask])) > float(np.mean(gray_u8[~mask])):
+    # Tissue is the BRIGHTER region in DAPI fluorescence previews (signal on a dark
+    # background). Keep the Otsu class whose mean intensity is higher; flip only when
+    # the selected class is the darker one. (Earlier code assumed dark tissue on a
+    # bright field, which inverted the mask for every DAPI slice -> all-remove.)
+    if float(np.mean(gray_u8[mask])) < float(np.mean(gray_u8[~mask])):
         mask = ~mask
     se = disk(max(1, int(opening_disk)))
     mask = binary_closing(mask, se)
@@ -70,7 +74,11 @@ def ensure_keep_mask_polarity(gray_u8: np.ndarray, keep_u8: np.ndarray) -> np.nd
         return keep
     mean_on = float(np.mean(gray_u8[on]))
     mean_off = float(np.mean(gray_u8[off]))
-    if mean_on > mean_off:
+    # Keep mask should mark the BRIGHTER tissue (DAPI signal). If the kept pixels are
+    # darker than the rest, the polarity is backwards -> invert. (Earlier code inverted
+    # when keep was brighter, which contradicts the docstring and flipped every DAPI
+    # tissue mask onto the dark background.)
+    if mean_on < mean_off:
         return (255 - keep).astype(np.uint8)
     return keep
 

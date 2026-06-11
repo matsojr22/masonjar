@@ -4,6 +4,48 @@ Last updated: 2026-06-08 (v3.3.7). Use this file to resume work; long-term archi
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
 
+## ACTIVE SESSION — 2026-06-09 (real-data validation + long import; agent handoff)
+
+A debug/validation session is **in progress**. A continuing agent should read this block first.
+
+### Environment quirks on this machine (Windows)
+- **Shell sandbox:** commands fail with "Sandbox policy 'workspace_readwrite' is not supported" / "no exit status". Run every shell command with `required_permissions: ["all"]`.
+- **Venv interpreter is Windows-layout:** `~/.masonjar/benv/Scripts/python.exe` (NOT `benv/bin/python`). It is a python-build-standalone venv, so the `Scripts\python.exe` launcher spawns the base `~/.masonjar/python/python.exe` as a child — seeing **two** python processes for one job is normal, not a double-spawn.
+- The benv had **no pytest and no editable `belljar`**; this session ran `pip install pytest` and `pip install -e . --no-deps` (from `python/`) so the suite runs. `tests/test_training.py` has 6 pre-existing torch.amp failures (out of scope; `--ignore` it).
+- `node_modules` was absent → ran `npm install`. `tsc`/JS tests/electron-forge now work.
+- **App was launched from source** for monitoring (`node_modules\.bin\electron-forge.cmd start`). The main process **batches logs to the in-app Application log window, not stdout**, so terminal capture only shows startup/pip. Monitor failures via `~/.masonjar/masonjar.log` (written only on Python failure / non-zero exit) and inspect on-disk bundle outputs.
+
+### Long import running (~24h)
+- Real project building at **`Y:\Matt_Jacobs\testing_site\masonjar_projects\M457_masonjar`** from CZI sources `Y:\Matt_Jacobs\testing_site\M457\{2022-04-20 (45 files), 2022-04-21 (16 files)}` (5–33 GB each). Channels: **0=somata (primary), 1=other "starters", 2=dapi**.
+- **NAS bandwidth is the bottleneck** (shared link, another user has a heavy memory job). Probe/extract of a single 33 GB mosaic takes minutes — slow ≠ hung. Do **not** run heavy NAS reads for profiling while the import runs.
+- A background monitor shell prints bundle counts every 5 min and emits `MONITOR_ALERT` if `masonjar.log` appears (failure). Restart it if the session resets.
+
+### Uncommitted fixes in the working tree (NOT git-committed — user commits explicitly)
+1. `scripts/release_notes.js` — `parseChangeBullets` split `/\r?\n/` (CRLF dropped all-but-last bullet on Windows; broke `publish-release.js`). Proven via runtime probe.
+2. `scripts/build-release.js` — `resolveTsc()` returns the node-runnable `typescript/bin/tsc`, not the `#!/bin/sh` `.bin/tsc` shim (the shim ran via `node` → SyntaxError, breaking **every** Windows release build).
+3. `python/tests/test_count_region_assignment.py`, `python/tests/test_collate.py` — `_benv_python()` resolves `Scripts/python.exe` on Windows so the **Tier 1 validators actually run** (they were silently skipping on the primary OS).
+4. `python/tests/test_czi_multidir_extract.py`, `python/tests/test_tissue_mask.py` — separator-agnostic path assertions (were hardcoded `/`).
+5. `py/czi_probe.py` + `python/tests/test_czi_probe_heartbeat.py` — **zero-I/O heartbeat** (`LOG:  still probing <file> (Ns elapsed)…` every 4 s) so a long single-file probe no longer looks hung. This was the user-reported "probe second directory looks hung" issue; confirmed via process I/O sampling (probe was reading ~120 MB/s, not stuck).
+6. **Tissue cleanup wizard stuck on step 3 (Apply) — two real bugs, both fixed and verified in-app on M457:**
+   - `js/tissue_cleanup_wizard.js` `finishApply()` called `fileIndex.refreshProjectIndex(root)`, but that function lives on the **`project`** module and is **async**. The `TypeError` threw before `setStep(4)`, stranding the wizard on step 3. Fixed to `project.refreshProjectIndex(root).catch(...)` (non-blocking, matching every other caller). Root cause proven by renderer instrumentation.
+   - `src/main.ts` `runTissueCleanupApply` only delivered `tissueCleanupApplyResult` on the in-band `"Done!"` stdout line. On very long / resource-starved runs that terminal line is dropped, so the result was never sent. Added a `pyshell.on("close")` / `on("error")` **safety net** that finalizes from the on-disk `tissue_cleanup_manifest.json` (a `finished` guard prevents double-send). Confirmed firing via `close` on every M457 test run. **Recompile `main.js`.**
+   - `scripts/test-dapi-cleanup.js` synthetic image flipped to the **DAPI convention** (bright tissue ellipse on dark background) to match this session's `py/tissue_mask.py` polarity fix (`isolate_tissue_mask` keeps the brighter class). It was asserting the old brightfield (dark-tissue) layout.
+7. **Tissue cleanup UX (from the same session):** added a **Keep brush** (green, add tissue) alongside the relabeled **Eraser (remove)** in `pages/tissue_cleanup_wizard.html` + `js/tissue_cleanup_wizard.js` + `js/tissue_cleanup_canvas.js`; keep strokes skip orphan-island pruning. Canvas viewport overflow on wide sections fixed via inline `transform-origin:0 0` + absolute canvas positioning. `py/tissue_mask.py` polarity fix (auto mask was inverting clean DAPI sections to all-remove).
+
+### Validation status (all green)
+- **Python: 388 passed, 0 skipped, 0 failed on Windows** (incl. the now-running Tier 1 count/collate tests) + 2 new heartbeat tests.
+- Tier 1 **count resize-axis** validated on a non-square annotation (detection maps to correct quadrant). **collate** single+multi totals sum correctly. **max** single-Z passthrough + realistic Z-stack projection correct. `csv/structure_map.pkl` present (Count/Align/Intensity OK).
+- **JS: 24/24**. **tsc** clean (`main.js`/`batch_queue.js` in sync — no TS source edits this session). Windows release built: `out/make/zip/win32/x64/masonjar-win32-x64-3.3.7.zip`.
+
+### Still to validate via the live run (monitor outputs)
+CZI extract incl. non-primary "starters" channel; Orient with mixed transforms (verify on-disk previews/z-stacks rotate correctly); detection on a real max TIFF; Count→Collate on real annotations (needs alignment first); a cancelled Batch run.
+
+### OPEN DECISION for the user (ask before implementing)
+`py/map.py` raises a clear error and stops the whole Alignment session when a DAPI PNG is unreadable. Should it instead estimate that slice's AP position from neighbors (delta spacing) so one bad PNG doesn't block the session? Not yet decided.
+
+### Deferred polish (after real-data #1)
+Orientation auto-bake (auto_repairable is conservative/review-only), file-handle leaks, atomic geometry writes, skip-vs-merge run-mode semantics, double overlay render in adjust, unused kill-IPC senders. Also a latent (non-real-data) edge case: `py/max.py` projects over `np.argmin(shape)` — wrong only if a spatial axis is smaller than Z (never with real microscopy images).
+
 ## Current release
 
 | Item | Value |

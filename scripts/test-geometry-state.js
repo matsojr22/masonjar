@@ -97,54 +97,61 @@ function testReapplyStackRisk() {
 	assert.strictEqual(st.allowApply, false);
 }
 
-function testPartialPendingSubset() {
-	var bundle = tempBundle();
-	var cfgPath = path.join(bundle, ".masonjar", "czi_import_config.json");
-	fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
-	fs.writeFileSync(cfgPath, "{}", "utf8");
-	var oldTime = Date.now() - 7 * 24 * 3600 * 1000;
-	fs.utimesSync(cfgPath, oldTime / 1000, oldTime / 1000);
-	var origDir = path.join(bundle, "data/original_scans/somata");
-	fs.mkdirSync(origDir, { recursive: true });
-	var tif = path.join(origDir, "S1.tif");
-	fs.writeFileSync(tif, "tif");
-	fs.utimesSync(tif, Date.now() / 1000, Date.now() / 1000);
-	var czi = {
-		geometry: {
-			S1: { ops: ["rot90"] },
-			S2: { ops: [] },
-		},
-		geometry_applied_at: "2026-01-01T00:00:00.000Z",
-	};
-	var st = geometryState.assessGeometryApplyState(bundle, czi, {
-		sliceIds: ["S1", "S2"],
-		previewHealth: { needsRepair: false, canApply: true },
-	});
-	assert.strictEqual(st.policyState, "interrupted");
-	assert.ok(st.signals.indexOf("partial_pending_subset") >= 0);
-}
-
-function testLegacyPartialSuspect() {
+function testLiveEditingFreshImportStaysHealthy() {
+	// Regression (user-reported): on a freshly extracted multi-channel bundle the
+	// preview/DAPI PNGs are written minutes apart (one phase per channel over a
+	// slow NAS), and the app persists in-progress geometry to czi_import_config.json.
+	// Neither of those is evidence of an interrupted apply. With no apply meta
+	// files and no geometry_applied_at, interactive editing must stay "healthy"
+	// and allow Apply — whether 1, some, or all slices are rotated.
 	var bundle = tempBundle();
 	var prev = path.join(bundle, "data/counting/_previews");
 	var dapiDir = path.join(bundle, "data/counting/00_dapi");
 	fs.mkdirSync(dapiDir, { recursive: true });
-	var somataPng = path.join(prev, "S1_somata.png");
-	var dapiPng = path.join(dapiDir, "S1.png");
-	fs.writeFileSync(somataPng, "png");
-	fs.writeFileSync(dapiPng, "png");
+	var ids = [];
 	var now = Date.now() / 1000;
-	fs.utimesSync(somataPng, now, now);
-	fs.utimesSync(dapiPng, now - 120, now - 120);
-	var czi = {
-		geometry: { S1: { ops: ["rot90"] } },
-	};
-	var st = geometryState.assessGeometryApplyState(bundle, czi, {
-		sliceIds: ["S1"],
+	for (var i = 1; i <= 5; i++) {
+		var sid = "S" + i;
+		ids.push(sid);
+		var somata = path.join(prev, sid + "_somata.png");
+		var dpv = path.join(prev, sid + "_dapi.png");
+		var dapi = path.join(dapiDir, sid + ".png");
+		[somata, dpv, dapi].forEach(function (p) {
+			fs.writeFileSync(p, "png");
+		});
+		fs.utimesSync(somata, now - 300, now - 300);
+		fs.utimesSync(dpv, now, now);
+		fs.utimesSync(dapi, now, now);
+	}
+	var origDir = path.join(bundle, "data/original_scans/somata");
+	fs.mkdirSync(origDir, { recursive: true });
+	fs.writeFileSync(path.join(origDir, "S1.tif"), "tif");
+
+	// 1 of 5 rotated, with the in-progress geometry persisted to config (as the
+	// live app does) — must stay healthy.
+	var czi1 = { geometry: { S1: { ops: ["rot90"] } } };
+	geometryState.writeCziImportConfig(bundle, czi1);
+	var st1 = geometryState.assessGeometryApplyState(bundle, czi1, {
+		sliceIds: ids,
 		previewHealth: { needsRepair: false, canApply: true },
 	});
-	assert.strictEqual(st.policyState, "interrupted");
-	assert.ok(st.signals.indexOf("legacy_partial_suspect") >= 0);
+	assert.strictEqual(st1.policyState, "healthy");
+	assert.deepStrictEqual(st1.signals, []);
+	assert.strictEqual(st1.allowApply, true);
+
+	// All 5 rotated — still healthy.
+	var geomAll = {};
+	ids.forEach(function (sid) {
+		geomAll[sid] = { ops: ["rot90"] };
+	});
+	var cziAll = { geometry: geomAll };
+	geometryState.writeCziImportConfig(bundle, cziAll);
+	var stAll = geometryState.assessGeometryApplyState(bundle, cziAll, {
+		sliceIds: ids,
+		previewHealth: { needsRepair: false, canApply: true },
+	});
+	assert.strictEqual(stAll.policyState, "healthy");
+	assert.strictEqual(stAll.allowApply, true);
 }
 
 function testBuildRepairTargets() {
@@ -242,8 +249,7 @@ function run() {
 	testInterruptedFromLastResult();
 	testFreshPendingAllowsApply();
 	testReapplyStackRisk();
-	testPartialPendingSubset();
-	testLegacyPartialSuspect();
+	testLiveEditingFreshImportStaysHealthy();
 	testBuildRepairTargets();
 	testWriteCziImportConfigIncludesGeometryHash();
 	testFinalizeGeometryAfterApplyClearsPending();

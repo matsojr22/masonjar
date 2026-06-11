@@ -80,6 +80,32 @@ function testGeometryCssTransformUsesMatrix() {
 	assert.match(css, /^matrix\(/);
 }
 
+function parseMatrix(css) {
+	var m = /^matrix\(([^)]+)\)/.exec(css);
+	return m[1].split(",").map(function (v) {
+		return Math.round(Number(v.trim()) * 1000) / 1000;
+	});
+}
+
+// Lock WYSIWYG invariant: the CSS preview must compose ops in the SAME order
+// numpy apply_geometry.py applies them (ops[0] applied first to the image).
+// Verified against py/apply_geometry.py apply_ops_to_array on an asymmetric
+// array: rot90 -> (x+ to screen-down, y+ to screen-left) = 0,1,-1,0;
+// [rot90, flipX] -> (x+ down, y+ right) = 0,1,1,0 (a screen left-right flip of
+// the rotated image, NOT a flip in the original axes).
+function testGeometryCssTransformMatchesNumpyOrder() {
+	var rot = parseMatrix(orientGeometry.geometryCssTransform({ ops: ["rot90"] }));
+	assert.deepStrictEqual(rot.slice(0, 4), [0, 1, -1, 0]);
+	var rotFlip = parseMatrix(orientGeometry.geometryCssTransform({ ops: ["rot90", "flipX"] }));
+	assert.deepStrictEqual(rotFlip.slice(0, 4), [0, 1, 1, 0]);
+	// User-reported chain: rot90, flipX, then two more rot90 -> 180deg of [rot90,flipX].
+	// Verified against py/apply_geometry.py apply_ops_to_array (same 0,-1,-1,0).
+	var chain = parseMatrix(
+		orientGeometry.geometryCssTransform({ ops: ["rot90", "flipX", "rot90", "rot90"] }),
+	);
+	assert.deepStrictEqual(chain.slice(0, 4), [0, -1, -1, 0]);
+}
+
 function testCloneGeometryDeepCopy() {
 	var a = { ops: ["rot90", "flipX"] };
 	var b = orientGeometry.cloneGeometry(a);
@@ -119,6 +145,7 @@ function run() {
 	testLegacyToOpsMigration();
 	testRot90ThenFlipXAppendsOps();
 	testGeometryCssTransformUsesMatrix();
+	testGeometryCssTransformMatchesNumpyOrder();
 	testCloneGeometryDeepCopy();
 	testOrientPostApplySummaryText();
 	testFindGeometryKeysWithoutPreviewFiles();

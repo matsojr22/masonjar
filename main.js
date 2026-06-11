@@ -1929,7 +1929,31 @@ ipcMain.on("runTissueCleanupApply", function (event, data) {
     let total = 0;
     let current = 0;
     let resultPayload = null;
+    let finished = false;
     event.sender.send("updateLoad", [0, "Launching tissue cleanup apply…"]);
+    // Read the on-disk manifest as a last-resort source of truth. The apply
+    // writes it (with ok/applied_files/slices) immediately before emitting the
+    // RESULT line + "Done!", so if the in-band handshake is lost we can still
+    // report an accurate result instead of leaving the UI hung.
+    const readManifestResult = () => {
+        try {
+            const manifestPath = path.join(bundleRoot, ".masonjar", "tissue_cleanup_manifest.json");
+            if (fs.existsSync(manifestPath)) {
+                return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+            }
+        }
+        catch (_err) {
+            // fall through to null
+        }
+        return null;
+    };
+    const finalize = (payload) => {
+        if (finished)
+            return;
+        finished = true;
+        event.sender.send("tissueCleanupApplyResult", payload);
+        ipcMain.removeAllListeners("killTissueCleanup");
+    };
     pyshell.on("message", (message) => {
         if (message.startsWith("LOG:")) {
             const detail = message.slice(4);
@@ -1963,21 +1987,23 @@ ipcMain.on("runTissueCleanupApply", function (event, data) {
                 const pyFail = describePythonShellFailure(err, code, signal);
                 if (pyFail) {
                     reportPythonFailure(pyFail);
-                    event.sender.send("tissueCleanupApplyResult", {
-                        ok: false,
-                        error: pyFail,
-                    });
+                    finalize({ ok: false, error: pyFail });
                 }
                 else if (resultPayload != null) {
-                    event.sender.send("tissueCleanupApplyResult", resultPayload);
+                    finalize(resultPayload);
                 }
                 else {
-                    event.sender.send("tissueCleanupApplyResult", {
-                        ok: false,
-                        error: "Tissue cleanup finished without result",
-                    });
+                    const manifest = readManifestResult();
+                    if (manifest && manifest.ok) {
+                        finalize(manifest);
+                    }
+                    else {
+                        finalize({
+                            ok: false,
+                            error: "Tissue cleanup finished without result",
+                        });
+                    }
                 }
-                ipcMain.removeAllListeners("killTissueCleanup");
             });
         }
         else if (total > 0) {
@@ -1986,6 +2012,44 @@ ipcMain.on("runTissueCleanupApply", function (event, data) {
                 Math.round((current / total) * 100),
                 message,
             ]);
+        }
+    });
+    // Safety net: if the process exits without us delivering a result via the
+    // in-band "Done!" handshake (e.g. a terminal stdout line was dropped on a
+    // very long job), still finalize from the on-disk manifest so the wizard
+    // never hangs on step 3.
+    pyshell.on("close", function () {
+        releaseJob();
+        if (finished)
+            return;
+        if (resultPayload != null) {
+            finalize(resultPayload);
+            return;
+        }
+        const manifest = readManifestResult();
+        if (manifest != null) {
+            finalize(manifest);
+        }
+        else {
+            finalize({
+                ok: false,
+                error: "Tissue cleanup process ended without a result",
+            });
+        }
+    });
+    pyshell.on("error", function (err) {
+        releaseJob();
+        if (finished)
+            return;
+        const manifest = readManifestResult();
+        if (manifest != null && manifest.ok) {
+            finalize(manifest);
+        }
+        else {
+            finalize({
+                ok: false,
+                error: String(err || "Tissue cleanup process error"),
+            });
         }
     });
     ipcMain.once("killTissueCleanup", function () {

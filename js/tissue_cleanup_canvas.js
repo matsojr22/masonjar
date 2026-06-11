@@ -86,6 +86,9 @@ function createTissueCleanupCanvas(opts) {
 		if (!canvas) {
 			return;
 		}
+		// Force top-left origin inline (stylesheet value was being overridden to
+		// center, which shifted wide images right and out of the viewport frame).
+		canvas.style.transformOrigin = "0 0";
 		canvas.style.transform =
 			"translate(" + state.panX + "px," + state.panY + "px) scale(" + state.scale + ")";
 	}
@@ -398,6 +401,7 @@ function createTissueCleanupCanvas(opts) {
 		state.mode = mode;
 		if (viewport) {
 			viewport.classList.toggle("erase-mode", mode === "erase");
+			viewport.classList.toggle("keep-mode", mode === "keep");
 			viewport.classList.toggle("trace-mode", mode === "trace");
 		}
 		if (mode !== "trace") {
@@ -407,20 +411,29 @@ function createTissueCleanupCanvas(opts) {
 		draw();
 	}
 
-	function paintErase(x, y) {
+	function paintBrush(x, y, keepValue) {
 		if (!state.mask) {
 			return;
 		}
 		var mctx = state.mask.getContext("2d");
-		mctx.fillStyle = "#000000";
+		mctx.fillStyle = keepValue ? "#ffffff" : "#000000";
 		mctx.beginPath();
 		mctx.arc(x, y, state.eraserSize / 2, 0, Math.PI * 2);
 		mctx.fill();
 		draw();
 	}
 
+	function paintErase(x, y) {
+		paintBrush(x, y, false);
+	}
+
 	var painting = false;
-	var erasedDuringStroke = false;
+	var paintedDuringStroke = false;
+	var strokeKeepValue = false;
+
+	function isPaintMode(mode) {
+		return mode === "erase" || mode === "keep";
+	}
 
 	function wirePointerEvents() {
 		if (!viewport) {
@@ -428,18 +441,19 @@ function createTissueCleanupCanvas(opts) {
 		}
 
 		viewport.addEventListener("mousedown", function (ev) {
-			if (state.mode !== "erase" && state.mode !== "trace") {
+			if (!isPaintMode(state.mode) && state.mode !== "trace") {
 				return;
 			}
 			ev.preventDefault();
 			var pt = imageCoords(ev.clientX, ev.clientY);
-			if (state.mode === "erase") {
+			if (isPaintMode(state.mode)) {
 				pushUndo();
-				erasedDuringStroke = true;
+				paintedDuringStroke = true;
 				painting = true;
+				strokeKeepValue = state.mode === "keep";
 				state.maskVisible = true;
 				state.sliceUntouched = false;
-				paintErase(pt.x, pt.y);
+				paintBrush(pt.x, pt.y, strokeKeepValue);
 				return;
 			}
 			state.tracePoints.push(pt);
@@ -448,23 +462,31 @@ function createTissueCleanupCanvas(opts) {
 		});
 
 		window.addEventListener("mousemove", function (ev) {
-			if (!painting || state.mode !== "erase") {
+			if (!painting || !isPaintMode(state.mode)) {
 				return;
 			}
 			var pt = imageCoords(ev.clientX, ev.clientY);
-			paintErase(pt.x, pt.y);
+			paintBrush(pt.x, pt.y, strokeKeepValue);
 		});
 
 		window.addEventListener("mouseup", function () {
-			if (painting && state.mode === "erase" && erasedDuringStroke) {
-				pushUndo();
-				var cleared = pruneOrphanKeepIslands();
-				if (cleared > 0 && typeof opts.onOrphansPruned === "function") {
-					opts.onOrphansPruned(cleared);
+			if (painting && paintedDuringStroke) {
+				// Only prune orphan keep islands after an ERASE stroke. A keep-brush
+				// stroke may intentionally add a detached keep region (recovering real
+				// tissue near the edge); pruning would delete it.
+				if (state.mode === "erase") {
+					pushUndo();
+					var cleared = pruneOrphanKeepIslands();
+					if (cleared > 0 && typeof opts.onOrphansPruned === "function") {
+						opts.onOrphansPruned(cleared);
+					}
+				}
+				if (typeof opts.onMaskEdited === "function") {
+					opts.onMaskEdited(state.mode === "keep" ? "keep" : "eraser");
 				}
 			}
 			painting = false;
-			erasedDuringStroke = false;
+			paintedDuringStroke = false;
 		});
 	}
 

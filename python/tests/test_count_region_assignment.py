@@ -25,7 +25,20 @@ import pytest
 PY_DIR = Path(__file__).resolve().parents[2] / "py"
 sys.path.insert(0, str(PY_DIR))
 
-BENV_PYTHON = Path.home() / ".masonjar" / "benv" / "bin" / "python"
+def _benv_python() -> Path:
+    """Resolve the Mason Jar venv interpreter on either layout.
+
+    POSIX venvs put the interpreter in ``benv/bin/python``; Windows venvs use
+    ``benv/Scripts/python.exe``. Hardcoding the POSIX path made these Tier 1
+    behavioral tests silently skip on Windows (the primary OS).
+    """
+    base = Path.home() / ".masonjar" / "benv"
+    win = base / "Scripts" / "python.exe"
+    posix = base / "bin" / "python"
+    return win if win.exists() else posix
+
+
+BENV_PYTHON = _benv_python()
 
 
 def _structure_map() -> dict:

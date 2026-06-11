@@ -63,6 +63,10 @@ var canvas = canvasMod.createTissueCleanupCanvas({
 				"Removed " + n + " stray pixel(s) after erasing.";
 		}
 	},
+	onMaskEdited: function (method) {
+		markSliceEdited(method);
+		persistCurrentSlice();
+	},
 });
 
 function edgeShrinkPx() {
@@ -474,7 +478,9 @@ function finishApply(result) {
 			slices: result.slices || {},
 		};
 		project.saveProjectJson(root, pj);
-		fileIndex.refreshProjectIndex(root);
+		project.refreshProjectIndex(root).catch(function (err) {
+			console.warn("[TissueCleanup] refreshProjectIndex:", err);
+		});
 		try {
 			fs.rmSync(draftDir(), { recursive: true, force: true });
 		} catch (_err) {}
@@ -634,18 +640,37 @@ if (traceDoneBtn) {
 		runGuidedMask(canvas.getTracePointsForJson());
 	});
 }
+function syncBrushButtons() {
+	var eraserBtn = document.getElementById("eraserBtn");
+	var keepBtn = document.getElementById("keepBrushBtn");
+	if (eraserBtn) {
+		eraserBtn.classList.toggle("active", canvas.state.mode === "erase");
+	}
+	if (keepBtn) {
+		keepBtn.classList.toggle("active", canvas.state.mode === "keep");
+	}
+}
 document.getElementById("eraserBtn").addEventListener("click", function () {
-	var btn = document.getElementById("eraserBtn");
 	var next = canvas.state.mode === "erase" ? "idle" : "erase";
 	canvas.setMode(next);
-	if (btn) {
-		btn.classList.toggle("active", next === "erase");
-	}
+	syncBrushButtons();
 	if (canvasStatus && next === "erase") {
 		canvasStatus.textContent =
-			"Paint over areas to remove (shown in red). Stray pixels are cleaned when you release the mouse.";
+			"Paint over areas to REMOVE (shown in red). Stray pixels are cleaned when you release the mouse.";
 	}
 });
+var keepBrushBtn = document.getElementById("keepBrushBtn");
+if (keepBrushBtn) {
+	keepBrushBtn.addEventListener("click", function () {
+		var next = canvas.state.mode === "keep" ? "idle" : "keep";
+		canvas.setMode(next);
+		syncBrushButtons();
+		if (canvasStatus && next === "keep") {
+			canvasStatus.textContent =
+				"Paint to KEEP tissue (shown in green). Use this to recover real tissue trimmed too aggressively at the edges.";
+		}
+	});
+}
 document.getElementById("eraserSize").addEventListener("input", function (ev) {
 	canvas.setEraserSize(Number(ev.target.value) || 16);
 });

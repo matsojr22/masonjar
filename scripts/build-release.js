@@ -296,11 +296,15 @@ function writeManifest(version, targets, artifacts) {
 }
 
 function resolveTsc() {
-	const bin = path.join(REPO_ROOT, "node_modules", ".bin", "tsc");
-	if (fs.existsSync(bin)) {
-		return bin;
+	// Always return a node-runnable entry point: this is invoked via
+	// process.execPath (node), so it must be the TypeScript package's JS bin,
+	// not the node_modules/.bin/tsc shell shim (a #!/bin/sh script on every
+	// platform, including Windows, which `node` cannot parse).
+	const pkgBin = path.join(REPO_ROOT, "node_modules", "typescript", "bin", "tsc");
+	if (fs.existsSync(pkgBin)) {
+		return pkgBin;
 	}
-	return path.join(REPO_ROOT, "node_modules", "typescript", "bin", "tsc");
+	return path.join(REPO_ROOT, "node_modules", ".bin", "tsc");
 }
 
 function main() {

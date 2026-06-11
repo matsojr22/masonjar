@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
+import time
 from pathlib import Path
 
 from czi_common import (
@@ -20,6 +22,36 @@ from czi_common import (
     suggest_role_from_label,
     z_indices_from_czi,
 )
+
+# How often (seconds) to emit a "still probing" heartbeat while a single CZI is
+# being read. Large mosaics (tens of GB) over a busy NAS can take minutes to
+# open/scan; without a heartbeat the wizard log sits on "Probing X.czi" and is
+# indistinguishable from a hang. The heartbeat does no extra I/O.
+PROBE_HEARTBEAT_INTERVAL_S = 4.0
+
+
+def _probe_file_with_heartbeat(czi_path: Path) -> dict:
+    """Run probe_file while emitting a periodic heartbeat for liveness.
+
+    The heartbeat thread only emits LOG lines (mapped to the wizard probe log /
+    Application log by the main process); it never touches the CZI or the NAS,
+    so it adds no bandwidth on a contended link.
+    """
+    done = threading.Event()
+    start = time.monotonic()
+
+    def _beat() -> None:
+        while not done.wait(PROBE_HEARTBEAT_INTERVAL_S):
+            elapsed = int(time.monotonic() - start)
+            emit_log(f"  still probing {czi_path.name} ({elapsed}s elapsed)…")
+
+    beat_thread = threading.Thread(target=_beat, daemon=True)
+    beat_thread.start()
+    try:
+        return probe_file(czi_path)
+    finally:
+        done.set()
+        beat_thread.join(timeout=1.0)
 
 
 def probe_file(path: Path) -> dict:
@@ -135,7 +167,7 @@ def main() -> int:
     for i, czi_path in enumerate(paths):
         emit_progress(f"Probing {czi_path.name}")
         try:
-            results.append(probe_file(czi_path))
+            results.append(_probe_file_with_heartbeat(czi_path))
         except Exception as exc:
             results.append(
                 {

@@ -76,32 +76,25 @@ function affineForOp(op) {
 }
 
 function applyOpsToAffine(ops) {
+	// Pre-multiply so ops[0] is the INNERMOST transform (applied first to the
+	// original image), matching py/apply_geometry.py apply_ops_to_array, which
+	// applies ops sequentially to the numpy array (ops[0] first). Post-multiply
+	// would make ops[0] outermost, mirroring rotate+flip combos in the preview.
 	var m = identityAffine();
 	for (var i = 0; i < ops.length; i++) {
-		m = multiplyAffine(m, affineForOp(ops[i]));
+		m = multiplyAffine(affineForOp(ops[i]), m);
 	}
 	return m;
 }
 
+// Pure-affine composition (no DOMMatrix). Exact for our integer rot/flip ops and
+// identical in Node tests and the Electron renderer, so the on-screen preview is
+// guaranteed to match what the JS test suite and apply_geometry.py produce.
 function applyOpsToDomMatrix(ops) {
-	if (typeof DOMMatrix !== "undefined") {
-		var m = new DOMMatrix();
-		for (var i = 0; i < ops.length; i++) {
-			var op = ops[i];
-			if (op === "rot90") {
-				m.rotateSelf(90);
-			} else if (op === "flipX") {
-				m.scaleSelf(-1, 1);
-			} else if (op === "flipY") {
-				m.scaleSelf(1, -1);
-			}
-		}
-		return m;
-	}
 	return applyOpsToAffine(ops);
 }
 
-/** Preview transform: replay ops in click order (WYSIWYG with apply_geometry.py). */
+/** Preview transform: WYSIWYG with apply_geometry.py (ops[0] applied first to the image). */
 function geometryCssTransform(geom) {
 	var g = normalizeGeometry(geom);
 	if (!g.ops.length) {

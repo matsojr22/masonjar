@@ -38,7 +38,7 @@ function parseChangeBullets(changesText) {
 		return [];
 	}
 	const bullets = [];
-	for (const line of changesText.split("\n")) {
+	for (const line of changesText.split(/\r?\n/)) {
 		const m = line.match(/^\s*[-*]\s+(.+)$/);
 		if (m) {
 			bullets.push(m[1].trim());

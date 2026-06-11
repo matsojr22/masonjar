@@ -29,7 +29,9 @@ function writeSyntheticWithPython(python, outFile) {
 		"h,w=96,128\n" +
 		"y,x=np.ogrid[:h,:w]\n" +
 		"mask=((x-w*0.45)/(w*0.22))**2+((y-h*0.5)/(h*0.28))**2<=1\n" +
-		"img=np.where(mask,60+(x%9),220+(y%5)).astype(np.uint16)\n" +
+		// DAPI convention: bright tissue ellipse on a dark background (real
+		// fluorescence). isolate_tissue_mask keeps the brighter class.
+		"img=np.where(mask,220+(x%9),20+(y%5)).astype(np.uint16)\n" +
 		"tiff.imwrite(" +
 		JSON.stringify(outFile) +
 		", img)\n";

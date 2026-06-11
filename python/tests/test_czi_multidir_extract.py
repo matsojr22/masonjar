@@ -80,6 +80,11 @@ def test_resolve_file_entry_path_over_duplicate_basename() -> None:
     assert resolve_file_entry("M514(1).czi", lookup) is None
 
 
+def _czi_path(item: dict) -> str:
+    """Normalize separators so assertions hold on Windows and POSIX alike."""
+    return str(item["czi_path"]).replace("\\", "/")
+
+
 def test_build_work_items_multidir_distinct_czi_paths() -> None:
     cfg = _multidir_cfg()
     work = build_work_items(cfg)
@@ -87,21 +92,21 @@ def test_build_work_items_multidir_distinct_czi_paths() -> None:
     paths_by_slice: dict[str, set[str]] = {}
     for item in work:
         sid = item["slice_id"]
-        paths_by_slice.setdefault(sid, set()).add(str(item["czi_path"]))
+        paths_by_slice.setdefault(sid, set()).add(_czi_path(item))
     assert len(paths_by_slice) == 6
     for sid, paths in paths_by_slice.items():
         assert len(paths) == 1, f"{sid} mapped to multiple CZI paths: {paths}"
     day1_first = "/day1/M514(1).czi"
     day2_first = "/day2/M514(1).czi"
-    assert str(work[0]["czi_path"]) == day1_first
+    assert _czi_path(work[0]) == day1_first
     assert work[0]["slice_id"] == "M514_s001"
-    folder2_items = [w for w in work if str(w["czi_path"]).startswith("/day2/")]
+    folder2_items = [w for w in work if _czi_path(w).startswith("/day2/")]
     assert len(folder2_items) == 6
     folder2_slices = {w["slice_id"] for w in folder2_items}
     assert folder2_slices == {"M514_s004", "M514_s005", "M514_s006"}
     dup_basename_items = [
-        w for w in work if Path(str(w["czi_path"])).name == "M514(1).czi"
+        w for w in work if Path(_czi_path(w)).name == "M514(1).czi"
     ]
     assert len(dup_basename_items) == 4  # DAPI + somata for each folder's M514(1).czi
-    czi_paths = {str(w["czi_path"]) for w in dup_basename_items}
+    czi_paths = {_czi_path(w) for w in dup_basename_items}
     assert czi_paths == {day1_first, day2_first}
