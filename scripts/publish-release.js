@@ -255,9 +255,7 @@ function buildGithubReleaseBody(version, opts) {
 		lines.push(
 			"- **Windows (x64):** `masonjar-win32-x64-" +
 				version +
-				".zip` — unzip and run the app inside the folder.",
-			"",
-			"_This upload includes the Windows build only. macOS DMGs are published separately with `--all-platforms`._",
+				".zip` — unzip to get a `masonjar-win32-x64` folder, then run `masonjar.exe` inside it.",
 			"",
 		);
 	}
@@ -266,13 +264,6 @@ function buildGithubReleaseBody(version, opts) {
 		"### Upgrading",
 		"",
 		"Install over your previous Mason Jar folder or unzip to a new path. User data and models stay under `~/.masonjar` (Windows: `%USERPROFILE%\\.masonjar`).",
-		"",
-		"### Build from source",
-		"",
-		"```bash",
-		"node scripts/build-release.js",
-		"node scripts/publish-release.js --all-platforms",
-		"```",
 		"",
 	);
 
