@@ -25,6 +25,7 @@ var state = {
 	applyState: null,
 	queue: null,
 	reviewIndex: 0,
+	reviewTotal: 0,
 	reviewOps: null,
 	auditRunning: false,
 	repairRunning: false,
@@ -111,6 +112,19 @@ function writeProbeConfig(extra) {
 	return geometryState.writeCziImportConfig(state.bundleRoot, state.cziImport, extra || {});
 }
 
+function writeConfirmedApplyConfig(confirmedGeometry) {
+	var cfgPath = path.join(state.bundleRoot, branding.META_DIR, "geometry_confirmed_apply.json");
+	var merged = Object.assign({}, state.cziImport, {
+		geometry: confirmedGeometry,
+		apply_source: "repair_confirmed",
+	});
+	merged.config_fingerprint = cziImport.cziImportFingerprint(state.cziImport);
+	merged.geometry_hash = geometryState.geometryOnlyHash(merged);
+	fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+	fs.writeFileSync(cfgPath, JSON.stringify({ czi_import: merged }, null, 2), "utf8");
+	return cfgPath;
+}
+
 function writeRepairConfig(targets) {
 	var cfgPath = path.join(state.bundleRoot, branding.META_DIR, "geometry_repair_run.json");
 	var payload = Object.assign({}, state.cziImport, {
@@ -125,31 +139,85 @@ function writeRepairConfig(targets) {
 	return cfgPath;
 }
 
+function selectedReferenceBranch() {
+	var sel = qs("referenceBranchSelect");
+	if (sel && sel.value) {
+		return sel.value;
+	}
+	return geometryState.defaultReferenceBranch(state.cziImport);
+}
+
 function populateReferenceBranchSelect() {
 	var sel = qs("referenceBranchSelect");
-	if (!sel || !state.queue) {
+	if (!sel) {
 		return;
 	}
 	var branches = {};
-	var slices = state.queue.slices || [];
+	var slices = (state.queue && state.queue.slices) || [];
 	for (var i = 0; i < slices.length; i++) {
 		var chs = slices[i].channels || [];
 		for (var c = 0; c < chs.length; c++) {
 			branches[chs[c].branch] = true;
 		}
 	}
-	sel.innerHTML = "";
+	if (!Object.keys(branches).length) {
+		var channels = cziImport.listOrientDisplayChannels(state.bundleRoot, state.cziImport);
+		for (var k = 0; k < channels.length; k++) {
+			var key = channels[k].key;
+			if (key === cziImport.ORIENT_DISPLAY_DAPI || key === "dapi") {
+				branches.dapi = true;
+			} else {
+				branches[key] = true;
+			}
+		}
+	}
 	var keys = Object.keys(branches).sort();
 	if (!keys.length) {
-		keys = [state.queue.reference_branch || "somata"];
+		keys = [geometryState.defaultReferenceBranch(state.cziImport)];
 	}
-	for (var k = 0; k < keys.length; k++) {
+	var preferred =
+		(state.queue && state.queue.reference_branch) ||
+		selectedReferenceBranch() ||
+		geometryState.defaultReferenceBranch(state.cziImport);
+	sel.innerHTML = "";
+	for (var n = 0; n < keys.length; n++) {
 		var opt = document.createElement("option");
-		opt.value = keys[k];
-		opt.textContent = keys[k];
+		opt.value = keys[n];
+		opt.textContent = keys[n];
 		sel.appendChild(opt);
 	}
-	sel.value = state.queue.reference_branch || keys[0];
+	sel.value = keys.indexOf(preferred) >= 0 ? preferred : keys[0];
+}
+
+function wireReferenceBranchSelect() {
+	var sel = qs("referenceBranchSelect");
+	if (!sel || sel.dataset.wired === "1") {
+		return;
+	}
+	sel.dataset.wired = "1";
+	sel.addEventListener("change", function () {
+		if (state.auditRunning || state.repairRunning) {
+			return;
+		}
+		var prior = state.queue && state.queue.reference_branch;
+		if (!prior || sel.value === prior) {
+			return;
+		}
+		if (
+			!confirm(
+				"Re-run the orientation audit using “" +
+					sel.value +
+					"” as the reference branch? Other channels will be compared against its tissue layout.",
+			)
+		) {
+			sel.value = prior;
+			return;
+		}
+		runAudit().catch(function (err) {
+			appendLog("geometryRepairLog", "ERROR: " + String(err.message || err));
+			setBar("auditProgress", 0, "auditStatus", "Audit failed: " + err.message);
+		});
+	});
 }
 
 function renderAuditSummary() {
@@ -195,14 +263,33 @@ function renderReviewSlice() {
 		renderConfirmSummary();
 		return;
 	}
-	if (state.reviewIndex >= reviewSlices.length) {
+	var awaiting = geometryState.slicesAwaitingReviewConfirmation(state.queue);
+	if (!state.reviewTotal || state.reviewTotal < reviewSlices.length) {
+		state.reviewTotal = reviewSlices.length;
+	}
+	state.reviewIndex = 0;
+	var sl = reviewSlices[0];
+	if (!sl) {
 		setStep(3);
 		renderConfirmSummary();
 		return;
 	}
-	var sl = reviewSlices[state.reviewIndex];
+	var reviewPosition = state.reviewTotal - reviewSlices.length + 1;
+	var warnEl = qs("reviewBlockingBanner");
+	if (warnEl) {
+		if (awaiting.length) {
+			warnEl.className = "alert alert-warning small";
+			warnEl.textContent =
+				reviewBlockingMessage() +
+				" Use Confirm slice (after any rotation) or No rotation needed.";
+		} else {
+			warnEl.className = "d-none";
+			warnEl.textContent = "";
+		}
+	}
 	state.reviewOps = orientGeometry.cloneGeometry({ ops: (sl.pending_ops || []).slice() });
-	qs("reviewSliceTitle").textContent = sl.slice_id + " (" + (state.reviewIndex + 1) + "/" + reviewSlices.length + ")";
+	qs("reviewSliceTitle").textContent =
+		sl.slice_id + " (" + reviewPosition + "/" + state.reviewTotal + ")";
 	qs("reviewSliceIssue").textContent = "Issue: " + (sl.issue || "review");
 	updateReviewOpsStatus();
 
@@ -253,12 +340,29 @@ function updateReviewOpsStatus() {
 
 function confirmCurrentReviewSlice() {
 	var reviewSlices = geometryState.slicesNeedingReview(state.queue);
-	var sl = reviewSlices[state.reviewIndex];
+	var sl = reviewSlices[0];
 	if (!sl) {
 		return;
 	}
 	sl.confirmed_ops = (state.reviewOps && state.reviewOps.ops) ? state.reviewOps.ops.slice() : [];
 	sl.needs_manual_review = false;
+	persistReviewSlice(sl);
+	advanceReviewAfterConfirm();
+}
+
+function confirmCurrentReviewSliceNoChange() {
+	var reviewSlices = geometryState.slicesNeedingReview(state.queue);
+	var sl = reviewSlices[0];
+	if (!sl) {
+		return;
+	}
+	sl.confirmed_ops = [];
+	sl.needs_manual_review = false;
+	persistReviewSlice(sl);
+	advanceReviewAfterConfirm();
+}
+
+function persistReviewSlice(sl) {
 	for (var i = 0; i < (state.queue.slices || []).length; i++) {
 		if (state.queue.slices[i].slice_id === sl.slice_id) {
 			state.queue.slices[i] = sl;
@@ -266,22 +370,189 @@ function confirmCurrentReviewSlice() {
 		}
 	}
 	geometryState.writeRepairQueue(state.bundleRoot, state.queue);
-	state.reviewIndex += 1;
+}
+
+function advanceReviewAfterConfirm() {
+	state.reviewIndex = 0;
 	renderReviewSlice();
 }
 
-function skipCurrentReviewSlice() {
-	state.reviewIndex += 1;
-	renderReviewSlice();
+function reviewBlockingMessage() {
+	var awaiting = geometryState.slicesAwaitingReviewConfirmation(state.queue);
+	if (!awaiting.length) {
+		return "";
+	}
+	var ids = awaiting.slice(0, 8).map(function (sl) {
+		return sl.slice_id;
+	});
+	var tail = awaiting.length > 8 ? "… +" + (awaiting.length - 8) + " more" : "";
+	return (
+		awaiting.length +
+		" section(s) were skipped without confirmation and will not be repaired: " +
+		ids.join(", ") +
+		tail
+	);
+}
+
+function updateRepairPlanControls() {
+	var awaiting = geometryState.slicesAwaitingReviewConfirmation(state.queue);
+	var runBtn = qs("runRepair");
+	var warnEl = qs("confirmRepairWarning");
+	if (warnEl) {
+		if (awaiting.length) {
+			warnEl.className = "alert alert-warning small";
+			warnEl.textContent = reviewBlockingMessage();
+		} else {
+			warnEl.className = "d-none";
+			warnEl.textContent = "";
+		}
+	}
+	if (runBtn) {
+		runBtn.disabled = awaiting.length > 0;
+	}
 }
 
 function renderConfirmSummary() {
-	var targets = geometryState.buildRepairTargetsFromQueue(state.queue);
+	var confirmedGeometry = geometryState.buildConfirmedGeometryFromQueue(state.queue);
+	var autoTargets = geometryState.buildAutoRepairTargetsFromQueue(state.queue);
+	var displayTargets = geometryState.buildRepairTargetsFromQueue(state.queue);
 	var pre = qs("confirmSummary");
 	if (pre) {
-		pre.textContent = JSON.stringify(targets, null, 2);
+		var confirmedIds = Object.keys(confirmedGeometry);
+		var header =
+			confirmedIds.length +
+			" section(s) with confirmed rotation (full pipeline apply) · " +
+			autoTargets.length +
+			" auto-repair target(s)\n\n";
+		pre.textContent = header + JSON.stringify(displayTargets, null, 2);
 	}
-	state.repairTargets = targets;
+	state.repairTargets = autoTargets;
+	state.confirmedGeometry = confirmedGeometry;
+	updateRepairPlanControls();
+}
+
+function sendApplyGeometryJob(cfgPath, label) {
+	return new Promise(function (resolve, reject) {
+		function onProgress(ev, data) {
+			var pct = Number(data[0]) || 0;
+			var msg = String(data[1] || "");
+			setBar("repairProgress", pct, "repairStatus", msg || label);
+		}
+		function onJobLog(ev, line) {
+			var msg = String(line || "").trim();
+			if (msg) {
+				appendLog("repairLog", msg.replace(/^LOG:\s*/i, ""));
+			}
+		}
+		function onResult(ev, payload) {
+			ipc.removeListener("updateLoad", onProgress);
+			ipc.removeListener("cziJobLog", onJobLog);
+			ipc.removeListener("applyGeometryResult", onResult);
+			if (!payload || payload.ok === false) {
+				reject(new Error((payload && payload.error) || label + " failed"));
+				return;
+			}
+			resolve(payload);
+		}
+		ipc.on("updateLoad", onProgress);
+		ipc.on("cziJobLog", onJobLog);
+		ipc.once("applyGeometryResult", onResult);
+		ipc.send("runApplyGeometry", [String(state.bundleRoot).trim(), String(cfgPath).trim()]);
+	});
+}
+
+function runConfirmedGeometryApply(confirmedGeometry) {
+	var ids = Object.keys(confirmedGeometry);
+	if (!ids.length) {
+		return Promise.resolve(null);
+	}
+	setBar(
+		"repairProgress",
+		5,
+		"repairStatus",
+		"Applying confirmed orientation to " + ids.length + " section(s)…",
+	);
+	appendLog(
+		"repairLog",
+		"Full pipeline apply for " + ids.length + " manually confirmed section(s)",
+	);
+	var cfgPath = writeConfirmedApplyConfig(confirmedGeometry);
+	return sendApplyGeometryJob(cfgPath, "Confirmed geometry apply");
+}
+
+function runAutoRepairJobs(targets) {
+	if (!targets.length) {
+		return Promise.resolve(null);
+	}
+	setBar("repairProgress", 5, "repairStatus", "Starting auto-repair (" + targets.length + " target(s))…");
+	var cfgPath = writeRepairConfig(targets);
+	return sendApplyGeometryJob(cfgPath, "Auto-repair");
+}
+
+function mergeRepairPayloads(confirmedResult, repairResult, confirmedGeometry) {
+	var confirmedIds = Object.keys(confirmedGeometry || {});
+	if (!confirmedResult && !repairResult) {
+		return {
+			ok: true,
+			changed: 0,
+			files_total: 0,
+			bytes_total: 0,
+			elapsed_sec: 0,
+			failed: [],
+			confirmed_sections: confirmedIds.length,
+		};
+	}
+	if (!repairResult) {
+		return Object.assign({}, confirmedResult, {
+			apply_source: confirmedResult.apply_source || "repair_confirmed",
+			confirmed_sections: confirmedIds.length,
+		});
+	}
+	if (!confirmedResult) {
+		return Object.assign({}, repairResult, {
+			confirmed_sections: 0,
+		});
+	}
+	return {
+		ok: confirmedResult.ok !== false && repairResult.ok !== false,
+		changed: (confirmedResult.changed || 0) + (repairResult.changed || 0),
+		files_total: (confirmedResult.files_total || 0) + (repairResult.files_total || 0),
+		bytes_total: (confirmedResult.bytes_total || 0) + (repairResult.bytes_total || 0),
+		elapsed_sec: (confirmedResult.elapsed_sec || 0) + (repairResult.elapsed_sec || 0),
+		failed: [].concat(confirmedResult.failed || [], repairResult.failed || []),
+		apply_source: "repair",
+		repair_mode: repairResult.repair_mode || "geometry",
+		confirmed_sections: confirmedIds.length,
+		auto_repair_targets: repairResult.files_total || 0,
+	};
+}
+
+function finalizeRepairSuccess(payload) {
+	setBar("repairProgress", 100, "repairStatus", "Repair complete");
+	var summary =
+		"Repair complete — " +
+		(payload.changed != null ? payload.changed : "?") +
+		" file(s)";
+	if (payload.confirmed_sections) {
+		summary += " (" + payload.confirmed_sections + " confirmed section(s)";
+		if (payload.auto_repair_targets) {
+			summary += ", " + payload.auto_repair_targets + " auto-repair target(s)";
+		}
+		summary += ")";
+	}
+	appendLog("repairLog", summary);
+	var proj = project.getProject();
+	if (proj) {
+		if (state.confirmedGeometry) {
+			orientGeometry.resetGeometryMap(state.cziImport.geometry, Object.keys(state.confirmedGeometry));
+		}
+		state.cziImport.geometry_applied_at = new Date().toISOString();
+		proj.settings = proj.settings || {};
+		proj.settings.czi_import = state.cziImport;
+		project.saveProjectJson();
+	}
+	writeProbeConfig({});
+	return payload;
 }
 
 function runAudit() {
@@ -304,7 +575,7 @@ function runAudit() {
 
 	var probeCfg = writeProbeConfig({
 		slice_ids: state.sliceIds,
-		reference_branch: state.applyState.referenceBranch,
+		reference_branch: selectedReferenceBranch(),
 		geometry: state.cziImport.geometry || {},
 	});
 
@@ -369,52 +640,46 @@ function runRepair() {
 	if (state.repairRunning) {
 		return;
 	}
+	var awaiting = geometryState.slicesAwaitingReviewConfirmation(state.queue);
+	if (awaiting.length) {
+		alert(reviewBlockingMessage());
+		return;
+	}
 	state.repairRunning = true;
 	setStep(4);
-	var targets = state.repairTargets || geometryState.buildRepairTargetsFromQueue(state.queue);
-	var cfgPath = writeRepairConfig(targets);
+	var confirmedGeometry =
+		state.confirmedGeometry || geometryState.buildConfirmedGeometryFromQueue(state.queue);
+	var autoTargets =
+		state.repairTargets || geometryState.buildAutoRepairTargetsFromQueue(state.queue);
+	state.confirmedGeometry = confirmedGeometry;
 
-	return new Promise(function (resolve, reject) {
-		function onProgress(ev, data) {
-			var pct = Number(data[0]) || 0;
-			var msg = String(data[1] || "");
-			setBar("repairProgress", pct, "repairStatus", msg);
-		}
-		function onJobLog(ev, line) {
-			var msg = String(line || "").trim();
-			if (msg) {
-				appendLog("repairLog", msg.replace(/^LOG:\s*/i, ""));
+	return runConfirmedGeometryApply(confirmedGeometry)
+		.then(function (confirmedResult) {
+			if (confirmedResult) {
+				orientGeometry.resetGeometryMap(
+					state.cziImport.geometry,
+					Object.keys(confirmedGeometry),
+				);
 			}
-		}
-		function onResult(ev, payload) {
-			ipc.removeListener("updateLoad", onProgress);
-			ipc.removeListener("cziJobLog", onJobLog);
-			ipc.removeListener("applyGeometryResult", onResult);
+			return runAutoRepairJobs(autoTargets).then(function (repairResult) {
+				return { confirmedResult: confirmedResult, repairResult: repairResult };
+			});
+		})
+		.then(function (pair) {
+			var merged = mergeRepairPayloads(
+				pair.confirmedResult,
+				pair.repairResult,
+				confirmedGeometry,
+			);
 			state.repairRunning = false;
-			geometryState.persistLastApplyResult(state.bundleRoot, state.cziImport, payload || {});
-			if (!payload || payload.ok === false) {
-				setBar("repairProgress", 0, "repairStatus", "Repair failed");
-				reject(new Error((payload && payload.error) || "Repair failed"));
-				return;
-			}
-			setBar("repairProgress", 100, "repairStatus", "Repair complete");
-			var proj = project.getProject();
-			if (proj) {
-				orientGeometry.resetGeometryMap(state.cziImport.geometry, state.sliceIds);
-				state.cziImport.geometry_applied_at = new Date().toISOString();
-				proj.settings = proj.settings || {};
-				proj.settings.czi_import = state.cziImport;
-				project.saveProjectJson();
-			}
-			writeProbeConfig({});
-			resolve(payload);
-		}
-		ipc.on("updateLoad", onProgress);
-		ipc.on("cziJobLog", onJobLog);
-		ipc.once("applyGeometryResult", onResult);
-		setBar("repairProgress", 5, "repairStatus", "Starting repair…");
-		ipc.send("runApplyGeometry", [String(state.bundleRoot).trim(), String(cfgPath).trim()]);
-	});
+			geometryState.persistLastApplyResult(state.bundleRoot, state.cziImport, merged);
+			return finalizeRepairSuccess(merged);
+		})
+		.catch(function (err) {
+			state.repairRunning = false;
+			setBar("repairProgress", 0, "repairStatus", "Repair failed");
+			throw err;
+		});
 }
 
 function init() {
@@ -434,6 +699,8 @@ function init() {
 		return;
 	}
 	state.cziImport = loadCziImportConfig();
+	populateReferenceBranchSelect();
+	wireReferenceBranchSelect();
 
 	var step1NextBtn = qs("step1Next");
 	if (step1NextBtn) {
@@ -446,6 +713,7 @@ function init() {
 			var needReview = geometryState.slicesNeedingReview(state.queue).length;
 			if (needReview > 0) {
 				state.reviewIndex = 0;
+				state.reviewTotal = needReview;
 				setStep(2);
 				renderReviewSlice();
 			} else {
@@ -467,7 +735,10 @@ function init() {
 		updateReviewOpsStatus();
 	});
 	qs("reviewConfirmSlice").addEventListener("click", confirmCurrentReviewSlice);
-	qs("reviewSkipSlice").addEventListener("click", skipCurrentReviewSlice);
+	var reviewNoChangeBtn = qs("reviewNoChangeSlice");
+	if (reviewNoChangeBtn) {
+		reviewNoChangeBtn.addEventListener("click", confirmCurrentReviewSliceNoChange);
+	}
 	qs("runRepair").addEventListener("click", function () {
 		runRepair().catch(function (err) {
 			alert(String(err.message || err));

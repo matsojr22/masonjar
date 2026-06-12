@@ -177,6 +177,94 @@ function testBuildRepairTargets() {
 	assert.deepStrictEqual(targets[0].ops, ["rot90"]);
 }
 
+function testBuildRepairTargetsUpgradesSkipWhenConfirmed() {
+	var queue = {
+		slices: [
+			{
+				slice_id: "S1",
+				issue: "low_confidence",
+				confirmed_ops: ["rot90", "rot90"],
+				channels: [
+					{
+						branch: "dapi",
+						rel_path: "data/counting/_previews/S1_dapi.png",
+						suggested_strategy: "skip",
+					},
+					{
+						branch: "somata",
+						rel_path: "data/counting/_previews/S1_somata.png",
+						suggested_strategy: "skip",
+					},
+				],
+			},
+		],
+	};
+	var targets = geometryState.buildRepairTargetsFromQueue(queue);
+	assert.strictEqual(targets.length, 2);
+	assert.strictEqual(targets[0].strategy, "derivatives_from_original");
+	assert.strictEqual(targets[1].strategy, "derivatives_from_original");
+}
+
+function testBuildConfirmedGeometryFromQueue() {
+	var queue = {
+		slices: [
+			{ slice_id: "S1", confirmed_ops: ["rot90", "rot90"] },
+			{ slice_id: "S2", confirmed_ops: null },
+			{ slice_id: "S3", confirmed_ops: [] },
+		],
+	};
+	var geometry = geometryState.buildConfirmedGeometryFromQueue(queue);
+	assert.deepStrictEqual(Object.keys(geometry).sort(), ["S1"]);
+	assert.deepStrictEqual(geometry.S1.ops, ["rot90", "rot90"]);
+}
+
+function testSlicesAwaitingReviewConfirmation() {
+	var queue = {
+		slices: [
+			{ slice_id: "S1", needs_manual_review: true, confirmed_ops: null },
+			{ slice_id: "S2", needs_manual_review: true, confirmed_ops: ["rot90"] },
+			{ slice_id: "S3", needs_manual_review: false, confirmed_ops: null },
+			{ slice_id: "S4", needs_manual_review: true, confirmed_ops: [] },
+		],
+	};
+	var awaiting = geometryState.slicesAwaitingReviewConfirmation(queue);
+	assert.strictEqual(awaiting.length, 1);
+	assert.strictEqual(awaiting[0].slice_id, "S1");
+}
+
+function testBuildAutoRepairTargetsExcludesConfirmed() {
+	var queue = {
+		slices: [
+			{
+				slice_id: "S1",
+				confirmed_ops: ["rot90", "rot90"],
+				issue: "low_confidence",
+				channels: [
+					{
+						branch: "dapi",
+						rel_path: "data/counting/_previews/S1_dapi.png",
+						suggested_strategy: "skip",
+					},
+				],
+			},
+			{
+				slice_id: "S2",
+				issue: "cross_channel_mismatch",
+				channels: [
+					{
+						branch: "dapi",
+						rel_path: "data/counting/_previews/S2_dapi.png",
+						suggested_strategy: "derivatives_from_original",
+					},
+				],
+			},
+		],
+	};
+	var auto = geometryState.buildAutoRepairTargetsFromQueue(queue);
+	assert.strictEqual(auto.length, 1);
+	assert.strictEqual(auto[0].slice_id, "S2");
+}
+
 function testWriteCziImportConfigIncludesGeometryHash() {
 	var bundle = tempBundle();
 	var czi = {
@@ -251,6 +339,10 @@ function run() {
 	testReapplyStackRisk();
 	testLiveEditingFreshImportStaysHealthy();
 	testBuildRepairTargets();
+	testBuildRepairTargetsUpgradesSkipWhenConfirmed();
+	testBuildConfirmedGeometryFromQueue();
+	testSlicesAwaitingReviewConfirmation();
+	testBuildAutoRepairTargetsExcludesConfirmed();
 	testWriteCziImportConfigIncludesGeometryHash();
 	testFinalizeGeometryAfterApplyClearsPending();
 	testReconcileClearsStalePendingAfterSuccessfulApply();

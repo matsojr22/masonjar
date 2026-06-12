@@ -86,12 +86,18 @@
       <section id="step1" class="wizard-panel d-none">
         <div id="auditSummary" class="alert alert-info small"></div>
         <label class="small" for="referenceBranchSelect">Reference branch</label>
-        <select id="referenceBranchSelect" class="form-select form-select-sm mb-3" style="max-width: 16rem"></select>
+        <select id="referenceBranchSelect" class="form-select form-select-sm mb-1" style="max-width: 16rem"></select>
+        <p class="small text-muted mb-3">
+          The reference branch is the channel treated as correctly oriented within each section.
+          DAPI and other channels are compared to its tissue mask. Changing this re-runs the audit.
+          Defaults to your primary signal branch (e.g. somata).
+        </p>
         <button type="button" class="btn btn-primary" id="step1Next">Continue to review</button>
         <a class="btn btn-outline-secondary ms-2" id="step1BackOrient" href="./orient.html">Back to Orient</a>
       </section>
 
       <section id="step2" class="wizard-panel d-none">
+        <div id="reviewBlockingBanner" class="d-none"></div>
         <p id="reviewSliceTitle" class="fw-semibold"></p>
         <p id="reviewSliceIssue" class="small text-muted"></p>
         <div id="reviewChannelGrid" class="repair-channel-grid mb-3"></div>
@@ -99,14 +105,15 @@
           <button type="button" class="btn btn-sm btn-outline-secondary" data-geo="rot90" id="reviewRot90">↻ 90°</button>
           <button type="button" class="btn btn-sm btn-outline-secondary ms-1" data-geo="flipX" id="reviewFlipX">Flip X</button>
           <button type="button" class="btn btn-sm btn-outline-secondary ms-1" data-geo="flipY" id="reviewFlipY">Flip Y</button>
-          <button type="button" class="btn btn-sm btn-outline-warning ms-2" id="reviewSkipSlice">Skip slice</button>
         </div>
         <p id="reviewOpsStatus" class="small text-muted"></p>
         <button type="button" class="btn btn-primary" id="reviewConfirmSlice">Confirm slice</button>
+        <button type="button" class="btn btn-outline-secondary ms-2" id="reviewNoChangeSlice">No rotation needed</button>
       </section>
 
       <section id="step3" class="wizard-panel d-none">
         <p class="text-muted">Review repair plan, then run repair.</p>
+        <div id="confirmRepairWarning" class="d-none"></div>
         <pre id="confirmSummary" class="wizard-log small mb-3"></pre>
         <button type="button" class="btn btn-primary" id="runRepair">Run repair</button>
         <button type="button" class="btn btn-outline-secondary ms-2" id="step3Back">Back</button>

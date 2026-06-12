@@ -344,7 +344,21 @@ function writeRepairQueue(bundleRoot, queue) {
 
 function mergeProbeIntoQueue(bundleRoot, probeResult, cziImport) {
 	var existing = readRepairQueue(bundleRoot) || {};
-	var slices = (probeResult && probeResult.slices) || [];
+	var existingById = {};
+	var existingSlices = existing.slices || [];
+	for (var e = 0; e < existingSlices.length; e++) {
+		if (existingSlices[e].slice_id) {
+			existingById[existingSlices[e].slice_id] = existingSlices[e];
+		}
+	}
+	var slices = ((probeResult && probeResult.slices) || []).slice();
+	for (var i = 0; i < slices.length; i++) {
+		var prev = existingById[slices[i].slice_id];
+		if (prev && prev.confirmed_ops && prev.confirmed_ops.length) {
+			slices[i].confirmed_ops = prev.confirmed_ops.slice();
+			slices[i].needs_manual_review = false;
+		}
+	}
 	var queue = {
 		slices: slices,
 		reference_branch:
@@ -394,6 +408,74 @@ function slicesNeedingReview(queue) {
 	});
 }
 
+function slicesAwaitingReviewConfirmation(queue) {
+	return (queue.slices || []).filter(function (sl) {
+		return sl.needs_manual_review && sl.confirmed_ops == null;
+	});
+}
+
+function sliceReviewIsSettled(sl) {
+	return sl.confirmed_ops != null;
+}
+
+function sliceHasConfirmedOps(sl) {
+	var ops = sl && sl.confirmed_ops;
+	return !!(ops && ops.length && !orientGeometry.isIdentityGeometry({ ops: ops }));
+}
+
+function resolveRepairStrategy(ch, sl) {
+	var strategy =
+		ch.confirmed_strategy || ch.suggested_strategy || "derivatives_from_original";
+	if (strategy === "skip" && sliceHasConfirmedOps(sl)) {
+		return "derivatives_from_original";
+	}
+	return strategy;
+}
+
+function buildConfirmedGeometryFromQueue(queue) {
+	var geometry = {};
+	var slices = queue.slices || [];
+	for (var i = 0; i < slices.length; i++) {
+		var sl = slices[i];
+		if (!sliceHasConfirmedOps(sl)) {
+			continue;
+		}
+		geometry[sl.slice_id] = { ops: sl.confirmed_ops.slice() };
+	}
+	return geometry;
+}
+
+function buildAutoRepairTargetsFromQueue(queue) {
+	var targets = [];
+	var slices = queue.slices || [];
+	for (var i = 0; i < slices.length; i++) {
+		var sl = slices[i];
+		if (sliceHasConfirmedOps(sl)) {
+			continue;
+		}
+		var ops = sl.pending_ops || [];
+		if (!ops.length && sl.issue === "ok") {
+			continue;
+		}
+		var channels = sl.channels || [];
+		for (var c = 0; c < channels.length; c++) {
+			var ch = channels[c];
+			if (ch.suggested_strategy === "skip") {
+				continue;
+			}
+			targets.push({
+				slice_id: sl.slice_id,
+				branch: ch.branch,
+				rel_path: ch.rel_path,
+				strategy:
+					ch.confirmed_strategy || ch.suggested_strategy || "derivatives_from_original",
+				ops: ops,
+			});
+		}
+	}
+	return targets;
+}
+
 function buildRepairTargetsFromQueue(queue) {
 	var targets = [];
 	var slices = queue.slices || [];
@@ -413,7 +495,7 @@ function buildRepairTargetsFromQueue(queue) {
 				slice_id: sl.slice_id,
 				branch: ch.branch,
 				rel_path: ch.rel_path,
-				strategy: ch.confirmed_strategy || ch.suggested_strategy || "derivatives_from_original",
+				strategy: resolveRepairStrategy(ch, sl),
 				ops: sl.confirmed_ops || sl.pending_ops || [],
 			});
 		}
@@ -548,6 +630,11 @@ module.exports = {
 	mergeProbeIntoQueue: mergeProbeIntoQueue,
 	summarizeQueue: summarizeQueue,
 	slicesNeedingReview: slicesNeedingReview,
+	slicesAwaitingReviewConfirmation: slicesAwaitingReviewConfirmation,
+	sliceReviewIsSettled: sliceReviewIsSettled,
+	sliceHasConfirmedOps: sliceHasConfirmedOps,
+	buildConfirmedGeometryFromQueue: buildConfirmedGeometryFromQueue,
+	buildAutoRepairTargetsFromQueue: buildAutoRepairTargetsFromQueue,
 	buildRepairTargetsFromQueue: buildRepairTargetsFromQueue,
 	batchGeometryPreflight: batchGeometryPreflight,
 	writeCziImportConfig: writeCziImportConfig,
