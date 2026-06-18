@@ -62,6 +62,18 @@ def test_line_based_fallback(mod, tmp_path: Path) -> None:
 
 
 @MODULES
+def test_ome_tif_stem(mod, tmp_path: Path) -> None:
+    in_dir = tmp_path / "in"
+    in_dir.mkdir(parents=True, exist_ok=True)
+    tifffile.imwrite(str(in_dir / "M528_s001.ome.tif"), np.zeros((4, 4), dtype=np.uint8))
+    slice_list = tmp_path / "run_slice_list.json"
+    slice_list.write_text(json.dumps({"slice_ids": ["M528_s001"]}))
+    files = mod.list_input_files(in_dir, str(slice_list))
+    assert len(files) == 1
+    assert files[0].name == "M528_s001.ome.tif"
+
+
+@MODULES
 def test_no_slice_list_returns_all(mod, tmp_path: Path) -> None:
     in_dir = tmp_path / "in"
     _make_tifs(in_dir, ["one", "two"])

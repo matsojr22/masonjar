@@ -316,6 +316,91 @@ function resolveOutputLeafDir(bundleRoot, stepId, roles, activeRuns) {
 	return resolveIndexLeafDir(bundleRoot, roles, cfg.role, activeRuns);
 }
 
+function sliceImageExistsInDir(dir, sliceId) {
+	if (!dir || !fs.existsSync(dir)) {
+		return false;
+	}
+	var imgs = listImageFiles(dir);
+	for (var im = 0; im < imgs.length; im++) {
+		if (sliceIdFromFilename(path.basename(imgs[im])) === sliceId) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function scanPreprocessStepLeaves(maxBase, stepId, sliceId) {
+	if (!maxBase || !fs.existsSync(maxBase)) {
+		return false;
+	}
+	var flatStep = path.join(maxBase, stepId);
+	if (fs.existsSync(flatStep)) {
+		var flatRuns;
+		try {
+			flatRuns = fs.readdirSync(flatStep, { withFileTypes: true });
+		} catch (_err) {
+			flatRuns = [];
+		}
+		for (var fr = 0; fr < flatRuns.length; fr++) {
+			if (!flatRuns[fr].isDirectory()) {
+				continue;
+			}
+			if (sliceImageExistsInDir(path.join(flatStep, flatRuns[fr].name), sliceId)) {
+				return true;
+			}
+		}
+	}
+	var branches;
+	try {
+		branches = fs.readdirSync(maxBase, { withFileTypes: true });
+	} catch (_err2) {
+		return false;
+	}
+	for (var b = 0; b < branches.length; b++) {
+		if (!branches[b].isDirectory()) {
+			continue;
+		}
+		if (branches[b].name === stepId || branches[b].name === "max" || branches[b].name === "sharpen" || branches[b].name === "tophat") {
+			continue;
+		}
+		var stepDir = path.join(maxBase, branches[b].name, stepId);
+		if (!fs.existsSync(stepDir)) {
+			continue;
+		}
+		var runs;
+		try {
+			runs = fs.readdirSync(stepDir, { withFileTypes: true });
+		} catch (_err3) {
+			continue;
+		}
+		for (var r = 0; r < runs.length; r++) {
+			if (!runs[r].isDirectory()) {
+				continue;
+			}
+			if (sliceImageExistsInDir(path.join(stepDir, runs[r].name), sliceId)) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+function preprocessOutputExistsForSlice(bundleRoot, stepId, sliceId, roles, activeRuns) {
+	var maxRel = roles.max;
+	if (!maxRel) {
+		return false;
+	}
+	var maxBase = path.isAbsolute(maxRel) ? maxRel : path.join(bundleRoot, maxRel);
+	var activeRel = (activeRuns && activeRuns.max) || "";
+	if (activeRel && activeRel.indexOf("/" + stepId + "/") >= 0) {
+		var activeLeaf = path.join(maxBase, activeRel.split("/").join(path.sep));
+		if (sliceImageExistsInDir(activeLeaf, sliceId)) {
+			return true;
+		}
+	}
+	return scanPreprocessStepLeaves(maxBase, stepId, sliceId);
+}
+
 function outputExistsForSlice(bundleRoot, stepId, sliceId, roles, activeRuns) {
 	var cfg = STEP_OUTPUT[stepId];
 	if (!cfg) {
@@ -367,7 +452,7 @@ function outputExistsForSlice(bundleRoot, stepId, sliceId, roles, activeRuns) {
 	if (stepId === "detect") {
 		return predictionPklExistsForSlice(dir, sliceId);
 	}
-	if (stepId === "max" || stepId === "sharpen") {
+	if (stepId === "max") {
 		var imgs = listImageFiles(dir);
 		for (var im = 0; im < imgs.length; im++) {
 			if (sliceIdFromFilename(path.basename(imgs[im])) === sliceId) {
@@ -375,6 +460,15 @@ function outputExistsForSlice(bundleRoot, stepId, sliceId, roles, activeRuns) {
 			}
 		}
 		return false;
+	}
+	if (stepId === "sharpen" || stepId === "tophat") {
+		return preprocessOutputExistsForSlice(
+			bundleRoot,
+			stepId,
+			sliceId,
+			roles,
+			activeRuns,
+		);
 	}
 	if (stepId === "count" || stepId === "collate") {
 		return fs.existsSync(path.join(dir, "count_results.csv"));

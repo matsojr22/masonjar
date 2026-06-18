@@ -94,44 +94,7 @@ def load_config(path: str) -> dict:
         return json.load(f)
 
 
-def _slice_stems_from_list(slice_list: str) -> list[str]:
-    """Read slice stems from a run slice list.
-
-    Project runs write JSON (``{"slice_ids": [...]}`` or a bare array); older
-    callers may pass one stem per line. Support both so a JSON file is not
-    mis-read as a single bogus stem like ``{``.
-    """
-    with open(slice_list, encoding="utf-8") as f:
-        raw = f.read().strip()
-    if raw[:1] in ("[", "{"):
-        try:
-            data = json.loads(raw)
-            if isinstance(data, dict):
-                data = data.get("slice_ids", [])
-            return [str(x).strip() for x in data if str(x).strip()]
-        except (ValueError, TypeError):
-            pass
-    return [ln.strip() for ln in raw.splitlines() if ln.strip()]
-
-
-def list_input_files(input_dir: Path, slice_list: str | None) -> list[Path]:
-    if slice_list and os.path.isfile(slice_list):
-        stems = _slice_stems_from_list(slice_list)
-        files = []
-        for stem in stems:
-            for ext in (".tif", ".tiff", ".TIF", ".TIFF"):
-                p = input_dir / f"{stem}{ext}"
-                if p.is_file():
-                    files.append(p)
-                    break
-        return sorted(files, key=lambda p: p.name)
-    files = [
-        p
-        for p in input_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in (".tif", ".tiff")
-    ]
-    files.sort(key=lambda p: p.name)
-    return files
+from slice_input_files import list_input_files  # noqa: E402
 
 
 def run_batch(args) -> int:

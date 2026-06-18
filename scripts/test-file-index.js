@@ -274,6 +274,31 @@ function testSlicesRoleIgnoresWarpedTiffs() {
 		});
 }
 
+function testOutputExistsSharpenTophat() {
+	var bundle = helpers.tmpDir("mj-sharp-");
+	var roles = { max: "data/counting/03_max" };
+	var maxBase = path.join(bundle, roles.max);
+	var sharpenLeaf = path.join(maxBase, "rabies", "sharpen", "run1");
+	fs.mkdirSync(sharpenLeaf, { recursive: true });
+	helpers.touchImage(sharpenLeaf, "M528_s001.tif");
+	assert.strictEqual(
+		fileIndex.outputExistsForSlice(bundle, "sharpen", "M528_s001", roles, {}),
+		true,
+	);
+	assert.strictEqual(
+		fileIndex.outputExistsForSlice(bundle, "sharpen", "M528_s099", roles, {}),
+		false,
+	);
+	var tophatLeaf = path.join(maxBase, "somata", "tophat", "run1");
+	fs.mkdirSync(tophatLeaf, { recursive: true });
+	helpers.touchImage(tophatLeaf, "M528_s002.ome.tiff");
+	assert.strictEqual(
+		fileIndex.outputExistsForSlice(bundle, "tophat", "M528_s002", roles, {}),
+		true,
+	);
+	helpers.rmDir(bundle);
+}
+
 var tests = [
 	testSliceIdFromFilename,
 	testListImageFiles,
@@ -282,6 +307,7 @@ var tests = [
 	testPlanRunModes,
 	testGetProcessingSliceIds,
 	testOutputExistsAlignStemMatch,
+	testOutputExistsSharpenTophat,
 	testSlicesRoleIndexesActiveRunOnly,
 	testSlicesRoleIgnoresWarpedTiffs,
 ];

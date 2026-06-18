@@ -6,6 +6,25 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.0.2
+
+**What's new**
+
+Sharpen and Top-hat filter wizards now show the correct signal-channel preview (not DAPI) when you pick a rabies, somata, or other branch. Filter preview matches the region you pan and zoom, display min/max sliders work on filtered previews, and runs write TIFF outputs instead of leaving an empty sharpen or top-hat folder. The wizard stays on the progress step and reports an error when processing fails.
+
+**Changes**
+
+- Sharpen / Top-hat: branch-aware preview images, scaled filter ROI, composite filtered preview with pan/zoom.
+- Sharpen / Top-hat: slice list intersected with source dataset; TIFF-only slice picker.
+- Sharpen: reliable TIFF output (uint16 and `.ome.tif` inputs supported).
+- Run failure surfaced in wizard UI instead of false success on empty output folders.
+
+**Commit subject**
+
+Sharpen and Top-hat wizards preview and run correctly again
+
+---
+
 ## v4.0.1
 
 **What's new**

@@ -1,8 +1,14 @@
 # Agent session handoff
 
-Last updated: 2026-06-11 (v4.0.0). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-17 (v4.0.2). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.0.2 — Sharpen / Top-hat preprocess wizard fixes (2026-06-17)
+
+Fixed branch-blind `_previews` lookup (DAPI shown instead of signal), ROI scale mismatch for filter preview, empty sharpen folders (Python input resolution + `tifffile` batch write), false success UI (`spawnPreprocessBatch` result payload), slice-list intersection with source leaf, sharpen/tophat merge-mode `outputExistsForSlice`, composite filtered preview with display min/max, removed dead `js/sharpen.js`. Shared `py/slice_input_files.py` for `.ome.tif` stems.
+
+**Open follow-ups:** none from this session.
 
 ## ACTIVE SESSION — 2026-06-09 (real-data validation + long import; agent handoff)
 

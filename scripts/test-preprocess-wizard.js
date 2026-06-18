@@ -1,6 +1,8 @@
 "use strict";
 
 var assert = require("assert");
+var path = require("path");
+var fs = require("fs");
 var preprocessWizard = require("../js/preprocess_wizard");
 
 function testViewportRoi() {
@@ -10,6 +12,49 @@ function testViewportRoi() {
 	assert.ok(roi.h >= 32);
 	assert.ok(roi.x >= 0);
 	assert.ok(roi.y >= 0);
+}
+
+function testScaleRoiForFullRes() {
+	var roi = { x: 10, y: 20, w: 100, h: 80 };
+	var scaled = preprocessWizard.scaleRoiForFullRes(roi, 500, 400, 2000, 1600);
+	assert.strictEqual(scaled.x, 40);
+	assert.strictEqual(scaled.y, 80);
+	assert.strictEqual(scaled.w, 400);
+	assert.strictEqual(scaled.h, 320);
+	var same = preprocessWizard.scaleRoiForFullRes(roi, 100, 80, 100, 80);
+	assert.deepStrictEqual(same, roi);
+}
+
+function testFindSignalPreviewAbs() {
+	var helpers = require("./test-helpers");
+	var bundle = helpers.tmpDir("mj-prev-");
+	var prevDir = path.join(bundle, "data", "counting", "_previews");
+	fs.mkdirSync(prevDir, { recursive: true });
+	fs.writeFileSync(path.join(prevDir, "M528_s001_dapi.png"), "dapi");
+	fs.writeFileSync(path.join(prevDir, "M528_s001_rabies.png"), "rabies");
+	var rabies = preprocessWizard.findSignalPreviewAbs(
+		bundle,
+		"M528_s001.tif",
+		"rabies",
+	);
+	assert.strictEqual(
+		rabies,
+		path.join(prevDir, "M528_s001_rabies.png"),
+		"signal branch should pick rabies preview not dapi",
+	);
+	var missing = preprocessWizard.findSignalPreviewAbs(
+		bundle,
+		"M528_s002.tif",
+		"somata",
+	);
+	assert.strictEqual(missing, "");
+	helpers.rmDir(bundle);
+}
+
+function testIsProcessableTiffName() {
+	assert.strictEqual(preprocessWizard.isProcessableTiffName("a.tif"), true);
+	assert.strictEqual(preprocessWizard.isProcessableTiffName("b.ome.tiff"), true);
+	assert.strictEqual(preprocessWizard.isProcessableTiffName("c.png"), false);
 }
 
 function testParsePreviewJson() {
@@ -36,6 +81,9 @@ function testApplyDisplayWindow() {
 }
 
 testViewportRoi();
+testScaleRoiForFullRes();
+testFindSignalPreviewAbs();
+testIsProcessableTiffName();
 testParsePreviewJson();
 testNoAutoPreviewOnInteraction();
 testApplyDisplayWindow();

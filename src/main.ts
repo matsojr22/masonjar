@@ -1532,6 +1532,7 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
   appendFlagPathArg(alignArgs, "-c", mapPath);
   alignArgs.push("-l", String(data[4] ?? "").trim());
   appendSliceListArg(alignArgs, data, 5);
+  appendFlagPathArg(alignArgs, "-b", data[6]);
   const partial = {
     mode: "text" as const,
     pythonPath: path.join(envPythonPath, pyCommand),
@@ -1937,6 +1938,98 @@ ipcMain.on("runTophatPreview", function (event: any, data: any[]) {
   );
 });
 
+function spawnPreprocessBatch(
+  event: any,
+  scriptName: string,
+  args: string[],
+  resultChannel: string,
+  killChannel: string,
+  jobId: string,
+  launchMessage: string
+) {
+  const partial = {
+    mode: "text" as const,
+    pythonPath: path.join(envPythonPath, pyCommand),
+    scriptPath: pyScriptsPath,
+    args,
+  };
+  const { options, release } = mergeHeavyJobEnv(jobId, partial);
+  const pyshell = new PythonShell(scriptName, options);
+  const releaseJob = attachIoFairshareRelease(pyshell, release);
+  attachPythonShellKillCleanup(pyshell, killChannel);
+  let total = 0;
+  let current = 0;
+  let runFailed = false;
+  let failMessage = "";
+  let resultSent = false;
+
+  const sendResult = (ok: boolean, code: number, message: string) => {
+    if (resultSent) {
+      return;
+    }
+    resultSent = true;
+    event.sender.send(resultChannel, { ok, code, message });
+    ipcMain.removeAllListeners(killChannel);
+  };
+
+  event.sender.send("updateLoad", [0, launchMessage]);
+  pyshell.on("message", (message: string) => {
+    if (message.startsWith("PREVIEW_JSON:")) {
+      return;
+    }
+    if (
+      message.includes("SHARPEN_NO_OUTPUT") ||
+      message.includes("TOPHAT_NO_OUTPUT") ||
+      message.includes("LOG: no input")
+    ) {
+      runFailed = true;
+      failMessage = message.trim();
+    }
+    if (total === 0 && /^\d+$/.test(message.trim())) {
+      total = Number(message);
+    } else if (message === "Done!") {
+      pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        releaseJob();
+        const pyFail = describePythonShellFailure(err, code, signal);
+        if (pyFail) {
+          reportPythonFailure(pyFail);
+        }
+        const exitCode = typeof code === "number" ? code : Number(code) || 0;
+        const ok = !runFailed && exitCode === 0 && !pyFail;
+        sendResult(ok, exitCode, failMessage || pyFail || "");
+      });
+    } else if (total > 0) {
+      current++;
+      event.sender.send("updateLoad", [
+        Math.round((current / total) * 100),
+        message,
+      ]);
+    } else if (message.startsWith("LOG:")) {
+      event.sender.send("updateLoad", [Math.min(99, current), message]);
+    }
+  });
+  pyshell.on("close", (code: number) => {
+    if (resultSent) {
+      return;
+    }
+    releaseJob();
+    const exitCode = typeof code === "number" ? code : Number(code) || 1;
+    const pyFail =
+      exitCode !== 0 ? `Python exited with code ${exitCode}` : "";
+    if (pyFail) {
+      reportPythonFailure(pyFail);
+    }
+    sendResult(
+      false,
+      exitCode,
+      failMessage || pyFail || "Process ended without Done!"
+    );
+  });
+  ipcMain.once(killChannel, function () {
+    pyshell.kill();
+  });
+}
+
 ipcMain.on("runTophat", function (event: any, data: any[]) {
   const args: string[] = ["-g", "False"];
   const first = data[0] != null ? String(data[0]).trim() : "";
@@ -1951,48 +2044,15 @@ ipcMain.on("runTophat", function (event: any, data: any[]) {
       appendFlagPathArg(args, "--slice-list", String(data[4]));
     }
   }
-  const partial = {
-    mode: "text" as const,
-    pythonPath: path.join(envPythonPath, pyCommand),
-    scriptPath: pyScriptsPath,
+  spawnPreprocessBatch(
+    event,
+    "top_hat.py",
     args,
-  };
-  const { options, release } = mergeHeavyJobEnv("tophat", partial);
-  const pyshell = new PythonShell("top_hat.py", options);
-  const releaseJob = attachIoFairshareRelease(pyshell, release);
-  attachPythonShellKillCleanup(pyshell, "killTophat");
-  let total = 0;
-  let current = 0;
-  event.sender.send("updateLoad", [0, "Launching top-hat filter…"]);
-  pyshell.on("message", (message: string) => {
-    if (message.startsWith("PREVIEW_JSON:")) {
-      return;
-    }
-    if (total === 0 && /^\d+$/.test(message.trim())) {
-      total = Number(message);
-    } else if (message === "Done!") {
-      pyshell.end((err: unknown, code: unknown, signal: unknown) => {
-        releaseJob();
-        const pyFail = describePythonShellFailure(err, code, signal);
-        if (pyFail) {
-          reportPythonFailure(pyFail);
-        }
-        event.sender.send("tophatResult");
-        ipcMain.removeAllListeners("killTophat");
-      });
-    } else if (total > 0) {
-      current++;
-      event.sender.send("updateLoad", [
-        Math.round((current / total) * 100),
-        message,
-      ]);
-    } else if (message.startsWith("LOG:")) {
-      event.sender.send("updateLoad", [Math.min(99, current), message]);
-    }
-  });
-  ipcMain.once("killTophat", function () {
-    pyshell.kill();
-  });
+    "tophatResult",
+    "killTophat",
+    "tophat",
+    "Launching top-hat filter…"
+  );
 });
 
 ipcMain.on("runSharpen", function (event: any, data: any[]) {
@@ -2009,51 +2069,15 @@ ipcMain.on("runSharpen", function (event: any, data: any[]) {
       args.push("-e");
     }
   }
-  const partial = {
-    mode: "text" as const,
-    pythonPath: path.join(envPythonPath, pyCommand),
-    scriptPath: pyScriptsPath,
+  spawnPreprocessBatch(
+    event,
+    "sharpen.py",
     args,
-  };
-  const { options, release } = mergeHeavyJobEnv("sharpen", partial);
-  const pyshell = new PythonShell("sharpen.py", options);
-  const releaseJob = attachIoFairshareRelease(pyshell, release);
-  attachPythonShellKillCleanup(pyshell, "killSharpen");
-  let total = 0;
-  let current = 0;
-  pyshell.on("message", (message: string) => {
-    if (message.startsWith("PREVIEW_JSON:")) {
-      return;
-    }
-    if (total === 0 && /^\d+$/.test(message.trim())) {
-      total = Number(message);
-    } else if (message === "Done!") {
-      pyshell.end((err: unknown, code: unknown, signal: unknown) => {
-        releaseJob();
-        const pyFail = describePythonShellFailure(err, code, signal);
-        if (pyFail) {
-          reportPythonFailure(pyFail);
-        } else {
-          console.log("The exit code was: " + code);
-          console.log("The exit signal was: " + signal);
-        }
-        event.sender.send("sharpenResult");
-        ipcMain.removeAllListeners("killSharpen");
-      });
-    } else if (total > 0) {
-      current++;
-      event.sender.send("updateLoad", [
-        Math.round((current / total) * 100),
-        message,
-      ]);
-    } else if (message.startsWith("LOG:")) {
-      event.sender.send("updateLoad", [Math.min(99, current), message]);
-    }
-  });
-
-  ipcMain.once("killSharpen", function () {
-    pyshell.kill();
-  });
+    "sharpenResult",
+    "killSharpen",
+    "sharpen",
+    "Launching sharpen…"
+  );
 });
 
 // Parcellation (bulk CCF rollup)
@@ -2256,6 +2280,46 @@ ipcMain.on("runTissueCleanupApply", function (event: any, data: any[]) {
     return null;
   };
 
+  const readProgressResult = (): Record<string, unknown> | null => {
+    try {
+      const progressPath = path.join(
+        bundleRoot,
+        ".masonjar",
+        "tissue_cleanup_apply_progress.json"
+      );
+      if (!fs.existsSync(progressPath)) {
+        return null;
+      }
+      const progress = JSON.parse(fs.readFileSync(progressPath, "utf8"));
+      const completed = Number(progress.completed) || 0;
+      if (completed <= 0) {
+        return null;
+      }
+      const total = Number(progress.files_total) || 0;
+      const slices = progress.slices || {};
+      return {
+        ok: false,
+        partial: true,
+        applied_files: completed,
+        files_total: total,
+        slices_applied: Object.keys(slices).length,
+        slices,
+        failed: [],
+        error: `Tissue cleanup interrupted after ${completed}/${total} file(s)`,
+      };
+    } catch (_err) {
+      return null;
+    }
+  };
+
+  const readFallbackResult = (): Record<string, unknown> | null => {
+    const manifest = readManifestResult();
+    if (manifest != null) {
+      return manifest;
+    }
+    return readProgressResult();
+  };
+
   const finalize = (payload: Record<string, unknown>) => {
     if (finished) return;
     finished = true;
@@ -2295,13 +2359,18 @@ ipcMain.on("runTissueCleanupApply", function (event: any, data: any[]) {
         const pyFail = describePythonShellFailure(err, code, signal);
         if (pyFail) {
           reportPythonFailure(pyFail);
-          finalize({ ok: false, error: pyFail });
+          const partial = readProgressResult();
+          finalize(
+            partial || { ok: false, error: pyFail },
+          );
         } else if (resultPayload != null) {
           finalize(resultPayload);
         } else {
-          const manifest = readManifestResult();
-          if (manifest && manifest.ok) {
-            finalize(manifest);
+          const fallback = readFallbackResult();
+          if (fallback && fallback.ok) {
+            finalize(fallback);
+          } else if (fallback) {
+            finalize(fallback);
           } else {
             finalize({
               ok: false,
@@ -2329,9 +2398,9 @@ ipcMain.on("runTissueCleanupApply", function (event: any, data: any[]) {
       finalize(resultPayload);
       return;
     }
-    const manifest = readManifestResult();
-    if (manifest != null) {
-      finalize(manifest);
+    const fallback = readFallbackResult();
+    if (fallback != null) {
+      finalize(fallback);
     } else {
       finalize({
         ok: false,
@@ -2342,9 +2411,11 @@ ipcMain.on("runTissueCleanupApply", function (event: any, data: any[]) {
   pyshell.on("error", function (err: unknown) {
     releaseJob();
     if (finished) return;
-    const manifest = readManifestResult();
-    if (manifest != null && manifest.ok) {
-      finalize(manifest);
+    const fallback = readFallbackResult();
+    if (fallback != null && fallback.ok) {
+      finalize(fallback);
+    } else if (fallback != null) {
+      finalize(fallback);
     } else {
       finalize({
         ok: false,

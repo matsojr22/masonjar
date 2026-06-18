@@ -110,53 +110,22 @@ def run_preview(args) -> int:
 def process_file(file, output_path, equalize: bool, radius: float, amount: float) -> bool:
     try:
         print(f"Processing {file}", flush=True)
-        img = load_grayscale(Path(file))
+        src = Path(file)
+        img = load_grayscale(src)
         out = sharpen_image(img, radius, amount, equalize)
-        stem = Path(file).stem
-        extension = Path(file).suffix
-        ok = cv2.imwrite(f"{output_path}/{stem}{extension}", out)
-        return bool(ok)
+        if out.dtype == np.uint16:
+            out = (out / 256).astype(np.uint8)
+        elif out.dtype != np.uint8:
+            out = np.clip(out, 0, 255).astype(np.uint8)
+        out_path = Path(output_path) / src.name
+        tiff.imwrite(str(out_path), out)
+        return True
     except Exception as e:
         print(f"Failed to process {file}. Error: {e}", flush=True)
         return False
 
 
-def _slice_stems_from_list(slice_list: str) -> list[str]:
-    """Read slice stems from a run slice list.
-
-    Project runs write JSON (``{"slice_ids": [...]}`` or a bare array); older
-    callers may pass one stem per line. Support both so a JSON file is not
-    mis-read as a single bogus stem like ``{``.
-    """
-    with open(slice_list, encoding="utf-8") as f:
-        raw = f.read().strip()
-    if raw[:1] in ("[", "{"):
-        try:
-            data = json.loads(raw)
-            if isinstance(data, dict):
-                data = data.get("slice_ids", [])
-            return [str(x).strip() for x in data if str(x).strip()]
-        except (ValueError, TypeError):
-            pass
-    return [ln.strip() for ln in raw.splitlines() if ln.strip()]
-
-
-def list_input_files(input_path: Path, slice_list: str | None) -> list[Path]:
-    if slice_list and os.path.isfile(slice_list):
-        stems = _slice_stems_from_list(slice_list)
-        files = []
-        for stem in stems:
-            for ext in (".tif", ".tiff"):
-                p = input_path / f"{stem}{ext}"
-                if p.is_file():
-                    files.append(p)
-                    break
-        return sorted(files, key=lambda p: p.name)
-    valid_extensions = [".tif", ".tiff"]
-    return sorted(
-        [p for p in input_path.iterdir() if p.suffix.lower() in valid_extensions],
-        key=lambda p: p.name,
-    )
+from slice_input_files import list_input_files  # noqa: E402
 
 
 def run_batch(args) -> int:

@@ -706,7 +706,7 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
             String((_b = params.amount) !== null && _b !== void 0 ? _b : 1),
         ];
         if (params.equalize) {
-            args.push("--equalize");
+            args.push("-e");
         }
         return {
             scriptName: "sharpen.py",

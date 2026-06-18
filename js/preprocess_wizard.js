@@ -8,8 +8,12 @@ var project = require("./project");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
 var maxDatasets = require("./max_datasets");
+var cziImport = require("./czi_import");
 
 var IDLE_PREVIEW_MS = 5000;
+var DEFAULT_VIEW_W = 512;
+var DEFAULT_VIEW_H = 512;
+var TIFF_SLICE_RE = /\.(tif|tiff)$/i;
 var DEFAULT_VIEW_W = 512;
 var DEFAULT_VIEW_H = 512;
 
@@ -28,16 +32,20 @@ function parsePreviewJsonLine(line) {
 	}
 }
 
+function isProcessableTiffName(name) {
+	var lower = name.toLowerCase();
+	return TIFF_SLICE_RE.test(name) || lower.indexOf(".ome.") !== -1;
+}
+
 function listSliceImageFiles(leafAbs) {
 	if (!leafAbs || !fs.existsSync(leafAbs)) {
 		return [];
 	}
-	var re = /\.(tif|tiff|png|jpe?g)$/i;
 	var out = [];
 	try {
 		var entries = fs.readdirSync(leafAbs, { withFileTypes: true });
 		for (var i = 0; i < entries.length; i++) {
-			if (entries[i].isFile() && re.test(entries[i].name)) {
+			if (entries[i].isFile() && isProcessableTiffName(entries[i].name)) {
 				out.push({
 					name: entries[i].name,
 					abs: path.join(leafAbs, entries[i].name),
@@ -59,29 +67,58 @@ function sliceStemFromName(name) {
 	return dot >= 0 ? base.slice(0, dot) : base;
 }
 
-function findLowResPreviewAbs(bundleRoot, sliceName) {
-	if (!bundleRoot) {
+function findSignalPreviewAbs(bundleRoot, sliceName, signalBranch) {
+	if (!bundleRoot || !sliceName) {
 		return "";
 	}
-	var stem = sliceStemFromName(sliceName);
-	var prevDir = path.join(bundleRoot, "data", "counting", "_previews");
-	if (!fs.existsSync(prevDir)) {
-		return "";
-	}
-	try {
-		var entries = fs.readdirSync(prevDir);
-		for (var i = 0; i < entries.length; i++) {
-			if (
-				entries[i].toLowerCase().endsWith(".png") &&
-				entries[i].indexOf(stem) === 0
-			) {
-				return path.join(prevDir, entries[i]);
-			}
+	var sliceId = sliceStemFromName(sliceName);
+	if (signalBranch) {
+		var direct = path.join(
+			bundleRoot,
+			"data",
+			"counting",
+			"_previews",
+			sliceId + "_" + signalBranch + ".png",
+		);
+		if (fs.existsSync(direct)) {
+			return direct;
 		}
-	} catch (_err) {
-		return "";
+		var proj = project.getProject();
+		var czi = (proj && proj.settings && proj.settings.czi_import) || {};
+		var resolved = cziImport.resolveOrientPreviewPath(
+			bundleRoot,
+			czi,
+			null,
+			sliceId,
+			signalBranch,
+		);
+		if (resolved) {
+			return resolved;
+		}
 	}
 	return "";
+}
+
+/** @deprecated use findSignalPreviewAbs — kept for tests */
+function findLowResPreviewAbs(bundleRoot, sliceName, signalBranch) {
+	return findSignalPreviewAbs(bundleRoot, sliceName, signalBranch || "");
+}
+
+function scaleRoiForFullRes(roi, previewW, previewH, fullW, fullH) {
+	if (!previewW || !previewH || !fullW || !fullH) {
+		return roi;
+	}
+	if (previewW === fullW && previewH === fullH) {
+		return roi;
+	}
+	var scaleX = fullW / previewW;
+	var scaleY = fullH / previewH;
+	return {
+		x: Math.round(roi.x * scaleX),
+		y: Math.round(roi.y * scaleY),
+		w: Math.max(8, Math.round(roi.w * scaleX)),
+		h: Math.max(8, Math.round(roi.h * scaleY)),
+	};
 }
 
 function applyDisplayWindow(imgData, minVal, maxVal) {
@@ -155,7 +192,11 @@ function wirePreprocessWizard(opts) {
 		baseAbs: "",
 		baseNaturalW: 0,
 		baseNaturalH: 0,
+		fullNaturalW: 0,
+		fullNaturalH: 0,
 		showingFiltered: false,
+		filteredBitmap: null,
+		lastRoi: null,
 		scale: 1,
 		panX: 0,
 		panY: 0,
@@ -194,6 +235,7 @@ function wirePreprocessWizard(opts) {
 	var finishPanel = document.getElementById("finishPanel");
 	var idlePreviewTimer = null;
 	var baseBitmap = null;
+	var filteredBitmap = null;
 
 	pipelineRun.ensureRunModeUi("runModePanel", stepId);
 
@@ -263,7 +305,7 @@ function wirePreprocessWizard(opts) {
 		}
 	}
 
-	function renderBasePreview() {
+	function renderPreviewComposite() {
 		if (!previewImg || !baseBitmap) {
 			return;
 		}
@@ -276,8 +318,38 @@ function wirePreprocessWizard(opts) {
 		var imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 		applyDisplayWindow(imgData, state.displayMin, state.displayMax);
 		ctx.putImageData(imgData, 0, 0);
+		if (state.showingFiltered && filteredBitmap && state.lastRoi) {
+			ctx.drawImage(
+				filteredBitmap,
+				state.lastRoi.x,
+				state.lastRoi.y,
+				state.lastRoi.w,
+				state.lastRoi.h,
+			);
+		}
 		previewImg.src = canvas.toDataURL("image/png");
+	}
+
+	function clearFilteredOverlay() {
 		state.showingFiltered = false;
+		state.filteredBitmap = null;
+		state.lastRoi = null;
+		filteredBitmap = null;
+	}
+
+	function loadFullResDimensions(absPath, cb) {
+		if (!absPath) {
+			cb(0, 0);
+			return;
+		}
+		var fullImg = new Image();
+		fullImg.onload = function () {
+			cb(fullImg.naturalWidth, fullImg.naturalHeight);
+		};
+		fullImg.onerror = function () {
+			cb(0, 0);
+		};
+		fullImg.src = "file://" + absPath.replace(/\\/g, "/") + "?t=" + Date.now();
 	}
 
 	function loadBaseSliceImage() {
@@ -285,9 +357,13 @@ function wirePreprocessWizard(opts) {
 			return;
 		}
 		var root = bundleRoot();
-		var lowRes = findLowResPreviewAbs(root, state.currentSlice.name);
+		var lowRes = findSignalPreviewAbs(
+			root,
+			state.currentSlice.name,
+			state.signalBranch,
+		);
 		state.baseAbs = lowRes || state.currentSlice.abs;
-		state.showingFiltered = false;
+		clearFilteredOverlay();
 		state.scale = 1;
 		state.panX = 0;
 		state.panY = 0;
@@ -296,12 +372,16 @@ function wirePreprocessWizard(opts) {
 			previewStatus.textContent =
 				"Pan/zoom the image, adjust display levels, then click Preview filter.";
 		}
+		loadFullResDimensions(state.currentSlice.abs, function (fw, fh) {
+			state.fullNaturalW = fw;
+			state.fullNaturalH = fh;
+		});
 		var img = new Image();
 		img.onload = function () {
 			baseBitmap = img;
 			state.baseNaturalW = img.naturalWidth;
 			state.baseNaturalH = img.naturalHeight;
-			renderBasePreview();
+			renderPreviewComposite();
 		};
 		img.onerror = function () {
 			if (previewStatus) {
@@ -463,6 +543,10 @@ function wirePreprocessWizard(opts) {
 		var imgW = state.baseNaturalW || previewImg.naturalWidth || DEFAULT_VIEW_W;
 		var imgH = state.baseNaturalH || previewImg.naturalHeight || DEFAULT_VIEW_H;
 		var roi = viewportRoi(state, imgW, imgH);
+		state.lastRoi = roi;
+		var fullW = state.fullNaturalW || imgW;
+		var fullH = state.fullNaturalH || imgH;
+		var scaledRoi = scaleRoiForFullRes(roi, imgW, imgH, fullW, fullH);
 		var metaDir = bundleRoot()
 			? path.join(bundleRoot(), branding.META_DIR)
 			: path.dirname(state.currentSlice.abs);
@@ -483,10 +567,10 @@ function wirePreprocessWizard(opts) {
 		}
 		ipc.send(opts.previewIpc, [
 			state.currentSlice.abs,
-			roi.x,
-			roi.y,
-			roi.w,
-			roi.h,
+			scaledRoi.x,
+			scaledRoi.y,
+			scaledRoi.w,
+			scaledRoi.h,
 			previewPayload,
 		]);
 	}
@@ -536,7 +620,24 @@ function wirePreprocessWizard(opts) {
 		});
 	}
 
-	function buildOutputPath(plan) {
+	function intersectPlanWithSource(plan) {
+		var sourceStems = pipelineRuns.listImageSliceStems(
+			state.sourceDataset ? state.sourceDataset.abs : "",
+		);
+		var stemSet = {};
+		for (var i = 0; i < sourceStems.length; i++) {
+			stemSet[sourceStems[i]] = true;
+		}
+		var intersected = [];
+		for (var j = 0; j < plan.toProcess.length; j++) {
+			if (stemSet[plan.toProcess[j]]) {
+				intersected.push(plan.toProcess[j]);
+			}
+		}
+		return intersected;
+	}
+
+	function buildOutputPath(plan, intersected) {
 		var root = bundleRoot();
 		var outBase = maxDatasets.branchRootAbs(root, state.signalBranch);
 		var srcMeta = maxDatasets.parseSourceRunRel(
@@ -549,7 +650,7 @@ function wirePreprocessWizard(opts) {
 		var slugCtx = opts.buildSlugContext(
 			{
 				sortedStems: stems,
-				subsetCount: plan.toProcess.length,
+				subsetCount: intersected.length,
 				sourceKind: srcMeta.source_kind,
 				sourceRunRel: srcMeta.source_run_rel,
 			},
@@ -564,12 +665,16 @@ function wirePreprocessWizard(opts) {
 		};
 	}
 
-	function writeRunConfig(outInfo, plan) {
+	function writeRunConfig(outInfo, intersected) {
 		var root = bundleRoot();
 		var meta = path.join(root, branding.META_DIR);
 		fs.mkdirSync(meta, { recursive: true });
 		var configPath = path.join(meta, opts.configFileName);
 		var params = opts.getToolParams();
+		var sliceListPath = "";
+		if (intersected.length) {
+			sliceListPath = require("./file_index").writeRunSliceList(meta, intersected);
+		}
 		var payload = {
 			input_dir: state.sourceDataset.abs,
 			output_dir: outInfo.abs,
@@ -578,7 +683,7 @@ function wirePreprocessWizard(opts) {
 			signal_branch: state.signalBranch || "",
 			source_kind: outInfo.srcMeta.source_kind,
 			source_run_rel: outInfo.srcMeta.source_run_rel,
-			slice_list: plan.sliceListPath || "",
+			slice_list: sliceListPath,
 		};
 		if (stepId === "tophat") {
 			payload.radius_px = params.radius;
@@ -599,20 +704,34 @@ function wirePreprocessWizard(opts) {
 			alert("Select a source dataset.");
 			return;
 		}
+		if (!state.slices.length) {
+			alert("No TIFF slices in the selected source dataset.");
+			return;
+		}
 		var mode = pipelineRun.getSelectedRunMode(stepId);
 		var plan = pipelineRun.preparePipelineRun(stepId, mode);
+		var intersected = plan.toProcess;
+		if (project.isActive()) {
+			intersected = intersectPlanWithSource(plan);
+			if (!intersected.length) {
+				alert(
+					"No slices from the project plan exist in the selected source dataset.",
+				);
+				return;
+			}
+		}
 		if (project.isActive() && !plan.toProcess.length) {
 			alert("No slices to process (subset empty or all filtered).");
 			return;
 		}
-		var outInfo = buildOutputPath(plan);
+		var outInfo = buildOutputPath(plan, intersected);
 		try {
 			fs.mkdirSync(outInfo.abs, { recursive: true });
 		} catch (err) {
 			alert("Could not create output directory: " + (err.message || err));
 			return;
 		}
-		var configPath = writeRunConfig(outInfo, plan);
+		var configPath = writeRunConfig(outInfo, intersected);
 		state.lastRunRel = pipelineRuns.relFromRoleBase("max", outInfo.abs);
 		state.running = true;
 		if (wizardLog) {
@@ -629,10 +748,28 @@ function wirePreprocessWizard(opts) {
 		ipc.send(opts.runIpc, [configPath]);
 	}
 
-	function onRunFinished() {
+	function onRunFinished(result) {
 		state.running = false;
 		if (processStart) {
 			processStart.disabled = false;
+		}
+		if (step2Cancel) {
+			step2Cancel.classList.add("d-none");
+		}
+		var ok = !result || result.ok !== false;
+		if (!ok) {
+			if (processProgress) {
+				processProgress.style.width = "0%";
+			}
+			var msg =
+				(result && result.message) ||
+				"Processing failed. Check the Application log for details.";
+			appendLog("[Wizard] Failed: " + msg);
+			if (processMessage) {
+				processMessage.textContent = msg;
+			}
+			alert(msg);
+			return;
 		}
 		if (processProgress) {
 			processProgress.style.width = "100%";
@@ -662,15 +799,19 @@ function wirePreprocessWizard(opts) {
 		previewFilterBtn.addEventListener("click", requestPreview);
 	}
 	if (displayMinInput) {
-		displayMinInput.addEventListener("input", renderBasePreview);
+		displayMinInput.addEventListener("input", renderPreviewComposite);
 	}
 	if (displayMaxInput) {
-		displayMaxInput.addEventListener("input", renderBasePreview);
+		displayMaxInput.addEventListener("input", renderPreviewComposite);
 	}
 	if (step1Next) {
 		step1Next.addEventListener("click", function () {
 			if (!state.sourceDataset) {
 				alert("No input dataset found for this branch.");
+				return;
+			}
+			if (!state.slices.length) {
+				alert("No TIFF slices in the selected source dataset.");
 				return;
 			}
 			setStep(2);
@@ -722,9 +863,20 @@ function wirePreprocessWizard(opts) {
 			}
 			return;
 		}
-		if (previewImg && data.previewPath) {
-			state.showingFiltered = true;
-			previewImg.src = "file://" + data.previewPath.replace(/\\/g, "/");
+		if (data.previewPath) {
+			var filt = new Image();
+			filt.onload = function () {
+				filteredBitmap = filt;
+				state.filteredBitmap = filt;
+				state.showingFiltered = true;
+				renderPreviewComposite();
+			};
+			filt.onerror = function () {
+				if (previewStatus) {
+					previewStatus.textContent = "Could not load filtered preview.";
+				}
+			};
+			filt.src = "file://" + data.previewPath.replace(/\\/g, "/") + "?t=" + Date.now();
 		}
 		if (previewStatus) {
 			previewStatus.textContent =
@@ -732,8 +884,8 @@ function wirePreprocessWizard(opts) {
 		}
 	});
 
-	ipc.on(opts.resultIpc, function () {
-		onRunFinished();
+	ipc.on(opts.resultIpc, function (_ev, result) {
+		onRunFinished(result);
 	});
 
 	ipc.on("updateLoad", function (_ev, response) {
@@ -801,5 +953,8 @@ module.exports = {
 	listSliceImageFiles: listSliceImageFiles,
 	applyDisplayWindow: applyDisplayWindow,
 	shouldSchedulePreviewOnInteraction: shouldSchedulePreviewOnInteraction,
+	findSignalPreviewAbs: findSignalPreviewAbs,
 	findLowResPreviewAbs: findLowResPreviewAbs,
+	scaleRoiForFullRes: scaleRoiForFullRes,
+	isProcessableTiffName: isProcessableTiffName,
 };

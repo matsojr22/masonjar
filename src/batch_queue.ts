@@ -963,7 +963,7 @@ function buildJob(
       String(params.amount ?? 1),
     ];
     if (params.equalize) {
-      args.push("--equalize");
+      args.push("-e");
     }
     return {
       scriptName: "sharpen.py",
