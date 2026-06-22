@@ -1484,26 +1484,64 @@ ipcMain.on("runAdjust", function (event: any, data: any[]) {
   }
   var total: number = 0;
   var current: number = 0;
+  let resultSent = false;
+  let saveExitKillTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearSaveExitKillTimer = () => {
+    if (saveExitKillTimer != null) {
+      clearTimeout(saveExitKillTimer);
+      saveExitKillTimer = null;
+    }
+  };
+
+  const finalizeAdjust = (
+    cancelled: boolean,
+    err: unknown,
+    code: unknown,
+    signal: unknown,
+  ) => {
+    clearSaveExitKillTimer();
+    if (resultSent) {
+      return;
+    }
+    resultSent = true;
+    releaseJob();
+    const pyFail = describePythonShellFailure(err, code, signal);
+    if (pyFail) {
+      reportPythonFailure(pyFail);
+    } else {
+      console.log("The exit code was: " + code);
+      console.log("The exit signal was: " + signal);
+    }
+    event.sender.send("adjustResult", { cancelled });
+    if (pyFail) {
+      event.sender.send("adjustError", [pyFail]);
+    }
+    ipcMain.removeAllListeners("killAdjust");
+    ipcMain.removeAllListeners("saveAndExitAdjust");
+  };
+
   pyshell.on("stderr", function (stderr: string) {
     queueLogLineForUi(stderr);
   });
   pyshell.on("message", (message: string) => {
-    if (total === 0) {
-      total = Number(message);
-    } else if (message == "Done!") {
+    const trimmed = String(message || "").trim();
+    if (total === 0 && /^\d+$/.test(trimmed)) {
+      total = Number(trimmed);
+      return;
+    }
+    if (trimmed === "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
-        releaseJob();
-        const pyFail = describePythonShellFailure(err, code, signal);
-        if (pyFail) {
-          reportPythonFailure(pyFail);
-        } else {
-          console.log("The exit code was: " + code);
-          console.log("The exit signal was: " + signal);
-        }
-        event.sender.send("adjustResult");
-        ipcMain.removeAllListeners("killAdjust");
+        finalizeAdjust(false, err, code, signal);
       });
-    } else {
+      return;
+    }
+    if (trimmed === "Viewer closed") {
+      pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        finalizeAdjust(true, err, code, signal);
+      });
+      return;
+    }
+    if (total > 0) {
       current++;
       event.sender.send("updateLoad", [
         Math.round((current / total) * 100),
@@ -1511,8 +1549,58 @@ ipcMain.on("runAdjust", function (event: any, data: any[]) {
       ]);
     }
   });
-  ipcMain.once("killAdjust", function (event: any, data: any[]) {
-    pyshell.kill();
+
+  pyshell.on("close", function (code: unknown, signal: unknown) {
+    if (resultSent) {
+      return;
+    }
+    const exitCode = typeof code === "number" ? code : Number(code) || 1;
+    if (exitCode === 0) {
+      finalizeAdjust(true, null, code, signal);
+      return;
+    }
+    const pyFail = `Python exited with code ${exitCode}`;
+    reportPythonFailure(pyFail);
+    finalizeAdjust(false, pyFail, code, signal);
+  });
+
+  const requestAdjustSaveExit = () => {
+    if (resultSent) {
+      return;
+    }
+    const imagesDir = String(data[0] ?? "").trim();
+    if (imagesDir.length > 0) {
+      try {
+        fs.writeFileSync(path.join(imagesDir, ".adjust_save_exit"), "1", "utf8");
+      } catch (_e) {
+        // best effort
+      }
+    }
+    try {
+      pyshell.send("SAVE_EXIT\n");
+    } catch (_e) {
+      // best effort
+    }
+    clearSaveExitKillTimer();
+    saveExitKillTimer = setTimeout(() => {
+      if (!resultSent) {
+        try {
+          pyshell.kill();
+        } catch (_e) {
+          // best effort
+        }
+      }
+    }, 3000);
+  };
+
+  ipcMain.once("saveAndExitAdjust", function () {
+    requestAdjustSaveExit();
+  });
+  ipcMain.once("killAdjust", function () {
+    clearSaveExitKillTimer();
+    if (!resultSent) {
+      pyshell.kill();
+    }
   });
 });
 
@@ -1555,12 +1643,21 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
   var current: number = 0;
   let resultSent = false;
 
+  let saveExitKillTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearSaveExitKillTimer = () => {
+    if (saveExitKillTimer != null) {
+      clearTimeout(saveExitKillTimer);
+      saveExitKillTimer = null;
+    }
+  };
+
   const finalizeAlign = (
     cancelled: boolean,
     err: unknown,
     code: unknown,
     signal: unknown,
   ) => {
+    clearSaveExitKillTimer();
     if (resultSent) {
       return;
     }
@@ -1578,6 +1675,7 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
       event.sender.send("alignError", [pyFail]);
     }
     ipcMain.removeAllListeners("killAlign");
+    ipcMain.removeAllListeners("saveAndExitAlign");
   };
 
   pyshell.on("stderr", function (stderr: string) {
@@ -1625,8 +1723,43 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
     finalizeAlign(false, pyFail, code, signal);
   });
 
-  ipcMain.once("killAlign", function (event: any, data: any[]) {
-    pyshell.kill();
+  const requestAlignSaveExit = () => {
+    if (resultSent) {
+      return;
+    }
+    const dapiDir = String(data[0] ?? "").trim();
+    if (dapiDir.length > 0) {
+      try {
+        fs.writeFileSync(path.join(dapiDir, ".align_save_exit"), "1", "utf8");
+      } catch (_e) {
+        // best effort
+      }
+    }
+    try {
+      pyshell.send("SAVE_EXIT\n");
+    } catch (_e) {
+      // best effort
+    }
+    clearSaveExitKillTimer();
+    saveExitKillTimer = setTimeout(() => {
+      if (!resultSent) {
+        try {
+          pyshell.kill();
+        } catch (_e) {
+          // best effort
+        }
+      }
+    }, 3000);
+  };
+
+  ipcMain.once("saveAndExitAlign", function () {
+    requestAlignSaveExit();
+  });
+  ipcMain.once("killAlign", function () {
+    clearSaveExitKillTimer();
+    if (!resultSent) {
+      pyshell.kill();
+    }
   });
 });
 

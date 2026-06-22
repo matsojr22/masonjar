@@ -112,30 +112,16 @@ function writeProbeConfig(extra) {
 	return geometryState.writeCziImportConfig(state.bundleRoot, state.cziImport, extra || {});
 }
 
-function writeConfirmedApplyConfig(confirmedGeometry) {
-	var cfgPath = path.join(state.bundleRoot, branding.META_DIR, "geometry_confirmed_apply.json");
+function writeRepairApplyConfig(geometryMap) {
+	var cfgPath = path.join(state.bundleRoot, branding.META_DIR, "geometry_repair_apply.json");
 	var merged = Object.assign({}, state.cziImport, {
-		geometry: confirmedGeometry,
-		apply_source: "repair_confirmed",
+		geometry: geometryMap,
+		apply_source: "repair",
 	});
 	merged.config_fingerprint = cziImport.cziImportFingerprint(state.cziImport);
 	merged.geometry_hash = geometryState.geometryOnlyHash(merged);
 	fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
 	fs.writeFileSync(cfgPath, JSON.stringify({ czi_import: merged }, null, 2), "utf8");
-	return cfgPath;
-}
-
-function writeRepairConfig(targets) {
-	var cfgPath = path.join(state.bundleRoot, branding.META_DIR, "geometry_repair_run.json");
-	var payload = Object.assign({}, state.cziImport, {
-		repair_mode: "geometry",
-		repair_targets: targets,
-		apply_source: "repair",
-	});
-	payload.config_fingerprint = cziImport.cziImportFingerprint(state.cziImport);
-	payload.geometry_hash = geometryState.geometryOnlyHash(state.cziImport);
-	fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
-	fs.writeFileSync(cfgPath, JSON.stringify({ czi_import: payload }, null, 2), "utf8");
 	return cfgPath;
 }
 
@@ -287,10 +273,16 @@ function renderReviewSlice() {
 			warnEl.textContent = "";
 		}
 	}
-	state.reviewOps = orientGeometry.cloneGeometry({ ops: (sl.pending_ops || []).slice() });
+	var suggested = geometryState.suggestedOpsForReviewSlice(sl);
+	state.reviewOps = orientGeometry.cloneGeometry({ ops: suggested });
 	qs("reviewSliceTitle").textContent =
 		sl.slice_id + " (" + reviewPosition + "/" + state.reviewTotal + ")";
-	qs("reviewSliceIssue").textContent = "Issue: " + (sl.issue || "review");
+	var issueText = "Issue: " + (sl.issue || "review");
+	if (suggested.length) {
+		issueText +=
+			" — audit suggests: " + orientGeometry.geometryStatusText({ ops: suggested });
+	}
+	qs("reviewSliceIssue").textContent = issueText;
 	updateReviewOpsStatus();
 
 	var grid = qs("reviewChannelGrid");
@@ -388,7 +380,7 @@ function reviewBlockingMessage() {
 	var tail = awaiting.length > 8 ? "… +" + (awaiting.length - 8) + " more" : "";
 	return (
 		awaiting.length +
-		" section(s) were skipped without confirmation and will not be repaired: " +
+		" section(s) still need review — use Confirm slice or No rotation needed on each: " +
 		ids.join(", ") +
 		tail
 	);
@@ -413,21 +405,19 @@ function updateRepairPlanControls() {
 }
 
 function renderConfirmSummary() {
-	var confirmedGeometry = geometryState.buildConfirmedGeometryFromQueue(state.queue);
-	var autoTargets = geometryState.buildAutoRepairTargetsFromQueue(state.queue);
-	var displayTargets = geometryState.buildRepairTargetsFromQueue(state.queue);
+	var repairGeometry =
+		state.repairGeometry || geometryState.buildRepairGeometryFromQueue(state.queue);
 	var pre = qs("confirmSummary");
 	if (pre) {
-		var confirmedIds = Object.keys(confirmedGeometry);
-		var header =
-			confirmedIds.length +
-			" section(s) with confirmed rotation (full pipeline apply) · " +
-			autoTargets.length +
-			" auto-repair target(s)\n\n";
-		pre.textContent = header + JSON.stringify(displayTargets, null, 2);
+		var applyIds = Object.keys(repairGeometry).sort();
+		var lines = [
+			applyIds.length +
+				" section(s) will receive full pipeline apply (00_dapi, _previews, z-stacks, max)",
+			applyIds.join(", ") || "(none)",
+		];
+		pre.textContent = lines.join("\n");
 	}
-	state.repairTargets = autoTargets;
-	state.confirmedGeometry = confirmedGeometry;
+	state.repairGeometry = repairGeometry;
 	updateRepairPlanControls();
 }
 
@@ -461,98 +451,124 @@ function sendApplyGeometryJob(cfgPath, label) {
 	});
 }
 
-function runConfirmedGeometryApply(confirmedGeometry) {
-	var ids = Object.keys(confirmedGeometry);
-	if (!ids.length) {
-		return Promise.resolve(null);
+function persistCziImportToProject() {
+	var proj = project.getProject();
+	if (!proj) {
+		return;
 	}
-	setBar(
-		"repairProgress",
-		5,
-		"repairStatus",
-		"Applying confirmed orientation to " + ids.length + " section(s)…",
-	);
+	proj.settings = proj.settings || {};
+	proj.settings.czi_import = state.cziImport;
+	project.saveProjectJson();
+}
+
+function runPostRepairVerify() {
+	var probeCfg = writeProbeConfig({
+		slice_ids: state.sliceIds,
+		reference_branch: selectedReferenceBranch(),
+		geometry: state.cziImport.geometry || {},
+	});
+	return new Promise(function (resolve, reject) {
+		function onResult(ev, payload) {
+			ipc.removeListener("geometryFingerprintResult", onResult);
+			if (!payload || payload.ok === false) {
+				reject(new Error((payload && payload.error) || "Post-repair verify failed"));
+				return;
+			}
+			var slices = payload.slices || [];
+			var failed = slices.filter(function (sl) {
+				return sl.issue && sl.issue !== "ok";
+			});
+			appendLog(
+				"repairLog",
+				"Post-repair verify: " +
+					(slices.length - failed.length) +
+					"/" +
+					slices.length +
+					" OK",
+			);
+			if (failed.length) {
+				appendLog(
+					"repairLog",
+					"Still flagged: " +
+						failed
+							.map(function (sl) {
+								return sl.slice_id + " (" + sl.issue + ")";
+							})
+							.join(", "),
+				);
+			}
+			resolve({ ok: failed.length === 0, failed: failed, payload: payload });
+		}
+		ipc.once("geometryFingerprintResult", onResult);
+		ipc.send("runGeometryFingerprintProbe", [
+			String(state.bundleRoot).trim(),
+			String(probeCfg).trim(),
+		]);
+	});
+}
+
+function runRepair() {
+	if (state.repairRunning) {
+		return;
+	}
+	var awaiting = geometryState.slicesAwaitingReviewConfirmation(state.queue);
+	if (awaiting.length) {
+		alert(reviewBlockingMessage());
+		return;
+	}
+	state.repairRunning = true;
+	setStep(4);
+	var repairGeometry =
+		state.repairGeometry || geometryState.buildRepairGeometryFromQueue(state.queue);
+	var applyIds = Object.keys(repairGeometry);
+	if (!applyIds.length) {
+		alert("No sections need rotation repair.");
+		state.repairRunning = false;
+		return;
+	}
+	state.repairGeometry = repairGeometry;
 	appendLog(
 		"repairLog",
-		"Full pipeline apply for " + ids.length + " manually confirmed section(s)",
+		"Full pipeline apply for " + applyIds.length + " section(s): " + applyIds.join(", "),
 	);
-	var cfgPath = writeConfirmedApplyConfig(confirmedGeometry);
-	return sendApplyGeometryJob(cfgPath, "Confirmed geometry apply");
-}
-
-function runAutoRepairJobs(targets) {
-	if (!targets.length) {
-		return Promise.resolve(null);
-	}
-	setBar("repairProgress", 5, "repairStatus", "Starting auto-repair (" + targets.length + " target(s))…");
-	var cfgPath = writeRepairConfig(targets);
-	return sendApplyGeometryJob(cfgPath, "Auto-repair");
-}
-
-function mergeRepairPayloads(confirmedResult, repairResult, confirmedGeometry) {
-	var confirmedIds = Object.keys(confirmedGeometry || {});
-	if (!confirmedResult && !repairResult) {
-		return {
-			ok: true,
-			changed: 0,
-			files_total: 0,
-			bytes_total: 0,
-			elapsed_sec: 0,
-			failed: [],
-			confirmed_sections: confirmedIds.length,
-		};
-	}
-	if (!repairResult) {
-		return Object.assign({}, confirmedResult, {
-			apply_source: confirmedResult.apply_source || "repair_confirmed",
-			confirmed_sections: confirmedIds.length,
+	var cfgPath = writeRepairApplyConfig(repairGeometry);
+	return sendApplyGeometryJob(cfgPath, "Geometry repair apply")
+		.then(function (payload) {
+			geometryState.persistLastApplyResult(state.bundleRoot, state.cziImport, payload || {});
+			geometryState.finalizeGeometryAfterApply(state.bundleRoot, state.cziImport, {
+				sliceIds: state.sliceIds,
+				payload: payload,
+				applySource: "repair",
+			});
+			persistCziImportToProject();
+			var summary =
+				"Repair complete — " +
+				(payload.changed != null ? payload.changed : "?") +
+				" file(s) on " +
+				applyIds.length +
+				" section(s)";
+			appendLog("repairLog", summary);
+			setBar("repairProgress", 95, "repairStatus", "Verifying orientation…");
+			return runPostRepairVerify().then(function (verify) {
+				setBar("repairProgress", 100, "repairStatus", "Repair complete");
+				if (!verify.ok) {
+					appendLog(
+						"repairLog",
+						"WARNING: " +
+							verify.failed.length +
+							" section(s) still flagged after repair — review in Orient or re-run audit.",
+					);
+				}
+				writeProbeConfig({});
+				state.repairRunning = false;
+				return payload;
+			});
+		})
+		.catch(function (err) {
+			state.repairRunning = false;
+			setBar("repairProgress", 0, "repairStatus", "Repair failed");
+			throw err;
 		});
-	}
-	if (!confirmedResult) {
-		return Object.assign({}, repairResult, {
-			confirmed_sections: 0,
-		});
-	}
-	return {
-		ok: confirmedResult.ok !== false && repairResult.ok !== false,
-		changed: (confirmedResult.changed || 0) + (repairResult.changed || 0),
-		files_total: (confirmedResult.files_total || 0) + (repairResult.files_total || 0),
-		bytes_total: (confirmedResult.bytes_total || 0) + (repairResult.bytes_total || 0),
-		elapsed_sec: (confirmedResult.elapsed_sec || 0) + (repairResult.elapsed_sec || 0),
-		failed: [].concat(confirmedResult.failed || [], repairResult.failed || []),
-		apply_source: "repair",
-		repair_mode: repairResult.repair_mode || "geometry",
-		confirmed_sections: confirmedIds.length,
-		auto_repair_targets: repairResult.files_total || 0,
-	};
-}
-
-function finalizeRepairSuccess(payload) {
-	setBar("repairProgress", 100, "repairStatus", "Repair complete");
-	var summary =
-		"Repair complete — " +
-		(payload.changed != null ? payload.changed : "?") +
-		" file(s)";
-	if (payload.confirmed_sections) {
-		summary += " (" + payload.confirmed_sections + " confirmed section(s)";
-		if (payload.auto_repair_targets) {
-			summary += ", " + payload.auto_repair_targets + " auto-repair target(s)";
-		}
-		summary += ")";
-	}
-	appendLog("repairLog", summary);
-	var proj = project.getProject();
-	if (proj) {
-		if (state.confirmedGeometry) {
-			orientGeometry.resetGeometryMap(state.cziImport.geometry, Object.keys(state.confirmedGeometry));
-		}
-		state.cziImport.geometry_applied_at = new Date().toISOString();
-		proj.settings = proj.settings || {};
-		proj.settings.czi_import = state.cziImport;
-		project.saveProjectJson();
-	}
-	writeProbeConfig({});
-	return payload;
 }
 
 function runAudit() {
@@ -634,52 +650,6 @@ function runAudit() {
 			String(probeCfg).trim(),
 		]);
 	});
-}
-
-function runRepair() {
-	if (state.repairRunning) {
-		return;
-	}
-	var awaiting = geometryState.slicesAwaitingReviewConfirmation(state.queue);
-	if (awaiting.length) {
-		alert(reviewBlockingMessage());
-		return;
-	}
-	state.repairRunning = true;
-	setStep(4);
-	var confirmedGeometry =
-		state.confirmedGeometry || geometryState.buildConfirmedGeometryFromQueue(state.queue);
-	var autoTargets =
-		state.repairTargets || geometryState.buildAutoRepairTargetsFromQueue(state.queue);
-	state.confirmedGeometry = confirmedGeometry;
-
-	return runConfirmedGeometryApply(confirmedGeometry)
-		.then(function (confirmedResult) {
-			if (confirmedResult) {
-				orientGeometry.resetGeometryMap(
-					state.cziImport.geometry,
-					Object.keys(confirmedGeometry),
-				);
-			}
-			return runAutoRepairJobs(autoTargets).then(function (repairResult) {
-				return { confirmedResult: confirmedResult, repairResult: repairResult };
-			});
-		})
-		.then(function (pair) {
-			var merged = mergeRepairPayloads(
-				pair.confirmedResult,
-				pair.repairResult,
-				confirmedGeometry,
-			);
-			state.repairRunning = false;
-			geometryState.persistLastApplyResult(state.bundleRoot, state.cziImport, merged);
-			return finalizeRepairSuccess(merged);
-		})
-		.catch(function (err) {
-			state.repairRunning = false;
-			setBar("repairProgress", 0, "repairStatus", "Repair failed");
-			throw err;
-		});
 }
 
 function init() {

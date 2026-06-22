@@ -11,6 +11,7 @@ var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var cziImport = require("./czi_import");
 var orientGeometry = require("./orient_geometry");
+var orientSlicePlan = require("./orient_slice_plan");
 var geometryState = require("./geometry_state");
 var branding = require("./branding");
 
@@ -139,29 +140,7 @@ function ensureSlicePlan() {
 	var cfg = orientState.cziImport;
 	var orderIds = cziImport.collectSliceIds(cfg);
 	var indexIds = collectSliceIdsFromIndex();
-	var ids = orderIds.length ? orderIds : indexIds;
-	if (orderIds.length && indexIds.length) {
-		var previewIds = ids.filter(function (sid) {
-			return !!previewPathForSlice(sid);
-		});
-		if (previewIds.length) {
-			ids = previewIds;
-		} else {
-			ids = orderIds.filter(function (sid) {
-				return indexIds.indexOf(sid) >= 0;
-			});
-			if (!ids.length) {
-				ids = orderIds;
-			}
-		}
-	} else if (ids.length) {
-		var withPreviews = ids.filter(function (sid) {
-			return !!previewPathForSlice(sid);
-		});
-		if (withPreviews.length) {
-			ids = withPreviews;
-		}
-	}
+	var ids = orientSlicePlan.mergeOrientSliceIds(orderIds, indexIds);
 	if (!ids.length) {
 		return [];
 	}
@@ -329,6 +308,7 @@ function runPreviewRepair() {
 	var audit = health.audit;
 	var targets = cziImport.buildRepairTargetsFromAudit(audit, orientState.cziImport);
 	previewRepairRunning = true;
+	cziImport.ensureOrientDapiPreviewsFromPipeline(orientState.bundleRoot);
 	var repairBtn = qs("orientRepairPreviews");
 	if (repairBtn) {
 		repairBtn.disabled = true;

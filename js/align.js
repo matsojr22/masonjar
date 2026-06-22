@@ -115,14 +115,7 @@ run.addEventListener("click", function () {
 back.addEventListener("click", function (event) {
 	if (back.classList.contains("btn-danger")) {
 		event.preventDefault();
-		ipc.send("killAlign", []);
-		back.classList.add("btn-warning");
-		back.classList.remove("btn-danger");
-		back.innerHTML = "Back";
-		run.innerHTML = "Run";
-		run.classList.remove("disabled");
-		loadmessage.innerHTML = "";
-		loadbar.style.width = "0";
+		ipc.send("saveAndExitAlign", []);
 	}
 });
 

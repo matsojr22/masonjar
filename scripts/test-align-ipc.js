@@ -36,9 +36,21 @@ function testSideEffects() {
 	assert.strictEqual(alignIpc.shouldApplyAlignRunSideEffects({ cancelled: true }), false);
 }
 
-testClassifyDone();
 testClassifyViewerClosed();
 testClassifyProgress();
 testAlignResultPayloads();
+testViewerToolHelpers();
 testSideEffects();
 console.log("test-align-ipc.js: OK");
+
+function testViewerToolHelpers() {
+	assert.strictEqual(
+		alignIpc.classifyViewerToolStdoutMessage("Viewer closed"),
+		"viewer_closed",
+	);
+	assert.deepStrictEqual(
+		alignIpc.viewerToolResultPayloadForKind("viewer_closed"),
+		{ cancelled: true },
+	);
+	assert.strictEqual(alignIpc.shouldApplyViewerToolSideEffects({ cancelled: true }), false);
+}

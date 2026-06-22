@@ -30,7 +30,7 @@ from qtpy.QtWidgets import (
     QSizePolicy,
 )
 from qtpy.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QBrush
-from qtpy.QtCore import Qt, QPoint, QEvent
+from qtpy.QtCore import Qt, QPoint, QEvent, QTimer
 from slice_atlas import add_outlines
 from adjust_channels import (
     lowres_channels_for_slice,
@@ -68,6 +68,18 @@ from annotation_relabel import (
 )
 from qt_image_utils import numpy_array_to_qimage
 from qt_window_utils import raise_and_activate
+
+
+_viewer_exit_reason = "done"
+
+
+def set_viewer_exit_reason(reason: str) -> None:
+    global _viewer_exit_reason
+    _viewer_exit_reason = reason
+
+
+def get_viewer_exit_reason() -> str:
+    return _viewer_exit_reason
 
 
 def qimage_to_numpy_array(qimage):
@@ -171,6 +183,15 @@ class AnnotationViewer(QMainWindow):
         self._overlay_ready = False
         self._img_pixmap_item = None
         self._anno_pixmap_item = None
+        self._save_exit_flag = self.images_dir / ".adjust_save_exit"
+        self._save_exit_timer = QTimer(self)
+        self._save_exit_timer.timeout.connect(self._poll_save_exit)
+        try:
+            if self._save_exit_flag.is_file():
+                self._save_exit_flag.unlink()
+        except OSError:
+            pass
+        self._save_exit_timer.start(200)
 
         self.annotation_dir = Path(pairs[0][1]).parent
         self.parcel_ccf_advanced = False
@@ -1493,6 +1514,25 @@ class AnnotationViewer(QMainWindow):
 
         self._set_anno_pixmap(new_annos)
 
+    def _poll_save_exit(self) -> None:
+        try:
+            if self._save_exit_flag.is_file():
+                self._save_exit_flag.unlink()
+                set_viewer_exit_reason("cancel")
+                self.close()
+        except OSError:
+            pass
+
+    def closeEvent(self, event):
+        if self.was_changed:
+            if not self.warn_unsaved_changes():
+                event.ignore()
+                return
+        if get_viewer_exit_reason() != "cancel":
+            set_viewer_exit_reason("done")
+        self._save_exit_timer.stop()
+        super().closeEvent(event)
+
     def warn_unsaved_changes(self):
         dialog = QMessageBox(self)
         dialog.setIcon(QMessageBox.Icon.Critical)
@@ -1804,8 +1844,13 @@ if __name__ == "__main__":
     print(2, flush=True)
     print("Viewing...", flush=True)
 
+    set_viewer_exit_reason("done")
+
     def on_app_exit():
-        print("Done!", flush=True)
+        if get_viewer_exit_reason() == "cancel":
+            print("Viewer closed", flush=True)
+        else:
+            print("Done!", flush=True)
 
     images_path = Path(args.images.strip())
     annotations_path = Path(args.annotations.strip())

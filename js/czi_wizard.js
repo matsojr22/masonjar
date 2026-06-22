@@ -1426,6 +1426,7 @@ function updateOrientPreviewBanner() {
 
 async function runOrientPreviewRepair() {
 	var health = updateOrientPreviewBanner();
+	cziImport.ensureOrientDapiPreviewsFromPipeline(wizardState.bundleRoot);
 	wizardState.repairMode = true;
 	wizardState.repairTargets = cziImport.buildRepairTargetsFromAudit(
 		health.audit,

@@ -1,8 +1,17 @@
 # Agent session handoff
 
-Last updated: 2026-06-13 (v4.0.4). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-13 (v4.0.5). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.0.5 — Graceful Cancel, tissue cleanup, geometry repair (2026-06-13)
+
+- **Thread 0:** `saveAndExitAlign` / `saveAndExitAdjust` IPC; flag-file + stdin handshake; `runAdjust` mirrors `runAlign` close fallback.
+- **Thread 1:** `py/align_tissue_mask.py`, `py/align_tissue_warp.py`, `py/demons.py` metric masks (committed — fixes clone/build gap from v4.0.4).
+- **Thread 2:** `py/tiff_bundle_io.py`, `py/tissue_cleanup_progress.py`, streaming Apply in `py/tissue_cleanup.py`.
+- **Thread 3:** geometry repair wizard full-pipeline apply, `js/orient_slice_plan.js`, probe `suggested_ops`, deferred DAPI preview sync.
+
+**Open follow-ups:** none critical from this release.
 
 ## v4.0.4 — Align autosave + graceful Napari close (2026-06-13)
 
@@ -11,8 +20,6 @@ Last updated: 2026-06-13 (v4.0.4). Use this file to resume work; long-term archi
 - **`src/main.ts` / `main.js`**: `runAlign` handles `Viewer closed` + process `close` fallback (`alignResult` `{ cancelled: true }`).
 - **`js/align.js` / `js/align_ipc.js`**: cancelled close skips active-run side effects; user message to click Finish to warp.
 - Tests: `python/tests/test_align_session.py`, `scripts/test-align-ipc.js`.
-
-**Open follow-ups:** Adjust (`runAdjust`) still uses Done-only handshake — same hung-UI pattern if viewer closed without save; Align **Cancel** still hard-kills Python.
 
 ## v4.0.3 — Preview filter blackout fix (2026-06-17)
 

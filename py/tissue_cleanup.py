@@ -17,12 +17,24 @@ import tifffile as tiff
 
 from bundle_slice_paths import paths_for_slice
 from czi_common import emit_log, emit_result, load_import_config
+from tissue_cleanup_progress import (
+    clear_progress,
+    config_fingerprint,
+    is_completed,
+    load_progress,
+    path_key,
+    record_completion,
+    save_progress,
+)
+from tiff_bundle_io import page_count, read_tiff_2d, transform_tiff_pages, write_tiff_2d
 from tissue_mask import (
     ensure_keep_mask_polarity,
     isolate_tissue_mask,
     parse_stroke_points,
     wizard_mask_kwargs,
 )
+
+ARCHIVE_MASK_REL = "tissue_cleanup_masks"
 
 VALID_EXTENSIONS = {".png", ".tif", ".tiff"}
 TRACE_WIDTH = 12
@@ -165,18 +177,22 @@ def resize_keep_mask_nearest(keep_mask: np.ndarray, shape: tuple[int, int]) -> n
     return (resized >= 128).astype(np.uint8) * 255
 
 
+def apply_keep_mask_to_plane(arr: np.ndarray, keep_mask: np.ndarray, bg: float) -> np.ndarray:
+    mask = resize_keep_mask_nearest(keep_mask, arr.shape)
+    out = arr.copy()
+    removed = mask < 128
+    if np.issubdtype(out.dtype, np.floating):
+        out[removed] = bg
+    else:
+        out[removed] = int(round(bg))
+    return out
+
+
 def apply_keep_mask_to_array(arr: np.ndarray, keep_mask: np.ndarray, bg: float) -> np.ndarray:
     if arr.ndim == 2:
-        mask = resize_keep_mask_nearest(keep_mask, arr.shape)
-        out = arr.copy()
-        removed = mask < 128
-        if np.issubdtype(out.dtype, np.floating):
-            out[removed] = bg
-        else:
-            out[removed] = int(round(bg))
-        return out
+        return apply_keep_mask_to_plane(arr, keep_mask, bg)
     if arr.ndim == 3:
-        planes = [apply_keep_mask_to_array(arr[z], keep_mask, bg) for z in range(arr.shape[0])]
+        planes = [apply_keep_mask_to_plane(arr[z], keep_mask, bg) for z in range(arr.shape[0])]
         return np.stack(planes, axis=0)
     raise ValueError(f"Unsupported ndim={arr.ndim}")
 
@@ -218,6 +234,65 @@ def _write_image_array(path: Path, arr: np.ndarray) -> None:
     tiff.imwrite(str(path), arr, photometric="minisblack")
 
 
+def _shape_desc(arr: np.ndarray) -> str:
+    if arr.ndim == 2:
+        return f"{arr.shape[1]}x{arr.shape[0]} {arr.dtype}"
+    if arr.ndim == 3:
+        return f"Z={arr.shape[0]} {arr.shape[2]}x{arr.shape[1]} {arr.dtype}"
+    return f"ndim={arr.ndim} {arr.dtype}"
+
+
+def _apply_mask_to_file(
+    path: Path,
+    keep_mask: np.ndarray,
+    bg_override: float | None,
+) -> str:
+    """Apply keep mask in-place using path-based TIFF I/O for large z-stacks."""
+    parts = {p.lower() for p in path.parts}
+    if "00_dapi" in parts and path.suffix.lower() != ".png":
+        raise ValueError(f"00_dapi accepts PNG only, not {path}")
+
+    if path.suffix.lower() == ".png":
+        arr = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        if arr is None:
+            raise ValueError(f"Could not read {path}")
+        arr = np.asarray(arr)
+        if arr.ndim != 2:
+            raise ValueError(f"Unsupported ndim={arr.ndim} for {path.name}")
+        bg = bg_override if bg_override is not None else border_median_bg(arr)
+        out = apply_keep_mask_to_plane(arr, keep_mask, bg)
+        cv2.imwrite(str(path), out)
+        desc = _shape_desc(out)
+        del arr, out
+        return desc
+
+    n_pages = page_count(path)
+    if n_pages == 1:
+        arr = read_tiff_2d(path)
+        if arr.ndim != 2:
+            raise ValueError(f"Unsupported ndim={arr.ndim} for {path.name}")
+        bg = bg_override if bg_override is not None else border_median_bg(arr)
+        out = apply_keep_mask_to_plane(arr, keep_mask, bg)
+        write_tiff_2d(path, out)
+        desc = _shape_desc(out)
+        del arr, out
+        return desc
+
+    bg_holder: list[float | None] = [None]
+
+    def plane_fn(plane: np.ndarray) -> np.ndarray:
+        if plane.ndim != 2:
+            raise ValueError(f"Unsupported plane ndim={plane.ndim} for {path.name}")
+        if bg_holder[0] is None:
+            bg_holder[0] = bg_override if bg_override is not None else border_median_bg(plane)
+        return apply_keep_mask_to_plane(plane, keep_mask, bg_holder[0])
+
+    z_count, first_shape = transform_tiff_pages(path, plane_fn)
+    if len(first_shape) == 2:
+        return f"Z={z_count} {first_shape[1]}x{first_shape[0]}"
+    return f"Z={z_count} {first_shape}"
+
+
 def _encode_png_base64(path: Path) -> str:
     data = path.read_bytes()
     return base64.b64encode(data).decode("ascii")
@@ -244,6 +319,15 @@ def _backup_file(src: Path, backup_root: Path, bundle_root: Path) -> None:
         shutil.copy2(src, dest)
 
 
+def _archive_keep_mask(bundle_root: Path, slice_id: str, mask_path: Path) -> str:
+    """Copy keep mask PNG into ``.masonjar/tissue_cleanup_masks/`` for alignment."""
+    archive_dir = bundle_root / ".masonjar" / ARCHIVE_MASK_REL
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    dest = archive_dir / f"{slice_id}.png"
+    shutil.copy2(mask_path, dest)
+    return f"{ARCHIVE_MASK_REL}/{slice_id}.png"
+
+
 def apply_masks_batch(bundle_root: Path, config: dict) -> dict:
     started = time.monotonic()
     bundle_root = bundle_root.resolve()
@@ -252,7 +336,7 @@ def apply_masks_batch(bundle_root: Path, config: dict) -> dict:
     backup_root = bundle_root / ".masonjar" / "tissue_cleanup_backup"
     cfg = _load_cfg(config, bundle_root)
 
-    jobs: list[tuple[str, Path, np.ndarray, float | None]] = []
+    jobs: list[tuple[str, Path, np.ndarray, float | None, str]] = []
     for slice_id, spec in slices_cfg.items():
         mask_path = Path(str(spec.get("mask_path", "")).strip())
         if not mask_path.is_file():
@@ -262,12 +346,13 @@ def apply_masks_batch(bundle_root: Path, config: dict) -> dict:
         if mask_is_all_keep(keep_mask):
             emit_log(f"tissue_cleanup: skip {slice_id} — unchanged mask")
             continue
+        archive_rel = _archive_keep_mask(bundle_root, slice_id, mask_path)
         bg_override = spec.get("bg_value")
         bg = float(bg_override) if bg_override is not None else None
-        jobs.append((slice_id, mask_path, keep_mask, bg))
+        jobs.append((slice_id, mask_path, keep_mask, bg, archive_rel))
 
     targets: list[tuple[str, Path]] = []
-    for slice_id, _mask_path, _keep, _bg in jobs:
+    for slice_id, _mask_path, _keep, _bg, _archive in jobs:
         for tpath in paths_for_slice(bundle_root, slice_id, cfg):
             targets.append((slice_id, tpath))
 
@@ -275,53 +360,84 @@ def apply_masks_batch(bundle_root: Path, config: dict) -> dict:
     emit_log(f"tissue_cleanup apply: {len(jobs)} slice(s), {total_files} file(s)")
     print(total_files, flush=True)
 
-    manifest_slices: dict = {}
-    applied = 0
+    fingerprint = config_fingerprint(config)
+    resume = bool(config.get("resume_apply", True))
+    progress = load_progress(bundle_root)
+    if progress and progress.get("config_fingerprint") != fingerprint:
+        progress = None
+    if not resume or not progress:
+        progress = {
+            "config_fingerprint": fingerprint,
+            "files_total": total_files,
+            "completed": 0,
+            "completed_paths": [],
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "slices": {},
+        }
+        save_progress(bundle_root, progress)
+    elif progress.get("completed", 0):
+        emit_log(
+            f"Resuming apply: {progress.get('completed', 0)}/{total_files} already done",
+        )
+
+    manifest_slices: dict = dict((progress or {}).get("slices") or {})
+    applied = int((progress or {}).get("completed") or 0) if progress else 0
     skipped = 0
     failed: list[str] = []
     file_index = 0
 
-    job_by_slice = {sid: (mask, bg) for sid, _mp, mask, bg in jobs}
+    job_by_slice = {sid: (mask, bg, archive_rel) for sid, _mp, mask, bg, archive_rel in jobs}
+    archive_by_slice = {sid: archive_rel for sid, _mp, _m, _b, archive_rel in jobs}
 
     for slice_id, tpath in targets:
         file_index += 1
-        keep_mask, bg_override = job_by_slice[slice_id]
+        keep_mask, bg_override, _archive_rel = job_by_slice[slice_id]
         try:
             rel = tpath.relative_to(bundle_root)
         except ValueError:
             rel = Path(tpath.name)
+        rel_k = path_key(bundle_root, tpath)
+        if resume and progress and is_completed(progress, rel_k):
+            emit_log(f"skip completed {rel_k}")
+            continue
         emit_log(f"[{file_index}/{total_files}] read {rel}")
         try:
             if dry_run:
                 skipped += 1
                 print(f"Dry-run [{file_index}/{total_files}] {rel}", flush=True)
                 continue
-            arr = _read_image_array(tpath)
-            if arr.ndim == 2:
-                bg = bg_override if bg_override is not None else border_median_bg(arr)
-            elif arr.ndim == 3:
-                bg = bg_override if bg_override is not None else border_median_bg(arr[0])
-            else:
-                raise ValueError(f"Unsupported ndim={arr.ndim}")
+            read_start = time.monotonic()
             _backup_file(tpath, backup_root, bundle_root)
-            out = apply_keep_mask_to_array(arr, keep_mask, bg)
-            _write_image_array(tpath, out)
+            shape_desc = _apply_mask_to_file(tpath, keep_mask, bg_override)
+            elapsed = time.monotonic() - read_start
+            emit_log(
+                f"[{file_index}/{total_files}] wrote {rel} ({shape_desc}, {elapsed:.2f}s)",
+            )
             applied += 1
             entry = manifest_slices.setdefault(
                 slice_id,
                 {
                     "method": slices_cfg.get(slice_id, {}).get("method", "mixed"),
                     "files_touched": [],
+                    "mask_archive": archive_by_slice.get(slice_id),
                 },
             )
             entry["files_touched"].append(str(rel))
             print(f"Applied tissue mask [{file_index}/{total_files}] {rel}", flush=True)
+            if progress is not None:
+                record_completion(
+                    bundle_root,
+                    progress,
+                    rel_k,
+                    slice_id,
+                    manifest_slices,
+                )
         except Exception as exc:
             failed.append(f"{rel}: {exc}")
             emit_log(f"[{file_index}/{total_files}] FAILED {rel}: {exc}")
 
     elapsed = round(time.monotonic() - started, 2)
-    return {
+    result = {
         "ok": len(failed) == 0,
         "applied_files": applied,
         "skipped_files": skipped,
@@ -331,6 +447,9 @@ def apply_masks_batch(bundle_root: Path, config: dict) -> dict:
         "elapsed_sec": elapsed,
         "slices": manifest_slices,
     }
+    if result["ok"]:
+        clear_progress(bundle_root)
+    return result
 
 
 def _preview_mask_out_path(args, preview_path: Path) -> Path:

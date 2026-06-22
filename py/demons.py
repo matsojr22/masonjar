@@ -60,14 +60,30 @@ def _image_has_registration_signal(image, min_nonzero_frac=0.01, min_std=1.0):
     return True
 
 
-def _configure_registration_method(registration):
+def _configure_registration_method(registration, fixed_metric_mask=None):
     registration.SetMetricAsMattesMutualInformation()
     registration.SetMetricSamplingPercentage(0.25)
     registration.SetOptimizerScalesFromPhysicalShift()
     registration.SetInterpolator(sitk.sitkLinear)
+    if fixed_metric_mask is not None:
+        registration.SetMetricFixedMask(fixed_metric_mask)
 
 
-def _execute_registration_stage(fixed_f32, moving_f32, configure_fn, stage_name, geometry_fallback):
+def _numpy_mask_to_sitk(mask_uint8, reference_image):
+    mask_arr = (mask_uint8 >= 128).astype(np.uint8)
+    sitk_mask = sitk.GetImageFromArray(mask_arr)
+    sitk_mask.CopyInformation(reference_image)
+    return sitk_mask
+
+
+def _execute_registration_stage(
+    fixed_f32,
+    moving_f32,
+    configure_fn,
+    stage_name,
+    geometry_fallback,
+    fixed_metric_mask=None,
+):
     """Run one registration stage with edge, float, and geometry-only fallbacks."""
     fixed_edge = preprocess_image(fixed_f32)
     moving_edge = preprocess_image(moving_f32)
@@ -78,8 +94,14 @@ def _execute_registration_stage(fixed_f32, moving_f32, configure_fn, stage_name,
     last_error = None
     for fixed_img, moving_img, label in attempts:
         registration = sitk.ImageRegistrationMethod()
-        configure_fn(registration)
+
+        def configure(registration, _configure_fn=configure_fn):
+            _configure_fn(registration)
+            if fixed_metric_mask is not None:
+                registration.SetMetricFixedMask(fixed_metric_mask)
+
         try:
+            configure(registration)
             return registration.Execute(fixed_img, moving_img)
         except RuntimeError as exc:
             last_error = exc
@@ -93,7 +115,7 @@ def _execute_registration_stage(fixed_f32, moving_f32, configure_fn, stage_name,
     return geometry_fallback()
 
 
-def multimodal_registration(fixed, moving):
+def multimodal_registration(fixed, moving, fixed_metric_mask=None):
     fixed_f32 = sitk.Cast(fixed, sitk.sitkFloat32)
     moving_f32 = sitk.Cast(moving, sitk.sitkFloat32)
 
@@ -104,7 +126,7 @@ def multimodal_registration(fixed, moving):
             sitk.Euler2DTransform(),
             sitk.CenteredTransformInitializerFilter.GEOMETRY,
         )
-        _configure_registration_method(registration)
+        _configure_registration_method(registration, fixed_metric_mask)
         registration.SetOptimizerAsGradientDescent(
             learningRate=0.001,
             numberOfIterations=25,
@@ -124,7 +146,12 @@ def multimodal_registration(fixed, moving):
         )
 
     outTx = _execute_registration_stage(
-        fixed_f32, moving_f32, configure_rigid, "rigid", rigid_geometry_fallback
+        fixed_f32,
+        moving_f32,
+        configure_rigid,
+        "rigid",
+        rigid_geometry_fallback,
+        fixed_metric_mask=fixed_metric_mask,
     )
 
     rigid_moving = sitk.Resample(
@@ -135,7 +162,7 @@ def multimodal_registration(fixed, moving):
         initial_tx = sitk.CenteredTransformInitializer(
             fixed_f32, rigid_moving, sitk.AffineTransform(fixed_f32.GetDimension())
         )
-        _configure_registration_method(registration)
+        _configure_registration_method(registration, fixed_metric_mask)
         registration.SetOptimizerAsGradientDescent(
             learningRate=0.001,
             numberOfIterations=25,
@@ -152,7 +179,12 @@ def multimodal_registration(fixed, moving):
         )
 
     outTx1 = _execute_registration_stage(
-        fixed_f32, rigid_moving, configure_affine, "affine", affine_geometry_fallback
+        fixed_f32,
+        rigid_moving,
+        configure_affine,
+        "affine",
+        affine_geometry_fallback,
+        fixed_metric_mask=fixed_metric_mask,
     )
 
     resampled_moving = sitk.Resample(
@@ -162,7 +194,7 @@ def multimodal_registration(fixed, moving):
     def configure_bspline(registration):
         transform_domain_mesh_size = [5] * fixed_f32.GetDimension()
         tx = sitk.BSplineTransformInitializer(fixed_f32, transform_domain_mesh_size)
-        _configure_registration_method(registration)
+        _configure_registration_method(registration, fixed_metric_mask)
         registration.SetInitialTransform(tx, inPlace=False)
         registration.SetShrinkFactorsPerLevel(shrinkFactors=[4, 2, 1])
         registration.SetSmoothingSigmasPerLevel(smoothingSigmas=[2, 1, 0])
@@ -183,6 +215,7 @@ def multimodal_registration(fixed, moving):
         configure_bspline,
         "bspline",
         bspline_geometry_fallback,
+        fixed_metric_mask=fixed_metric_mask,
     )
 
     composite_transform = sitk.CompositeTransform(fixed_f32.GetDimension())
@@ -275,7 +308,14 @@ def resize_image_nearest_neighbor(input_image, new_size):
     return resized_image
 
 
-def register_to_atlas(tissue, section, label, structure_map_path):
+def register_to_atlas(
+    tissue,
+    section,
+    label,
+    structure_map_path,
+    fixed_keep_mask=None,
+    moving_exclude_mask=None,
+):
     """
     Register a section to the atlas using sitk.
 
@@ -294,10 +334,35 @@ def register_to_atlas(tissue, section, label, structure_map_path):
     with open(structure_map_path, "rb") as f:
         structure_map = pickle.load(f)
 
+    section_work = np.array(section, copy=True)
+    label_work = np.array(label, copy=True)
+    if moving_exclude_mask is not None:
+        exclude = moving_exclude_mask.astype(bool)
+        if exclude.shape != section_work.shape:
+            exclude = cv2.resize(
+                exclude.astype(np.uint8),
+                (section_work.shape[1], section_work.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            ).astype(bool)
+        section_work[exclude] = 0
+        label_work[exclude] = 0
+
     tissue_resized = cv2.resize(tissue, (360, 360))
-    section_resized = cv2.resize(section, (360, 360))
-    label = resize_image_nearest_neighbor(label, (360, 360))
+    section_resized = cv2.resize(section_work, (360, 360))
+    label = resize_image_nearest_neighbor(label_work, (360, 360))
     fixed = sitk.GetImageFromArray(tissue_resized, isVector=False)
+
+    fixed_metric_mask = None
+    if fixed_keep_mask is not None:
+        keep = fixed_keep_mask
+        if keep.shape != tissue.shape:
+            keep = cv2.resize(
+                keep,
+                (tissue.shape[1], tissue.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        keep_resized = cv2.resize(keep, (360, 360), interpolation=cv2.INTER_NEAREST)
+        fixed_metric_mask = _numpy_mask_to_sitk(keep_resized, fixed)
 
     # Vectorized layer-specific intensity adjustment
     label_flat = label.ravel()
@@ -329,7 +394,7 @@ def register_to_atlas(tissue, section, label, structure_map_path):
     # cast to float 32
     fixed = sitk.Cast(fixed, sitk.sitkFloat32)
     moving = sitk.Cast(moving, sitk.sitkFloat32)
-    tx = multimodal_registration(fixed, moving)
+    tx = multimodal_registration(fixed, moving, fixed_metric_mask=fixed_metric_mask)
 
     resampler = sitk.ResampleImageFilter()
     resampler.SetReferenceImage(fixed)
@@ -360,5 +425,19 @@ def register_to_atlas(tissue, section, label, structure_map_path):
     # convert color label back to rgb
     color_label = cv2.cvtColor(color_label, cv2.COLOR_BGR2RGB)
     resampled_label = resize_image_nearest_neighbor(resampled_label, tissue.shape[:2][::-1])
+
+    if fixed_keep_mask is not None:
+        keep_full = fixed_keep_mask
+        if keep_full.shape != resampled_label.shape:
+            keep_full = cv2.resize(
+                keep_full,
+                (resampled_label.shape[1], resampled_label.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        off = keep_full < 128
+        resampled_label = resampled_label.copy()
+        resampled_label[off] = 0
+        color_label = color_label.copy()
+        color_label[off] = 0
 
     return resampled_label, resampled_atlas, color_label

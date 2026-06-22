@@ -181,6 +181,35 @@ def _probe_target(path: Path) -> tuple[bool, str]:
         return False, detail + f" (read meta failed: {exc})"
 
 
+def _array_stats(arr: np.ndarray) -> dict:
+    flat = np.asarray(arr)
+    return {
+        "dtype": str(flat.dtype),
+        "shape": list(flat.shape),
+        "min": int(np.min(flat)),
+        "max": int(np.max(flat)),
+        "mean": float(np.mean(flat)),
+    }
+
+
+def _log_max_transform_stats(bundle_root: Path, slice_id: str, rel: Path, before: np.ndarray, after: np.ndarray) -> None:
+    rel_s = str(rel).replace("\\", "/")
+    if "/03_max/" not in rel_s:
+        return
+    b = _array_stats(before)
+    a = _array_stats(after)
+    emit_log(
+        f"LOG: max_transform_stats slice={slice_id} path={rel_s} "
+        f"before={b['dtype']} min={b['min']} max={b['max']} "
+        f"after={a['dtype']} min={a['min']} max={a['max']}",
+    )
+    if a["max"] < 5:
+        emit_log(
+            f"LOG: max_transform_warn slice={slice_id} path={rel_s} "
+            f"post_apply_peak={a['max']} (expected uint8/uint16 signal range)",
+        )
+
+
 def _describe_target(path: Path) -> str:
     _ok, detail = _probe_target(path)
     return detail
@@ -349,6 +378,11 @@ def run_transform_jobs(
             try:
                 _before, after = transform_file(tpath, ops)
                 read_elapsed = time.monotonic() - read_start
+                try:
+                    rel_for_log = tpath.relative_to(bundle_root)
+                except ValueError:
+                    rel_for_log = Path(tpath.name)
+                _log_max_transform_stats(bundle_root, slice_id, rel_for_log, _before, after)
                 if after.ndim == 2:
                     shape_desc = f"{after.shape[1]}x{after.shape[0]} {after.dtype}"
                 elif after.ndim == 3:

@@ -1662,8 +1662,8 @@ function auditCziImportCompletion(bundleRoot, cziImport, options) {
 
 function assessOrientPreviewHealth(bundleRoot, cziImport) {
 	cziImport = cziImport || {};
-	var synced = ensureOrientDapiPreviewsFromPipeline(bundleRoot);
 	var audit = auditCziImportCompletion(bundleRoot, cziImport, {});
+	var missingOrient = findMissingOrientDapiPreviews(bundleRoot);
 	var tiffIn00 = (audit.lowResTiffIssues || []).filter(function (i) {
 		return i.kind === "dapi_tif";
 	});
@@ -1676,14 +1676,15 @@ function assessOrientPreviewHealth(bundleRoot, cziImport) {
 	var needsRepair =
 		tiffIn00.length > 0 ||
 		invalidOrient.length > 0 ||
-		(audit.missingOrientDapiPreviews || []).length > 0 ||
+		missingOrient.length > 0 ||
 		blankDapi.length > 0;
 	return {
 		audit: audit,
-		synced: synced,
+		synced: 0,
+		missingOrientDapiPreviews: missingOrient,
 		tiffIn00: tiffIn00,
 		invalidOrient: invalidOrient,
-		missingOrient: audit.missingOrientDapiPreviews || [],
+		missingOrient: missingOrient,
 		blankPreviews: audit.blankPreviews || [],
 		blankDapi: blankDapi,
 		needsRepair: needsRepair,

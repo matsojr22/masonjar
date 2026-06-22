@@ -6,6 +6,25 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.0.5
+
+**What's new**
+
+Align and Viewer/Editor no longer leave Mason Jar stuck when you **Cancel** or close the viewer window. Alignment tuning is saved on Cancel as well as when you close Napari. Tissue cleanup **Apply** handles large NAS z-stack bundles without crashing. **Check Orientation Consistency** applies confirmed rotations across the full pipeline, and the orient grid lists all sections.
+
+**Changes**
+
+- Align / Adjust: Cancel requests a graceful save and exit; UI always returns to Run.
+- Align: tissue edge-cleanup masks and gap warp strategies for registration.
+- Tissue cleanup Apply: streaming TIFF I/O and resume checkpoint for large jobs.
+- Orient / geometry repair: full-pipeline apply from repair wizard; slice list includes all sections.
+
+**Commit subject**
+
+Align and Adjust Cancel no longer hang; tissue cleanup and geometry repair fixes
+
+---
+
 ## v4.0.4
 
 **What's new**

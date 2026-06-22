@@ -297,15 +297,6 @@ function geometryStateBannerText(state, previewHealth) {
 				" slices. Use Check Orientation Consistency — do not Apply."
 			);
 		}
-		if (state.signals && state.signals.indexOf("partial_pending_subset") >= 0) {
-			return (
-				"Pending geometry on " +
-				state.pendingCount +
-				" of " +
-				state.sliceIds.length +
-				" slices after a prior apply. Use Check Orientation Consistency — do not Apply."
-			);
-		}
 		return (
 			"Geometry apply was interrupted or files are inconsistent. " +
 			"Do not use Apply geometry — use Check Orientation Consistency to audit and repair."
@@ -445,12 +436,45 @@ function buildConfirmedGeometryFromQueue(queue) {
 	return geometry;
 }
 
+/** Full pipeline geometry map for repair: manual confirms + probe suggested_ops. */
+function buildRepairGeometryFromQueue(queue) {
+	var geometry = {};
+	var slices = queue.slices || [];
+	for (var i = 0; i < slices.length; i++) {
+		var sl = slices[i];
+		if (sliceReviewIsSettled(sl) && !sliceHasConfirmedOps(sl)) {
+			continue;
+		}
+		if (sliceHasConfirmedOps(sl)) {
+			geometry[sl.slice_id] = { ops: sl.confirmed_ops.slice() };
+			continue;
+		}
+		if (sl.auto_repairable && sl.suggested_ops && sl.suggested_ops.length) {
+			geometry[sl.slice_id] = { ops: sl.suggested_ops.slice() };
+		}
+	}
+	return geometry;
+}
+
+function suggestedOpsForReviewSlice(sl) {
+	if (!sl) {
+		return [];
+	}
+	if (sl.suggested_ops && sl.suggested_ops.length) {
+		return sl.suggested_ops.slice();
+	}
+	if (sl.pending_ops && sl.pending_ops.length) {
+		return sl.pending_ops.slice();
+	}
+	return [];
+}
+
 function buildAutoRepairTargetsFromQueue(queue) {
 	var targets = [];
 	var slices = queue.slices || [];
 	for (var i = 0; i < slices.length; i++) {
 		var sl = slices[i];
-		if (sliceHasConfirmedOps(sl)) {
+		if (sliceReviewIsSettled(sl) || sliceHasConfirmedOps(sl)) {
 			continue;
 		}
 		var ops = sl.pending_ops || [];
@@ -481,14 +505,17 @@ function buildRepairTargetsFromQueue(queue) {
 	var slices = queue.slices || [];
 	for (var i = 0; i < slices.length; i++) {
 		var sl = slices[i];
-		var ops = sl.confirmed_ops || sl.pending_ops || [];
+		if (sliceReviewIsSettled(sl) && !sliceHasConfirmedOps(sl)) {
+			continue;
+		}
+		var ops = sl.confirmed_ops != null ? sl.confirmed_ops : sl.pending_ops || [];
 		if (!ops.length && sl.issue === "ok") {
 			continue;
 		}
 		var channels = sl.channels || [];
 		for (var c = 0; c < channels.length; c++) {
 			var ch = channels[c];
-			if (ch.suggested_strategy === "skip" && !sl.confirmed_ops) {
+			if (ch.suggested_strategy === "skip" && sl.confirmed_ops == null) {
 				continue;
 			}
 			targets.push({
@@ -496,7 +523,7 @@ function buildRepairTargetsFromQueue(queue) {
 				branch: ch.branch,
 				rel_path: ch.rel_path,
 				strategy: resolveRepairStrategy(ch, sl),
-				ops: sl.confirmed_ops || sl.pending_ops || [],
+				ops: ops.slice(),
 			});
 		}
 	}
@@ -565,6 +592,9 @@ function reconcileGeometryOnOpen(bundleRoot, projectData) {
 			orientGeometry.resetGeometryMap(cziImport.geometry, sliceIds);
 			writeCziImportConfig(bundleRoot, cziImport);
 			result.changed = true;
+			console.log(
+				"[geometry_state] reconcileGeometryOnOpen: cleared stale pending geometry after successful apply meta",
+			);
 			pending = false;
 		}
 	}
@@ -634,6 +664,8 @@ module.exports = {
 	sliceReviewIsSettled: sliceReviewIsSettled,
 	sliceHasConfirmedOps: sliceHasConfirmedOps,
 	buildConfirmedGeometryFromQueue: buildConfirmedGeometryFromQueue,
+	buildRepairGeometryFromQueue: buildRepairGeometryFromQueue,
+	suggestedOpsForReviewSlice: suggestedOpsForReviewSlice,
 	buildAutoRepairTargetsFromQueue: buildAutoRepairTargetsFromQueue,
 	buildRepairTargetsFromQueue: buildRepairTargetsFromQueue,
 	batchGeometryPreflight: batchGeometryPreflight,

@@ -18,6 +18,8 @@ def numpy_array_to_qimage(array):
             raise ValueError("Unsupported channel number: {}".format(ch))
     elif np.ndim(array) == 2:
         h, w = array.shape
+        if not array.flags["C_CONTIGUOUS"]:
+            array = np.ascontiguousarray(array)
         format = QImage.Format.Format_Grayscale8
     else:
         raise ValueError("Unsupported numpy array shape: {}".format(array.shape))

@@ -4,6 +4,7 @@ var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
+var alignIpc = require("./align_ipc");
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
 var run = document.getElementById("run");
@@ -48,14 +49,7 @@ run.addEventListener("click", function () {
 back.addEventListener("click", function (event) {
 	if (back.classList.contains("btn-danger")) {
 		event.preventDefault();
-		ipc.send("killAdjust", []);
-		back.classList.add("btn-warning");
-		back.classList.remove("btn-danger");
-		back.innerHTML = "Back";
-		run.innerHTML = "Run";
-		run.classList.remove("disabled");
-		loadmessage.innerHTML = "";
-		loadbar.style.width = "0";
+		ipc.send("saveAndExitAdjust", []);
 	}
 });
 
@@ -65,15 +59,24 @@ ipc.on("adjustResult", function (event, response) {
 	back.classList.add("btn-warning");
 	back.classList.remove("btn-danger");
 	back.innerHTML = "Back";
-	run.innerHTML = "Run";
-	run.classList.remove("disabled");
-	loadmessage.innerHTML = "";
 	loadbar.style.width = "0";
+	if (response && response.cancelled) {
+		loadmessage.textContent = "Viewer/Editor closed.";
+		return;
+	}
+	loadmessage.innerHTML = "";
 });
 
-ipc.once("adjustError", function (event, response) {
+ipc.on("adjustError", function (event, response) {
 	run.innerHTML = "Run";
 	run.classList.remove("disabled");
+	back.classList.add("btn-warning");
+	back.classList.remove("btn-danger");
+	back.innerHTML = "Back";
+	loadbar.style.width = "0";
+	if (response && response[0]) {
+		loadmessage.textContent = String(response[0]);
+	}
 });
 
 ipc.on("updateLoad", function (event, response) {

@@ -586,6 +586,8 @@ class AlignmentController:
         )
         self._session_restore_nav = False
         self._session_finished = False
+        self._save_exit_timer = QTimer()
+        self._save_exit_flag = Path(self.input_path) / ".align_save_exit"
         self.viewer.window.add_dock_widget(
             [
                 x_angle_widget,
@@ -1731,6 +1733,40 @@ class AlignmentController:
             print(f"LOG: align_session_complete_failed error={exc}", flush=True)
         print("Done!", flush=True)
 
+    def _request_viewer_exit(self, reason: str) -> None:
+        if self._session_finished:
+            return
+        self._flush_autosave(reason)
+        try:
+            if self._save_exit_flag.is_file():
+                self._save_exit_flag.unlink()
+        except OSError:
+            pass
+        try:
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+        except Exception:
+            pass
+
+    def _poll_save_exit(self) -> None:
+        if self._session_finished:
+            return
+        try:
+            if self._save_exit_flag.is_file():
+                self._request_viewer_exit("cancel")
+        except OSError:
+            pass
+
+    def _bind_save_exit_poll(self) -> None:
+        try:
+            if self._save_exit_flag.is_file():
+                self._save_exit_flag.unlink()
+        except OSError:
+            pass
+        self._save_exit_timer.timeout.connect(self._poll_save_exit)
+        self._save_exit_timer.start(200)
+
     def _bind_viewer_close_flush(self) -> None:
         try:
             qt_window = self.viewer.window._qt_window
@@ -1764,7 +1800,9 @@ class AlignmentController:
         self.update_display()
         raise_and_activate_napari(self.viewer)
         self._bind_viewer_close_flush()
+        self._bind_save_exit_poll()
         napari.run()
+        self._save_exit_timer.stop()
         if not self._session_finished:
             self._flush_autosave("viewer_close")
             print("LOG: align_viewer_closed", flush=True)

@@ -265,6 +265,54 @@ function testBuildAutoRepairTargetsExcludesConfirmed() {
 	assert.strictEqual(auto[0].slice_id, "S2");
 }
 
+function testBuildAutoRepairTargetsExcludesNoRotationSettled() {
+	var queue = {
+		slices: [
+			{
+				slice_id: "S1",
+				confirmed_ops: [],
+				issue: "low_confidence",
+				channels: [
+					{
+						branch: "dapi",
+						rel_path: "data/counting/_previews/S1_dapi.png",
+						suggested_strategy: "derivatives_from_original",
+					},
+				],
+			},
+		],
+	};
+	assert.strictEqual(geometryState.buildAutoRepairTargetsFromQueue(queue).length, 0);
+	assert.strictEqual(geometryState.buildRepairTargetsFromQueue(queue).length, 0);
+}
+
+function testBuildRepairGeometryFromQueue() {
+	var queue = {
+		slices: [
+			{
+				slice_id: "S1",
+				auto_repairable: true,
+				suggested_ops: ["rot90", "rot90"],
+				issue: "consistent_reorient",
+			},
+			{
+				slice_id: "S2",
+				confirmed_ops: ["flipX"],
+				needs_manual_review: false,
+			},
+			{
+				slice_id: "S3",
+				confirmed_ops: [],
+				issue: "low_confidence",
+			},
+		],
+	};
+	var geometry = geometryState.buildRepairGeometryFromQueue(queue);
+	assert.deepStrictEqual(Object.keys(geometry).sort(), ["S1", "S2"]);
+	assert.deepStrictEqual(geometry.S1.ops, ["rot90", "rot90"]);
+	assert.deepStrictEqual(geometry.S2.ops, ["flipX"]);
+}
+
 function testWriteCziImportConfigIncludesGeometryHash() {
 	var bundle = tempBundle();
 	var czi = {
@@ -343,6 +391,8 @@ function run() {
 	testBuildConfirmedGeometryFromQueue();
 	testSlicesAwaitingReviewConfirmation();
 	testBuildAutoRepairTargetsExcludesConfirmed();
+	testBuildAutoRepairTargetsExcludesNoRotationSettled();
+	testBuildRepairGeometryFromQueue();
 	testWriteCziImportConfigIncludesGeometryHash();
 	testFinalizeGeometryAfterApplyClearsPending();
 	testReconcileClearsStalePendingAfterSuccessfulApply();

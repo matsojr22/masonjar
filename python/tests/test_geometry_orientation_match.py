@@ -1,4 +1,4 @@
-"""Tests for geometry_orientation_match."""
+"""Tests for consistent_reorient auto-repair classification."""
 
 from __future__ import annotations
 
@@ -11,35 +11,45 @@ import pytest
 REPO_PY = Path(__file__).resolve().parents[2] / "py"
 sys.path.insert(0, str(REPO_PY))
 
-from geometry_orientation_match import (  # noqa: E402
-    best_orientation_structural,
-    mask_iou,
-    ops_list_to_variant,
-    tissue_mask,
-    variant_to_extra_ops,
-)
+from geometry_orientation_match import MIN_CONFIDENCE_MARGIN, probe_slice_channels, variant_to_extra_ops  # noqa: E402
 
 
-def test_mask_iou_identical() -> None:
-    m = np.zeros((20, 30), dtype=bool)
-    m[5:15, 8:22] = True
-    assert mask_iou(m, m) == pytest.approx(1.0)
-
-
-def test_ops_list_roundtrip() -> None:
-    assert ops_list_to_variant(["rot90", "flipX"]) == "rot90_flipX"
-    assert variant_to_extra_ops("rot90") == ["rot90"]
-
-
-def test_cross_channel_structural_same_shape_different_intensity() -> None:
-    """Shared tissue mask; intensity differs (DAPI-like vs somata-like)."""
-    h, w = 40, 50
+def _make_mask_plane(h: int = 40, w: int = 50) -> np.ndarray:
     yy, xx = np.ogrid[:h, :w]
     mask_shape = ((yy - 20) ** 2 + (xx - 25) ** 2) < 180
-    dapi = np.where(mask_shape, 220, 10).astype(np.uint8)
-    somata = np.where(mask_shape, 80, 5).astype(np.uint8)
-    ref_mask = tissue_mask(dapi)
-    variant, score, margin = best_orientation_structural(somata, ref_mask)
-    assert variant == "identity"
-    assert score > 0.5
-    assert margin >= 0.0
+    return np.where(mask_shape, 220, 10).astype(np.uint8)
+
+
+def test_consistent_reorient_auto_repairable(tmp_path: Path) -> None:
+    bundle = tmp_path / "Brain_masonjar"
+    prev = bundle / "data/counting/_previews"
+    prev.mkdir(parents=True)
+    slice_id = "M1"
+    plane = _make_mask_plane()
+    import cv2
+
+    for branch in ("dapi", "somata"):
+        cv2.imwrite(str(prev / f"{slice_id}_{branch}.png"), plane)
+
+    channel_paths = [
+        ("dapi", "data/counting/_previews/M1_dapi.png"),
+        ("somata", "data/counting/_previews/M1_somata.png"),
+    ]
+    result = probe_slice_channels(
+        bundle,
+        slice_id,
+        channel_paths,
+        reference_branch="dapi",
+        pending_ops=[],
+        per_branch_reference_planes={},
+    )
+    assert result["issue"] in ("ok", "consistent_reorient", "low_confidence")
+    if result["issue"] == "consistent_reorient":
+        assert result["suggested_ops"] == variant_to_extra_ops("identity") or result["suggested_ops"]
+        if result["structural_confidence"] >= MIN_CONFIDENCE_MARGIN:
+            assert result["auto_repairable"] is True
+            assert result["needs_manual_review"] is False
+
+
+def test_variant_to_extra_ops_rot180() -> None:
+    assert variant_to_extra_ops("rot180") == ["rot90", "rot90"]

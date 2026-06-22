@@ -2,6 +2,23 @@
 
 var VALID_OPS = { rot90: true, flipX: true, flipY: true };
 
+/** Matches py/geometry_orientation_match.py ORIENTATION_VARIANTS */
+var VARIANT_OPS = {
+	identity: [],
+	rot90: ["rot90"],
+	rot180: ["rot90", "rot90"],
+	rot270: ["rot90", "rot90", "rot90"],
+	flipX: ["flipX"],
+	flipY: ["flipY"],
+	rot90_flipX: ["rot90", "flipX"],
+	rot90_flipY: ["rot90", "flipY"],
+};
+
+function variantToOps(variant) {
+	var ops = VARIANT_OPS[variant];
+	return ops ? ops.slice() : [];
+}
+
 function defaultGeometry() {
 	return { ops: [] };
 }
@@ -255,6 +272,7 @@ function orientPostApplySummaryText(geometryAppliedAt, filesTotal) {
 
 module.exports = {
 	defaultGeometry: defaultGeometry,
+	variantToOps: variantToOps,
 	legacyToOps: legacyToOps,
 	normalizeGeometry: normalizeGeometry,
 	cloneGeometry: cloneGeometry,
