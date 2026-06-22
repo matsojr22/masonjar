@@ -148,6 +148,34 @@ def apply_slice_tuning_from_controls(
         atlas_slice.layout_low_confidence = False
 
 
+def should_sync_controls_before_autosave(reason: str, controls_seeded: bool) -> bool:
+    """Skip Qt→slice sync before predict_complete or until update_display seeds controls."""
+    if reason == "predict_complete":
+        return False
+    return controls_seeded
+
+
+def is_corrupt_predict_complete_session(
+    session: dict[str, Any] | None,
+    atlas_slices: dict,
+) -> bool:
+    """Detect v4.0.6 autosave that clobbered predictions with default spinbox values."""
+    if not session or not atlas_slices:
+        return False
+    if session.get("reason") != "predict_complete":
+        return False
+    if int(session.get("visited", 0)) != 0:
+        return False
+    for atlas_slice in atlas_slices.values():
+        if int(getattr(atlas_slice, "ap_position", 0)) != 0:
+            return False
+        if float(getattr(atlas_slice, "x_angle", 0.0)) != 0.0:
+            return False
+        if float(getattr(atlas_slice, "y_angle", 0.0)) != 0.0:
+            return False
+    return True
+
+
 def _slice_summary(atlas_slice) -> dict[str, Any]:
     return {
         "filename": atlas_slice.section_name,

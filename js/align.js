@@ -156,6 +156,14 @@ ipc.on("alignError", function (event, response) {
 ipc.on("updateLoad", function (event, response) {
 	loadbar.style.width = String(response[0]) + "%";
 	loadmessage.innerHTML = response[1];
+	var detail = String(response[1] || "");
+	if (
+		detail.indexOf("align_session_discarded") >= 0 ||
+		detail.indexOf("cleared a bad autosave") >= 0
+	) {
+		loadmessage.textContent =
+			"Refreshed alignment predictions (cleared a bad autosave from a prior run).";
+	}
 });
 
 workspace.applyPreset("align");

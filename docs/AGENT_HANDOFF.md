@@ -1,8 +1,16 @@
 # Agent session handoff
 
-Last updated: 2026-06-13 (v4.0.6). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-13 (v4.0.7). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.0.7 — Align predict autosave hotfix (2026-06-13)
+
+- **`py/map.py`**: `_controls_seeded` gates Qt→slice sync; skip sync on `predict_complete`; auto-discard corrupt v4.0.6 sessions on load.
+- **`py/align_session.py`**: `should_sync_controls_before_autosave`, `is_corrupt_predict_complete_session`.
+- Tests: `python/tests/test_align_predict_autosave.py`, extended `test_align_session.py`.
+
+**Open follow-ups:** none critical from this release.
 
 ## v4.0.6 — Align close persistence (2026-06-13)
 

@@ -29,11 +29,14 @@ from align_tissue_layout import (
 )
 from align_session import (
     apply_slice_tuning_from_controls,
+    clear_session_markers,
     compute_tuning_fingerprint,
     diagnose_load_failure,
+    is_corrupt_predict_complete_session,
     load_session,
     mark_session_completed,
     persist_session,
+    should_sync_controls_before_autosave,
 )
 from model import TissuePredictor
 import nrrd
@@ -588,6 +591,7 @@ class AlignmentController:
         self._session_restore_nav = False
         self._session_finished = False
         self._viewer_close_handshake_sent = False
+        self._controls_seeded = False
         self._save_exit_timer = QTimer()
         self._save_exit_flag = Path(self.input_path) / ".align_save_exit"
         self.viewer.window.add_dock_widget(
@@ -768,6 +772,8 @@ class AlignmentController:
 
     def _sync_current_slice_from_controls(self) -> None:
         """Commit pending spinbox edits and current control values before save/nav."""
+        if not self._controls_seeded:
+            return
         if self.slice_update_timer.isActive():
             self.slice_update_timer.stop()
         if self.pos_update_timer.isActive():
@@ -802,7 +808,8 @@ class AlignmentController:
 
     def _flush_autosave(self, reason: str) -> None:
         self._autosave_timer.stop()
-        self._sync_current_slice_from_controls()
+        if should_sync_controls_before_autosave(reason, self._controls_seeded):
+            self._sync_current_slice_from_controls()
         self.persist_alignment_session(reason)
 
     def persist_alignment_session(self, reason: str) -> None:
@@ -1054,6 +1061,18 @@ class AlignmentController:
                     print(f"LOG: align_session_fingerprint_mismatch {detail}", flush=True)
                 print(f"LOG: align_session_not_loaded reason={detail}", flush=True)
                 print("No compatible alignment found...", flush=True)
+                return
+
+            if is_corrupt_predict_complete_session(result.session, result.atlas_slices):
+                print(
+                    "LOG: align_session_discarded reason=corrupt_predict_complete",
+                    flush=True,
+                )
+                print(
+                    "Refreshed alignment predictions (cleared a bad autosave from a prior run).",
+                    flush=True,
+                )
+                clear_session_markers(self.input_path, keep_pkl=False)
                 return
 
             self._rehydrate_atlas_slices(result.atlas_slices)
@@ -1333,6 +1352,7 @@ class AlignmentController:
         )
 
         self.update_section_header()
+        self._controls_seeded = True
 
     def _sync_layout_selection_from_slice(self):
         if not self.file_list or self.num_slices == 0:

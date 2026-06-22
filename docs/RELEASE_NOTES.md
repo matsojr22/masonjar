@@ -6,6 +6,20 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.0.7
+
+**Fixes**
+
+- Align: restored tissue predictor results on startup (v4.0.6 could save AP=0 and zero angles before the viewer opened).
+- Align: automatically discards corrupt `predict_complete` autosaves from v4.0.6 and re-runs predictions.
+- Align: closing Napari with X still saves your tuning (v4.0.6 behavior preserved).
+
+**Commit subject**
+
+Align hotfix: stop predict_complete autosave from wiping predictions
+
+---
+
 ## v4.0.6
 
 **What's new**

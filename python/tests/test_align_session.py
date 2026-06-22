@@ -19,10 +19,12 @@ from align_session import (  # noqa: E402
     compute_fingerprint,
     compute_tuning_fingerprint,
     diagnose_load_failure,
+    is_corrupt_predict_complete_session,
     load_session,
     mark_session_completed,
     persist_session,
     session_paths,
+    should_sync_controls_before_autosave,
 )
 
 
@@ -333,6 +335,75 @@ def test_apply_slice_tuning_from_controls() -> None:
     assert sl.linked is False
     assert sl.use_tissue_cleanup_mask is True
     assert sl.tissue_mask_warp_mode == "hybrid"
+
+
+def test_should_sync_controls_before_autosave() -> None:
+    assert should_sync_controls_before_autosave("predict_complete", True) is False
+    assert should_sync_controls_before_autosave("predict_complete", False) is False
+    assert should_sync_controls_before_autosave("next_section", False) is False
+    assert should_sync_controls_before_autosave("next_section", True) is True
+    assert should_sync_controls_before_autosave("window_close", True) is True
+
+
+def test_is_corrupt_predict_complete_session() -> None:
+    corrupt_session = {
+        "reason": "predict_complete",
+        "visited": 0,
+    }
+    corrupt_slices = {
+        "A.png": _FakeSlice("A.png", ap=0, x=0.0, y=0.0),
+        "B.png": _FakeSlice("B.png", ap=0, x=0.0, y=0.0),
+    }
+    assert is_corrupt_predict_complete_session(corrupt_session, corrupt_slices) is True
+
+    edited_session = {
+        "reason": "edit",
+        "visited": 0,
+    }
+    assert is_corrupt_predict_complete_session(edited_session, corrupt_slices) is False
+
+    good_session = {
+        "reason": "predict_complete",
+        "visited": 0,
+    }
+    good_slices = {
+        "A.png": _FakeSlice("A.png", ap=420, x=1.2, y=-0.5),
+    }
+    assert is_corrupt_predict_complete_session(good_session, good_slices) is False
+
+    visited_session = {
+        "reason": "predict_complete",
+        "visited": 2,
+    }
+    assert is_corrupt_predict_complete_session(visited_session, corrupt_slices) is False
+
+
+def test_predict_complete_autosave_preserves_unseeded_slice_values() -> None:
+    """predict_complete must not apply default spinbox values before update_display."""
+    dapi = Path("/tmp/unused")
+    slices = {
+        "A.png": _FakeSlice("A.png", ap=512, x=1.5, y=-0.25),
+    }
+    original_ap = slices["A.png"].ap_position
+    original_x = slices["A.png"].x_angle
+
+    assert should_sync_controls_before_autosave("predict_complete", False) is False
+
+    if should_sync_controls_before_autosave("predict_complete", False):
+        apply_slice_tuning_from_controls(
+            slices["A.png"],
+            x_angle=0.0,
+            y_angle=0.0,
+            ap_position=0,
+            region="A",
+            hemisphere="W",
+            linked=True,
+            use_tissue_cleanup_mask=False,
+            tissue_mask_warp_mode="",
+        )
+
+    assert slices["A.png"].ap_position == original_ap
+    assert slices["A.png"].x_angle == original_x
 
 
 def test_session_json_name_constant() -> None:
