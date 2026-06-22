@@ -176,6 +176,45 @@ def is_corrupt_predict_complete_session(
     return True
 
 
+def extrapolate_ap_positions(
+    confirmed_aps: list[float | int],
+    num_slices: int,
+    *,
+    max_ap: int,
+    min_ap: int = 0,
+) -> list[tuple[int, int]]:
+    """
+    Extrapolate AP for slice indices after the confirmed prefix.
+
+    ``confirmed_aps[i]`` is the AP for section index ``i`` (through ``current_section``).
+    Returns ``(slice_index, ap_position)`` pairs for indices ``len(confirmed_aps) .. num_slices-1``.
+    """
+    import numpy as np
+
+    n_confirm = len(confirmed_aps)
+    if n_confirm < 2 or n_confirm >= num_slices:
+        return []
+
+    start = n_confirm
+    y = np.array([float(v) for v in confirmed_aps], dtype=float)
+    x_pred = np.arange(start, num_slices, dtype=float)
+
+    if n_confirm == 2:
+        delta = y[1] - y[0]
+        predictions = y[-1] + delta * (x_pred - float(n_confirm - 1))
+    else:
+        degree = min(2, n_confirm - 1)
+        coeffs = np.polyfit(np.arange(n_confirm, dtype=float), y, degree)
+        predictions = np.polyval(coeffs, x_pred)
+
+    out: list[tuple[int, int]] = []
+    for idx, pred in zip(range(start, num_slices), predictions):
+        ap = int(round(float(pred)))
+        ap = max(min_ap, min(int(max_ap), ap))
+        out.append((idx, ap))
+    return out
+
+
 def _slice_summary(atlas_slice) -> dict[str, Any]:
     return {
         "filename": atlas_slice.section_name,

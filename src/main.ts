@@ -1546,6 +1546,10 @@ ipcMain.on("runAdjust", function (event: any, data: any[]) {
       });
       return;
     }
+    if (trimmed.startsWith("LOG:")) {
+      queueLogLineForUi(trimmed);
+      return;
+    }
     if (total > 0) {
       current++;
       event.sender.send("updateLoad", [
@@ -1712,6 +1716,10 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
     }
     if (/^LOG: align_session_saved reason=(window_close|cancel|viewer_close)/.test(trimmed)) {
       alignSessionSavedOnClose = true;
+    }
+    if (trimmed.startsWith("LOG:")) {
+      queueLogLineForUi(trimmed);
+      return;
     }
     if (total > 0) {
       current++;

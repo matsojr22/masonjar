@@ -6,6 +6,26 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.0.8
+
+**What's new**
+
+Align forward AP suggestions now follow the direction you set on the first sections you tune (posterior sections get higher AP when your first two do). Alignment saves and diagnostic lines appear in the Application log.
+
+**Fixes**
+
+- Align: fixed backwards AP spacing after visiting the first two sections (`adjust_positions` off-by-one).
+- Align: spinbox updates no longer race with Next/close saves (`blockSignals` on display refresh).
+- Align: `LOG:` lines from Align/Adjust appear in the Application log, not only the progress bar.
+
+**Recovery:** If a prior run saved bad AP values, delete `00_dapi/alignment.pkl` and `alignment_session.json` once, then re-run Align.
+
+**Commit subject**
+
+Align: fix AP spacing direction, persistence races, and log visibility
+
+---
+
 ## v4.0.7
 
 **What's new**

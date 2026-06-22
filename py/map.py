@@ -32,6 +32,7 @@ from align_session import (
     clear_session_markers,
     compute_tuning_fingerprint,
     diagnose_load_failure,
+    extrapolate_ap_positions,
     is_corrupt_predict_complete_session,
     load_session,
     mark_session_completed,
@@ -67,10 +68,6 @@ from qtpy import QtCore, QtGui
 from qtpy.QtCore import QTimer
 from qt_image_utils import numpy_array_to_qimage
 from qt_window_utils import raise_and_activate_napari
-from sklearn.preprocessing import PolynomialFeatures
-from sklearn.linear_model import Ridge
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 
 
 class AtlasDamageMarker(QMainWindow):
@@ -778,6 +775,9 @@ class AlignmentController:
             self.slice_update_timer.stop()
         if self.pos_update_timer.isActive():
             self.pos_update_timer.stop()
+        self._apply_current_controls_to_slice()
+
+    def _apply_current_controls_to_slice(self) -> None:
         current_slice = self._current_atlas_slice()
         if current_slice is None:
             return
@@ -830,6 +830,7 @@ class AlignmentController:
                 f"LOG: align_session_saved reason={reason} files={len(self.atlas_slices)}",
                 flush=True,
             )
+            print(f"Saved alignment tuning ({reason}).", flush=True)
         except Exception as exc:
             print(f"LOG: align_session_save_failed reason={reason} error={exc}", flush=True)
 
@@ -1317,24 +1318,23 @@ class AlignmentController:
             self.atlas_slices[self.file_list[self.current_section]].linked
         )
 
-        # Set the angles and position
-        self.x_angle_spinbox.setValue(
-            self.atlas_slices[self.file_list[self.current_section]].x_angle
-        )
-        self.y_angle_spinbox.setValue(
-            self.atlas_slices[self.file_list[self.current_section]].y_angle
-        )
-        self.ap_position_spinbox.setValue(
-            self.atlas_slices[self.file_list[self.current_section]].ap_position
-        )
+        current = self.atlas_slices[self.file_list[self.current_section]]
+        self.x_angle_spinbox.blockSignals(True)
+        self.y_angle_spinbox.blockSignals(True)
+        self.ap_position_spinbox.blockSignals(True)
+        self.region_selection.blockSignals(True)
+        self.x_angle_spinbox.setValue(current.x_angle)
+        self.y_angle_spinbox.setValue(current.y_angle)
+        self.ap_position_spinbox.setValue(current.ap_position)
         self.region_selection.setCurrentIndex(
-            list(self.region_tags.values()).index(
-                self.atlas_slices[self.file_list[self.current_section]].region
-            )
+            list(self.region_tags.values()).index(current.region)
         )
+        self.x_angle_spinbox.blockSignals(False)
+        self.y_angle_spinbox.blockSignals(False)
+        self.ap_position_spinbox.blockSignals(False)
+        self.region_selection.blockSignals(False)
         self._sync_layout_selection_from_slice()
 
-        current = self.atlas_slices[self.file_list[self.current_section]]
         self.tissue_mask_checkbox.blockSignals(True)
         self.tissue_mask_checkbox.setChecked(bool(current.use_tissue_cleanup_mask))
         self.tissue_mask_checkbox.blockSignals(False)
@@ -1434,40 +1434,40 @@ class AlignmentController:
         self._flush_autosave("edit")
 
     def adjust_positions(self):
-        """Adjust the positions of all slices based on trend in visited slices"""
-        if not self.prior_alignment and self.visited < self.num_slices - 1:
-            visited_positions = []
-            for i in range(self.visited):
-                visited_positions.append(
-                    self.atlas_slices[self.file_list[i]].ap_position,
-                )
+        """Adjust forward AP positions from confirmed sections through current."""
+        if self.prior_alignment or self.current_section >= self.num_slices - 1:
+            return
+        if self._controls_seeded:
+            self._sync_current_slice_from_controls()
 
-            if len(visited_positions) < 2:
-                return
+        n_confirm = self.current_section + 1
+        if n_confirm < 2:
+            return
 
-            degree = 2
-            poly_model = make_pipeline(
-                StandardScaler(), PolynomialFeatures(degree), Ridge()
-            )
+        confirmed = [
+            self.atlas_slices[self.file_list[i]].ap_position for i in range(n_confirm)
+        ]
+        max_ap = 528 if self.use_legacy else 1319
+        updates = extrapolate_ap_positions(
+            confirmed,
+            self.num_slices,
+            max_ap=max_ap,
+        )
+        if not updates:
+            return
 
-            x = np.arange(len(visited_positions)).reshape(-1, 1)
-            y = np.array(visited_positions)
+        delta = confirmed[-1] - confirmed[-2] if len(confirmed) >= 2 else 0
+        print(
+            f"LOG: align_ap_extrapolate from={n_confirm} to={self.num_slices - 1} "
+            f"delta={delta:.1f}",
+            flush=True,
+        )
 
-            # Fit the model
-            poly_model.fit(x, y)
-
-            # Use the model for predictions
-            x_predict = np.arange(self.visited, self.num_slices).reshape(-1, 1)
-            predictions = poly_model.predict(x_predict)
-
-            # Adjust positions
-            for i, new_position in enumerate(predictions, start=self.visited):
-                if self.spacing is not None:
-                    self.atlas_slices[self.file_list[i]].ap_position = max(
-                        new_position, int(self.spacing) // 10
-                    )
-                else:
-                    self.atlas_slices[self.file_list[i]].ap_position = new_position
+        min_ap = int(self.spacing) // 10 if self.spacing is not None else 0
+        for idx, ap in updates:
+            if min_ap > 0:
+                ap = max(ap, min_ap)
+            self.atlas_slices[self.file_list[idx]].ap_position = int(ap)
 
     def next_section(self):
         """Move to next section"""

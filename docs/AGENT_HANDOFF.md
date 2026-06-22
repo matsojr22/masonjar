@@ -1,8 +1,17 @@
 # Agent session handoff
 
-Last updated: 2026-06-13 (v4.0.7). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-13 (v4.0.8). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.0.8 — Align AP spacing + persistence + log (2026-06-13)
+
+- **`py/align_session.py`**: `extrapolate_ap_positions()` — linear/poly forward AP from confirmed sections only.
+- **`py/map.py`**: `adjust_positions` uses `current_section`; spinbox `blockSignals`; user-visible save line.
+- **`src/main.ts`**: forward stdout `LOG:` to log window for Align/Adjust.
+- Tests: `test_align_adjust_positions.py`, multi-section persist in `test_align_session.py`.
+
+**Open follow-ups:** none critical from this release.
 
 ## v4.0.7 — Align predict autosave hotfix (2026-06-13)
 

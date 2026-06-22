@@ -406,5 +406,38 @@ def test_predict_complete_autosave_preserves_unseeded_slice_values() -> None:
     assert slices["A.png"].x_angle == original_x
 
 
+def test_multi_section_window_close_persists(tmp_path: Path) -> None:
+    dapi = tmp_path / "00_dapi"
+    dapi.mkdir()
+    out = tmp_path / "out"
+    files = [f"M528_s{i:03d}.png" for i in range(1, 7)]
+    fp = _tuning_fp(files)
+    slices = {
+        name: _FakeSlice(name, ap=500 + idx * 20, x=0.5 + idx * 0.1, y=-0.2)
+        for idx, name in enumerate(files)
+    }
+
+    persist_session(
+        dapi,
+        slices,
+        tuning_fingerprint=fp,
+        output_path=out,
+        current_section=5,
+        visited=5,
+        parcellation={},
+        reason="window_close",
+    )
+
+    loaded = load_session(dapi, fp)
+    assert loaded is not None
+    assert loaded.session is not None
+    assert loaded.session["reason"] == "window_close"
+    assert loaded.session["visited"] == 5
+    assert is_corrupt_predict_complete_session(loaded.session, loaded.atlas_slices) is False
+    for idx, name in enumerate(files):
+        assert loaded.atlas_slices[name].ap_position == 500 + idx * 20
+        assert loaded.atlas_slices[name].x_angle == 0.5 + idx * 0.1
+
+
 def test_session_json_name_constant() -> None:
     assert SESSION_JSON_NAME == "alignment_session.json"
