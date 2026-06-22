@@ -6,6 +6,24 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.0.6
+
+**What's new**
+
+Align saves your section tuning when you close Napari with the window **X** or **Cancel** on the Align page. Re-run Align and your AP, angles, and layout choices restore from the saved session in `00_dapi`.
+
+**Fixes**
+
+- Align: spinbox edits are saved immediately before Next/Previous and on window close (no 500 ms debounce gap).
+- Align: closing Napari no longer shows a false **Python exited with code 1** error or duplicate log lines.
+- Align / Adjust: viewer close with a non-zero exit code is treated as a clean cancel when tuning was saved.
+
+**Commit subject**
+
+Align saves tuning when Napari closes; fix false exit code 1 on window X
+
+---
+
 ## v4.0.5
 
 **What's new**

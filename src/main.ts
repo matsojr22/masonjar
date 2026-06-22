@@ -1485,6 +1485,7 @@ ipcMain.on("runAdjust", function (event: any, data: any[]) {
   var total: number = 0;
   var current: number = 0;
   let resultSent = false;
+  let adjustViewerClosedHandshake = false;
   let saveExitKillTimer: ReturnType<typeof setTimeout> | null = null;
   const clearSaveExitKillTimer = () => {
     if (saveExitKillTimer != null) {
@@ -1505,7 +1506,10 @@ ipcMain.on("runAdjust", function (event: any, data: any[]) {
     }
     resultSent = true;
     releaseJob();
-    const pyFail = describePythonShellFailure(err, code, signal);
+    let pyFail = describePythonShellFailure(err, code, signal);
+    if (cancelled) {
+      pyFail = null;
+    }
     if (pyFail) {
       reportPythonFailure(pyFail);
     } else {
@@ -1536,8 +1540,9 @@ ipcMain.on("runAdjust", function (event: any, data: any[]) {
       return;
     }
     if (trimmed === "Viewer closed") {
+      adjustViewerClosedHandshake = true;
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
-        finalizeAdjust(true, err, code, signal);
+        finalizeAdjust(true, err, 0, signal);
       });
       return;
     }
@@ -1555,13 +1560,12 @@ ipcMain.on("runAdjust", function (event: any, data: any[]) {
       return;
     }
     const exitCode = typeof code === "number" ? code : Number(code) || 1;
-    if (exitCode === 0) {
-      finalizeAdjust(true, null, code, signal);
+    const gracefulClose = exitCode === 0 || adjustViewerClosedHandshake;
+    if (gracefulClose) {
+      finalizeAdjust(true, null, gracefulClose && exitCode !== 0 ? 0 : code, signal);
       return;
     }
-    const pyFail = `Python exited with code ${exitCode}`;
-    reportPythonFailure(pyFail);
-    finalizeAdjust(false, pyFail, code, signal);
+    finalizeAdjust(false, null, code, signal);
   });
 
   const requestAdjustSaveExit = () => {
@@ -1642,6 +1646,8 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
   var total: number = 0;
   var current: number = 0;
   let resultSent = false;
+  let alignViewerClosedHandshake = false;
+  let alignSessionSavedOnClose = false;
 
   let saveExitKillTimer: ReturnType<typeof setTimeout> | null = null;
   const clearSaveExitKillTimer = () => {
@@ -1663,7 +1669,10 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
     }
     resultSent = true;
     releaseJob();
-    const pyFail = describePythonShellFailure(err, code, signal);
+    let pyFail = describePythonShellFailure(err, code, signal);
+    if (cancelled) {
+      pyFail = null;
+    }
     if (pyFail) {
       reportPythonFailure(pyFail);
     } else {
@@ -1695,10 +1704,14 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
       return;
     }
     if (trimmed === "Viewer closed") {
+      alignViewerClosedHandshake = true;
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
-        finalizeAlign(true, err, code, signal);
+        finalizeAlign(true, err, 0, signal);
       });
       return;
+    }
+    if (/^LOG: align_session_saved reason=(window_close|cancel|viewer_close)/.test(trimmed)) {
+      alignSessionSavedOnClose = true;
     }
     if (total > 0) {
       current++;
@@ -1714,13 +1727,13 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
       return;
     }
     const exitCode = typeof code === "number" ? code : Number(code) || 1;
-    if (exitCode === 0) {
-      finalizeAlign(true, null, code, signal);
+    const gracefulClose =
+      exitCode === 0 || alignViewerClosedHandshake || alignSessionSavedOnClose;
+    if (gracefulClose) {
+      finalizeAlign(true, null, gracefulClose && exitCode !== 0 ? 0 : code, signal);
       return;
     }
-    const pyFail = `Python exited with code ${exitCode}`;
-    reportPythonFailure(pyFail);
-    finalizeAlign(false, pyFail, code, signal);
+    finalizeAlign(false, null, code, signal);
   });
 
   const requestAlignSaveExit = () => {

@@ -57,6 +57,32 @@ function shouldApplyViewerToolSideEffects(response) {
 	return shouldApplyAlignRunSideEffects(response);
 }
 
+/**
+ * Whether runAlign should finalize as cancelled when the process closes.
+ * @param {{ exitCode: number, viewerClosedHandshake?: boolean, sessionSavedOnClose?: boolean }} opts
+ */
+function shouldTreatAlignCloseAsCancelled(opts) {
+	var exitCode = Number(opts && opts.exitCode) || 0;
+	if (exitCode === 0) {
+		return true;
+	}
+	if (opts && opts.viewerClosedHandshake) {
+		return true;
+	}
+	if (opts && opts.sessionSavedOnClose) {
+		return true;
+	}
+	return false;
+}
+
+/**
+ * Whether runAlign should report a Python failure on process close.
+ * @param {{ exitCode: number, viewerClosedHandshake?: boolean, sessionSavedOnClose?: boolean }} opts
+ */
+function shouldReportAlignCloseFailure(opts) {
+	return !shouldTreatAlignCloseAsCancelled(opts);
+}
+
 module.exports = {
 	ALIGN_MSG_DONE: ALIGN_MSG_DONE,
 	ALIGN_MSG_VIEWER_CLOSED: ALIGN_MSG_VIEWER_CLOSED,
@@ -68,4 +94,6 @@ module.exports = {
 	viewerToolResultPayloadForKind: viewerToolResultPayloadForKind,
 	shouldApplyAlignRunSideEffects: shouldApplyAlignRunSideEffects,
 	shouldApplyViewerToolSideEffects: shouldApplyViewerToolSideEffects,
+	shouldTreatAlignCloseAsCancelled: shouldTreatAlignCloseAsCancelled,
+	shouldReportAlignCloseFailure: shouldReportAlignCloseFailure,
 };

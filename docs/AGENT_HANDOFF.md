@@ -1,8 +1,17 @@
 # Agent session handoff
 
-Last updated: 2026-06-13 (v4.0.5). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-13 (v4.0.6). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.0.6 — Align close persistence (2026-06-13)
+
+- **`py/map.py`**: `_sync_current_slice_from_controls()` commits spinbox edits before autosave/navigation; X close no longer calls `QApplication.quit()`; `Viewer closed` handshake emitted from close path.
+- **`py/align_session.py`**: `apply_slice_tuning_from_controls()` helper (testable without Qt).
+- **`src/main.ts` / `main.js`**: graceful close fallback when handshake or `align_session_saved` seen despite exit code 1; deduped failure logging; Adjust mirrored.
+- Tests: `python/tests/test_align_session.py`, `scripts/test-align-ipc.js`.
+
+**Open follow-ups:** none critical from this release.
 
 ## v4.0.5 — Graceful Cancel, tissue cleanup, geometry repair (2026-06-13)
 

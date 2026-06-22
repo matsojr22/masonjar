@@ -28,6 +28,7 @@ from align_tissue_layout import (
     parse_layout_mode,
 )
 from align_session import (
+    apply_slice_tuning_from_controls,
     compute_tuning_fingerprint,
     diagnose_load_failure,
     load_session,
@@ -586,6 +587,7 @@ class AlignmentController:
         )
         self._session_restore_nav = False
         self._session_finished = False
+        self._viewer_close_handshake_sent = False
         self._save_exit_timer = QTimer()
         self._save_exit_flag = Path(self.input_path) / ".align_save_exit"
         self.viewer.window.add_dock_widget(
@@ -756,6 +758,7 @@ class AlignmentController:
             "edit",
             "viewer_close",
             "window_close",
+            "cancel",
         }
         if reason in immediate:
             self._flush_autosave(reason)
@@ -763,8 +766,43 @@ class AlignmentController:
         self._autosave_timer.stop()
         self._autosave_timer.start(300)
 
+    def _sync_current_slice_from_controls(self) -> None:
+        """Commit pending spinbox edits and current control values before save/nav."""
+        if self.slice_update_timer.isActive():
+            self.slice_update_timer.stop()
+        if self.pos_update_timer.isActive():
+            self.pos_update_timer.stop()
+        current_slice = self._current_atlas_slice()
+        if current_slice is None:
+            return
+        layout_text = self.layout_selection.currentText()
+        hemisphere = (
+            self.layout_tags[layout_text]
+            if layout_text in self.layout_tags
+            else getattr(current_slice, "hemisphere", "W")
+        )
+        mode_id = self.tissue_mask_mode_combo.currentData()
+        apply_slice_tuning_from_controls(
+            current_slice,
+            x_angle=self.x_angle_spinbox.value(),
+            y_angle=self.y_angle_spinbox.value(),
+            ap_position=self.ap_position_spinbox.value(),
+            region=self.region_tags[self.region_selection.currentText()],
+            hemisphere=hemisphere,
+            linked=self.link_angles_button.isChecked(),
+            use_tissue_cleanup_mask=self.tissue_mask_checkbox.isChecked(),
+            tissue_mask_warp_mode=str(mode_id) if mode_id else "",
+        )
+        if current_slice.linked:
+            for sl in self.atlas_slices.values():
+                if sl.linked:
+                    sl.x_angle = current_slice.x_angle
+                    sl.y_angle = current_slice.y_angle
+        current_slice.set_slice(self.atlas, self.annotation)
+
     def _flush_autosave(self, reason: str) -> None:
         self._autosave_timer.stop()
+        self._sync_current_slice_from_controls()
         self.persist_alignment_session(reason)
 
     def persist_alignment_session(self, reason: str) -> None:
@@ -1414,6 +1452,7 @@ class AlignmentController:
     def next_section(self):
         """Move to next section"""
         if self.current_section < self.num_slices - 1:
+            self._sync_current_slice_from_controls()
             self.current_section += 1
             self.visited = max(self.visited, self.current_section)
             self.progress_bar.setValue(self.current_section + 1)
@@ -1427,6 +1466,7 @@ class AlignmentController:
     def previous_section(self):
         """Move to previous section"""
         if self.current_section > 0:
+            self._sync_current_slice_from_controls()
             self.current_section -= 1
             self.progress_bar.setValue(self.current_section + 1)
             self.progress_bar.setFormat(
@@ -1733,10 +1773,23 @@ class AlignmentController:
             print(f"LOG: align_session_complete_failed error={exc}", flush=True)
         print("Done!", flush=True)
 
-    def _request_viewer_exit(self, reason: str) -> None:
+    def _emit_viewer_closed_handshake(self) -> None:
+        if self._viewer_close_handshake_sent:
+            return
+        self._viewer_close_handshake_sent = True
+        print("LOG: align_viewer_closed", flush=True)
+        print("Viewer closed", flush=True)
+
+    def _close_viewer_session(self, reason: str) -> None:
         if self._session_finished:
             return
         self._flush_autosave(reason)
+        self._emit_viewer_closed_handshake()
+
+    def _request_viewer_exit(self, reason: str) -> None:
+        if self._session_finished:
+            return
+        self._close_viewer_session(reason)
         try:
             if self._save_exit_flag.is_file():
                 self._save_exit_flag.unlink()
@@ -1779,13 +1832,7 @@ class AlignmentController:
                 def eventFilter(self, obj, event):
                     if event.type() == QtCore.QEvent.Close:
                         if not controller._session_finished:
-                            controller._flush_autosave("window_close")
-                            try:
-                                app = QApplication.instance()
-                                if app is not None:
-                                    app.quit()
-                            except Exception:
-                                pass
+                            controller._close_viewer_session("window_close")
                     return False
 
             self._close_filter = _CloseFilter(qt_window)
@@ -1803,10 +1850,8 @@ class AlignmentController:
         self._bind_save_exit_poll()
         napari.run()
         self._save_exit_timer.stop()
-        if not self._session_finished:
-            self._flush_autosave("viewer_close")
-            print("LOG: align_viewer_closed", flush=True)
-            print("Viewer closed", flush=True)
+        if not self._session_finished and not self._viewer_close_handshake_sent:
+            self._close_viewer_session("viewer_close")
 
 
 if __name__ == "__main__":

@@ -36,11 +36,39 @@ function testSideEffects() {
 	assert.strictEqual(alignIpc.shouldApplyAlignRunSideEffects({ cancelled: true }), false);
 }
 
+function testAlignCloseFallback() {
+	assert.strictEqual(
+		alignIpc.shouldTreatAlignCloseAsCancelled({ exitCode: 0 }),
+		true,
+	);
+	assert.strictEqual(
+		alignIpc.shouldTreatAlignCloseAsCancelled({ exitCode: 1, viewerClosedHandshake: true }),
+		true,
+	);
+	assert.strictEqual(
+		alignIpc.shouldTreatAlignCloseAsCancelled({ exitCode: 1, sessionSavedOnClose: true }),
+		true,
+	);
+	assert.strictEqual(
+		alignIpc.shouldTreatAlignCloseAsCancelled({ exitCode: 1 }),
+		false,
+	);
+	assert.strictEqual(
+		alignIpc.shouldReportAlignCloseFailure({ exitCode: 1, viewerClosedHandshake: true }),
+		false,
+	);
+	assert.strictEqual(
+		alignIpc.shouldReportAlignCloseFailure({ exitCode: 1 }),
+		true,
+	);
+}
+
 testClassifyViewerClosed();
 testClassifyProgress();
 testAlignResultPayloads();
 testViewerToolHelpers();
 testSideEffects();
+testAlignCloseFallback();
 console.log("test-align-ipc.js: OK");
 
 function testViewerToolHelpers() {

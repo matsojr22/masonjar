@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO_PY))
 
 from align_session import (  # noqa: E402
     SESSION_JSON_NAME,
+    apply_slice_tuning_from_controls,
     compute_fingerprint,
     compute_tuning_fingerprint,
     diagnose_load_failure,
@@ -308,6 +309,30 @@ def test_edit_flush_updates_session_without_navigation(tmp_path: Path) -> None:
     loaded = load_session(dapi, fp)
     assert loaded is not None
     assert loaded.atlas_slices[files[0]].ap_position == 250
+
+
+def test_apply_slice_tuning_from_controls() -> None:
+    """Spinbox values can be committed without waiting for debounce timers."""
+    sl = _FakeSlice("A.png", ap=100, x=0.0, y=0.0)
+    apply_slice_tuning_from_controls(
+        sl,
+        x_angle=2.5,
+        y_angle=-1.25,
+        ap_position=180,
+        region="P",
+        hemisphere="L",
+        linked=False,
+        use_tissue_cleanup_mask=True,
+        tissue_mask_warp_mode="hybrid",
+    )
+    assert sl.x_angle == 2.5
+    assert sl.y_angle == -1.25
+    assert sl.ap_position == 180
+    assert sl.region == "P"
+    assert sl.hemisphere == "L"
+    assert sl.linked is False
+    assert sl.use_tissue_cleanup_mask is True
+    assert sl.tissue_mask_warp_mode == "hybrid"
 
 
 def test_session_json_name_constant() -> None:

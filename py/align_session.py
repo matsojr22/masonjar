@@ -120,6 +120,34 @@ def _strip_atlas_slices_for_pickle(atlas_slices: dict) -> dict:
     return saved
 
 
+def apply_slice_tuning_from_controls(
+    atlas_slice,
+    *,
+    x_angle: float,
+    y_angle: float,
+    ap_position: float,
+    region: str,
+    hemisphere: str,
+    linked: bool,
+    use_tissue_cleanup_mask: bool,
+    tissue_mask_warp_mode: str,
+    layout_overridden: bool = False,
+) -> None:
+    """Apply live UI control values to one slice (no Qt; used before autosave)."""
+    atlas_slice.x_angle = float(x_angle)
+    atlas_slice.y_angle = float(y_angle)
+    atlas_slice.ap_position = int(ap_position)
+    atlas_slice.region = str(region)
+    atlas_slice.hemisphere = str(hemisphere)
+    atlas_slice.linked = bool(linked)
+    atlas_slice.use_tissue_cleanup_mask = bool(use_tissue_cleanup_mask)
+    if tissue_mask_warp_mode:
+        atlas_slice.tissue_mask_warp_mode = str(tissue_mask_warp_mode)
+    if layout_overridden:
+        atlas_slice.layout_overridden = True
+        atlas_slice.layout_low_confidence = False
+
+
 def _slice_summary(atlas_slice) -> dict[str, Any]:
     return {
         "filename": atlas_slice.section_name,
