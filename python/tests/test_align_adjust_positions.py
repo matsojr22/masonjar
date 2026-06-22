@@ -39,3 +39,27 @@ def test_poly_extrapolation_with_three_points() -> None:
     assert len(updates) == 3
     assert updates[0][0] == 3
     assert updates[0][1] > 140
+
+
+def test_flat_last_segment_uses_prior_delta() -> None:
+    # User confirmed AP 400, 410, 410 — last delta 0 but trend was +10
+    updates = extrapolate_ap_positions([400, 410, 410], 8, max_ap=1319)
+    assert updates[:3] == [(3, 420), (4, 430), (5, 440)]
+
+
+def test_model_delta_fallback_when_confirmed_flat() -> None:
+    updates = extrapolate_ap_positions(
+        [400, 400], 5, max_ap=1319, model_delta=-12.5
+    )
+    assert updates == [(2, 388), (3, 375), (4, 362)]
+
+
+def test_two_tuned_sections_suggest_sensible_third() -> None:
+    # User tuned s1=400, s2=410; s3 should be ~420, not 400+(750-400)=1100
+    updates = extrapolate_ap_positions([400, 410], 5, max_ap=1319)
+    assert updates[0] == (2, 420)
+
+
+def test_one_tuned_section_does_not_extrapolate() -> None:
+    # Only s1 confirmed; s2 still shows model prediction — do not touch s3+
+    assert extrapolate_ap_positions([400], 5, max_ap=1319) == []

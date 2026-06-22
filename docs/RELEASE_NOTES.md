@@ -6,6 +6,26 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.1.0
+
+**What's new**
+
+Align again saves your AP and angle tuning when you close Napari and re-open Align. Forward AP suggestions follow the spacing you set on sections you have already tuned. Mason Jar automatically removes broken alignment session files from your project's DAPI folder when they cannot be loaded.
+
+**Fixes**
+
+- Align: tuning persists across close and re-open (pickle save no longer fails silently).
+- Align: AP suggestions use your confirmed sections only, not raw model predictions (fixes wild values like 1100).
+- Align: going to a previous section no longer overwrites saved AP values.
+- Align: re-open always starts at section 1 with your saved tuning restored.
+- Align: incompatible or corrupt `alignment.pkl` / `alignment_session.json` in `00_dapi` are cleared automatically on the next run — no manual delete step.
+
+**Commit subject**
+
+Align: save tuning across sessions and clear broken session files automatically
+
+---
+
 ## v4.0.8
 
 **What's new**

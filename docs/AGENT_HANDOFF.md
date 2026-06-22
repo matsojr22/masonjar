@@ -1,8 +1,17 @@
 # Agent session handoff
 
-Last updated: 2026-06-13 (v4.0.8). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-22 (v4.1.0). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.1.0 — Align session recovery + persistence (2026-06-22)
+
+- **`py/align_session.py`**: `recover_alignment_session()`, `clear_alignment_session()`, `session_artifacts_present()` — auto-clear unrecoverable `00_dapi` session files on Align start.
+- **`py/align_session.py`**: pickle strip for autosave callback; linear AP extrapolation; model-only session discard.
+- **`py/map.py`**: `load_alignment` uses `recover_alignment_session`; extrapolation from tuned prefix only; no extrapolation on Previous; resume at section 1.
+- Tests: extended `test_align_session.py`, `test_align_adjust_positions.py`.
+
+**Open follow-ups:** none critical from this release.
 
 ## v4.0.8 — Align AP spacing + persistence + log (2026-06-13)
 

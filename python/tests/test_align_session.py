@@ -16,13 +16,17 @@ sys.path.insert(0, str(REPO_PY))
 from align_session import (  # noqa: E402
     SESSION_JSON_NAME,
     apply_slice_tuning_from_controls,
+    clear_alignment_session,
     compute_fingerprint,
     compute_tuning_fingerprint,
     diagnose_load_failure,
     is_corrupt_predict_complete_session,
+    is_model_only_predict_complete_session,
     load_session,
     mark_session_completed,
     persist_session,
+    recover_alignment_session,
+    session_artifacts_present,
     session_paths,
     should_sync_controls_before_autosave,
 )
@@ -406,6 +410,18 @@ def test_predict_complete_autosave_preserves_unseeded_slice_values() -> None:
     assert slices["A.png"].x_angle == original_x
 
 
+def test_is_model_only_predict_complete_session() -> None:
+    model_session = {"reason": "predict_complete", "visited": 0}
+    model_slices = {"A.png": _FakeSlice("A.png", ap=828, x=1.2, y=-0.5)}
+    assert is_model_only_predict_complete_session(model_session, model_slices) is True
+
+    user_session = {"reason": "window_close", "visited": 3}
+    assert is_model_only_predict_complete_session(user_session, model_slices) is False
+
+    visited_session = {"reason": "predict_complete", "visited": 2}
+    assert is_model_only_predict_complete_session(visited_session, model_slices) is False
+
+
 def test_multi_section_window_close_persists(tmp_path: Path) -> None:
     dapi = tmp_path / "00_dapi"
     dapi.mkdir()
@@ -441,3 +457,113 @@ def test_multi_section_window_close_persists(tmp_path: Path) -> None:
 
 def test_session_json_name_constant() -> None:
     assert SESSION_JSON_NAME == "alignment_session.json"
+
+
+def test_recover_clears_fingerprint_mismatch(tmp_path: Path) -> None:
+    dapi = tmp_path / "00_dapi"
+    dapi.mkdir()
+    out = tmp_path / "out"
+    files_a = ["A.png"]
+    fp_a = _tuning_fp(files_a)
+    persist_session(
+        dapi,
+        {files_a[0]: _FakeSlice(files_a[0], ap=100)},
+        tuning_fingerprint=fp_a,
+        output_path=out,
+        current_section=0,
+        visited=0,
+        parcellation={},
+        reason="edit",
+    )
+    assert session_artifacts_present(dapi)
+
+    fp_b = _tuning_fp(["A.png", "B.png"])
+    assert recover_alignment_session(dapi, fp_b) is None
+    assert not session_artifacts_present(dapi)
+
+
+def test_recover_clears_corrupt_pickle(tmp_path: Path) -> None:
+    dapi = tmp_path / "00_dapi"
+    dapi.mkdir()
+    paths = session_paths(dapi)
+    paths["pkl"].write_bytes(b"not-a-pickle")
+    paths["bak"].write_bytes(b"also-not-a-pickle")
+    fp = _tuning_fp(["A.png"])
+
+    assert recover_alignment_session(dapi, fp) is None
+    assert not session_artifacts_present(dapi)
+
+
+def test_recover_clears_json_orphan_without_pickle(tmp_path: Path) -> None:
+    dapi = tmp_path / "00_dapi"
+    dapi.mkdir()
+    fp = _tuning_fp(["A.png"])
+    session_doc = {
+        "version": 1,
+        "tuning_fingerprint": fp,
+        "status": "in_progress",
+        "visited": 0,
+    }
+    with open(dapi / SESSION_JSON_NAME, "w", encoding="utf-8") as handle:
+        json.dump(session_doc, handle)
+
+    assert recover_alignment_session(dapi, fp) is None
+    assert not session_artifacts_present(dapi)
+
+
+def test_recover_keeps_valid_user_session(tmp_path: Path) -> None:
+    dapi = tmp_path / "00_dapi"
+    dapi.mkdir()
+    out = tmp_path / "out"
+    files = ["A.png", "B.png"]
+    fp = _tuning_fp(files)
+    persist_session(
+        dapi,
+        {
+            files[0]: _FakeSlice(files[0], ap=400),
+            files[1]: _FakeSlice(files[1], ap=410),
+        },
+        tuning_fingerprint=fp,
+        output_path=out,
+        current_section=1,
+        visited=1,
+        parcellation={},
+        reason="window_close",
+    )
+
+    loaded = recover_alignment_session(dapi, fp)
+    assert loaded is not None
+    assert loaded.atlas_slices[files[0]].ap_position == 400
+    assert session_artifacts_present(dapi)
+
+
+def test_recover_clears_model_only_predict_complete(tmp_path: Path) -> None:
+    dapi = tmp_path / "00_dapi"
+    dapi.mkdir()
+    out = tmp_path / "out"
+    files = ["A.png"]
+    fp = _tuning_fp(files)
+    persist_session(
+        dapi,
+        {files[0]: _FakeSlice(files[0], ap=828, x=1.2, y=-0.5)},
+        tuning_fingerprint=fp,
+        output_path=out,
+        current_section=0,
+        visited=0,
+        parcellation={},
+        reason="predict_complete",
+    )
+
+    assert recover_alignment_session(dapi, fp) is None
+    assert not session_artifacts_present(dapi)
+
+
+def test_clear_alignment_session_removes_all_artifacts(tmp_path: Path) -> None:
+    dapi = tmp_path / "00_dapi"
+    dapi.mkdir()
+    paths = session_paths(dapi)
+    for key in ("pkl", "bak", "tmp", "json"):
+        paths[key].write_text("x", encoding="utf-8")
+
+    clear_alignment_session(dapi)
+    assert not session_artifacts_present(dapi)

@@ -113,9 +113,16 @@ def _strip_atlas_slices_for_pickle(atlas_slices: dict) -> dict:
     saved: dict = {}
     for section_name, atlas_slice in atlas_slices.items():
         atlas_slice.eraser_window = None
+        prev_cb = getattr(atlas_slice, "_autosave_cb", None)
+        if hasattr(atlas_slice, "_autosave_cb"):
+            atlas_slice._autosave_cb = None
         this_copy = copy.deepcopy(atlas_slice)
+        if prev_cb is not None:
+            atlas_slice._autosave_cb = prev_cb
         this_copy.image = None
         this_copy.label = None
+        if hasattr(this_copy, "_autosave_cb"):
+            this_copy._autosave_cb = None
         saved[section_name] = this_copy
     return saved
 
@@ -176,12 +183,25 @@ def is_corrupt_predict_complete_session(
     return True
 
 
+def is_model_only_predict_complete_session(
+    session: dict[str, Any] | None,
+    atlas_slices: dict,
+) -> bool:
+    """Model prediction cache only (visited=0) — not user-confirmed tuning."""
+    if not session or not atlas_slices:
+        return False
+    if session.get("reason") != "predict_complete":
+        return False
+    return int(session.get("visited", 0)) == 0
+
+
 def extrapolate_ap_positions(
     confirmed_aps: list[float | int],
     num_slices: int,
     *,
     max_ap: int,
     min_ap: int = 0,
+    model_delta: float | None = None,
 ) -> list[tuple[int, int]]:
     """
     Extrapolate AP for slice indices after the confirmed prefix.
@@ -200,12 +220,21 @@ def extrapolate_ap_positions(
     x_pred = np.arange(start, num_slices, dtype=float)
 
     if n_confirm == 2:
-        delta = y[1] - y[0]
-        predictions = y[-1] + delta * (x_pred - float(n_confirm - 1))
+        delta = float(y[1] - y[0])
     else:
-        degree = min(2, n_confirm - 1)
-        coeffs = np.polyfit(np.arange(n_confirm, dtype=float), y, degree)
-        predictions = np.polyval(coeffs, x_pred)
+        delta = float(y[-1] - y[-2])
+        if delta == 0.0:
+            deltas = np.diff(y)
+            nonzero = deltas[deltas != 0]
+            if len(nonzero):
+                delta = float(nonzero[-1])
+            else:
+                delta = float(y[1] - y[0])
+
+    if delta == 0.0 and model_delta is not None and model_delta != 0.0:
+        delta = float(model_delta)
+
+    predictions = y[-1] + delta * (x_pred - float(n_confirm - 1))
 
     out: list[tuple[int, int]] = []
     for idx, pred in zip(range(start, num_slices), predictions):
@@ -359,6 +388,83 @@ def load_session(
     )
 
 
+def session_artifacts_present(dapi_dir: Path | str) -> bool:
+    """True when any Align session artifact exists under the DAPI input folder."""
+    paths = session_paths(dapi_dir)
+    return any(paths[key].is_file() for key in ("pkl", "bak", "tmp", "json"))
+
+
+def clear_alignment_session(dapi_dir: Path | str) -> None:
+    """Remove all Align session artifacts (pickle, JSON sidecar, temp/backup)."""
+    paths = session_paths(dapi_dir)
+    for key in ("json", "bak", "tmp", "pkl"):
+        path = paths[key]
+        if path.is_file():
+            path.unlink()
+
+
+def is_unrecoverable_loaded_session(
+    session: dict[str, Any] | None,
+    atlas_slices: dict,
+) -> str | None:
+    """Return discard reason when a loaded session must not be resumed."""
+    if is_corrupt_predict_complete_session(session, atlas_slices):
+        return "corrupt_predict_complete"
+    if is_model_only_predict_complete_session(session, atlas_slices):
+        return "model_only_predict_complete"
+    return None
+
+
+def _should_clear_on_load_failure(detail: str) -> bool:
+    if detail.startswith("fingerprint_mismatch"):
+        return True
+    if detail == "corrupt_pickle":
+        return True
+    if detail == "no_pickle":
+        return True
+    return False
+
+
+def recover_alignment_session(
+    dapi_dir: Path | str,
+    expected_tuning_fingerprint: str,
+) -> LoadResult | None:
+    """
+    Load a saved tuning session or clear broken legacy artifacts on disk.
+
+    Returns None when no session exists, load failed, or data is unusable.
+    """
+    if not session_artifacts_present(dapi_dir):
+        return None
+
+    result = load_session(dapi_dir, expected_tuning_fingerprint)
+    if result is None:
+        detail = diagnose_load_failure(dapi_dir, expected_tuning_fingerprint)
+        if _should_clear_on_load_failure(detail):
+            clear_alignment_session(dapi_dir)
+            reason = detail.split()[0] if detail else "load_failed"
+            print(f"LOG: align_session_cleared reason={reason}", flush=True)
+            print(
+                "Cleared incompatible alignment session files; fresh predictions will run.",
+                flush=True,
+            )
+        else:
+            print(f"LOG: align_session_not_loaded reason={detail}", flush=True)
+        return None
+
+    discard = is_unrecoverable_loaded_session(result.session, result.atlas_slices)
+    if discard:
+        clear_alignment_session(dapi_dir)
+        print(f"LOG: align_session_cleared reason={discard}", flush=True)
+        print(
+            "Cleared incompatible alignment session files; fresh predictions will run.",
+            flush=True,
+        )
+        return None
+
+    return result
+
+
 def mark_session_completed(
     dapi_dir: Path | str,
     tuning_fingerprint: str,
@@ -378,10 +484,11 @@ def mark_session_completed(
 
 
 def clear_session_markers(dapi_dir: Path | str, *, keep_pkl: bool = True) -> None:
-    paths = session_paths(dapi_dir)
-    for key in ("json", "bak", "tmp"):
-        p = paths[key]
-        if p.is_file():
-            p.unlink()
-    if not keep_pkl and paths["pkl"].is_file():
-        paths["pkl"].unlink()
+    if keep_pkl:
+        paths = session_paths(dapi_dir)
+        for key in ("json", "bak", "tmp"):
+            path = paths[key]
+            if path.is_file():
+                path.unlink()
+    else:
+        clear_alignment_session(dapi_dir)

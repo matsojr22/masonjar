@@ -29,14 +29,11 @@ from align_tissue_layout import (
 )
 from align_session import (
     apply_slice_tuning_from_controls,
-    clear_session_markers,
     compute_tuning_fingerprint,
-    diagnose_load_failure,
     extrapolate_ap_positions,
-    is_corrupt_predict_complete_session,
-    load_session,
     mark_session_completed,
     persist_session,
+    recover_alignment_session,
     should_sync_controls_before_autosave,
 )
 from model import TissuePredictor
@@ -1051,33 +1048,29 @@ class AlignmentController:
             rehydrated[old_name] = restored
         self.atlas_slices = rehydrated
 
+    def _seed_predicted_delta_from_slices(self) -> None:
+        """Estimate inter-section AP spacing from loaded or predicted slices."""
+        if self.num_slices < 2:
+            return
+        positions = [
+            float(self.atlas_slices[name].ap_position)
+            for name in self.file_list
+            if name in self.atlas_slices
+        ]
+        if len(positions) >= 2:
+            self.predicted_delta = float(np.mean(np.diff(positions)))
+
     def load_alignment(self):
         """Load saved alignment session from the DAPI directory."""
         try:
             tuning_fp = self._tuning_fingerprint()
-            result = load_session(self.input_path, tuning_fp)
+            result = recover_alignment_session(self.input_path, tuning_fp)
             if result is None:
-                detail = diagnose_load_failure(self.input_path, tuning_fp)
-                if detail.startswith("fingerprint_mismatch"):
-                    print(f"LOG: align_session_fingerprint_mismatch {detail}", flush=True)
-                print(f"LOG: align_session_not_loaded reason={detail}", flush=True)
-                print("No compatible alignment found...", flush=True)
-                return
-
-            if is_corrupt_predict_complete_session(result.session, result.atlas_slices):
-                print(
-                    "LOG: align_session_discarded reason=corrupt_predict_complete",
-                    flush=True,
-                )
-                print(
-                    "Refreshed alignment predictions (cleared a bad autosave from a prior run).",
-                    flush=True,
-                )
-                clear_session_markers(self.input_path, keep_pkl=False)
                 return
 
             self._rehydrate_atlas_slices(result.atlas_slices)
             self.prior_alignment = True
+            self._seed_predicted_delta_from_slices()
             restore_nav = result.restore_navigation
             print(
                 f"LOG: align_session_loaded source={result.source} "
@@ -1094,12 +1087,11 @@ class AlignmentController:
                 if result.restore_navigation:
                     self._session_restore_nav = True
                     max_idx = max(0, self.num_slices - 1)
-                    self.current_section = min(
-                        int(result.session.get("current_section", 0)),
-                        max_idx,
-                    )
+                    # Always reopen at section 1; stale spinbox + backward nav used to
+                    # clobber saved AP when resuming mid-series.
+                    self.current_section = 0
                     self.visited = min(
-                        int(result.session.get("visited", self.current_section)),
+                        int(result.session.get("visited", 0)),
                         max_idx,
                     )
 
@@ -1246,7 +1238,7 @@ class AlignmentController:
 
         for atlas_slice in self.atlas_slices.values():
             self._bind_slice_autosave(atlas_slice)
-        self.schedule_autosave("predict_complete")
+        print("LOG: align_predict_complete", flush=True)
 
     def _find_aspect_constrained_size(self, img1, img2):
         """
@@ -1434,13 +1426,15 @@ class AlignmentController:
         self._flush_autosave("edit")
 
     def adjust_positions(self):
-        """Adjust forward AP positions from confirmed sections through current."""
-        if self.prior_alignment or self.current_section >= self.num_slices - 1:
+        """Extrapolate AP for unconfirmed sections from tuned (confirmed) prefix."""
+        if self.current_section >= self.num_slices - 1:
             return
-        if self._controls_seeded:
-            self._sync_current_slice_from_controls()
+        # Callers must sync the slice being confirmed before advancing; do not sync
+        # here — after next_section the spinboxes still show the prior slice.
+        # ``current_section`` is the slice now being viewed; confirmed tuning is
+        # indices ``0 .. current_section - 1`` only (exclude model AP on current).
 
-        n_confirm = self.current_section + 1
+        n_confirm = self.current_section
         if n_confirm < 2:
             return
 
@@ -1448,10 +1442,17 @@ class AlignmentController:
             self.atlas_slices[self.file_list[i]].ap_position for i in range(n_confirm)
         ]
         max_ap = 528 if self.use_legacy else 1319
+        spacing_floor = int(self.spacing) // 10 if self.spacing is not None else 0
+        model_delta = (
+            float(self.predicted_delta)
+            if self.predicted_delta is not None
+            else None
+        )
         updates = extrapolate_ap_positions(
             confirmed,
             self.num_slices,
             max_ap=max_ap,
+            model_delta=model_delta,
         )
         if not updates:
             return
@@ -1463,10 +1464,9 @@ class AlignmentController:
             flush=True,
         )
 
-        min_ap = int(self.spacing) // 10 if self.spacing is not None else 0
         for idx, ap in updates:
-            if min_ap > 0:
-                ap = max(ap, min_ap)
+            if spacing_floor > 0:
+                ap = max(ap, spacing_floor)
             self.atlas_slices[self.file_list[idx]].ap_position = int(ap)
 
     def next_section(self):
@@ -1492,7 +1492,6 @@ class AlignmentController:
             self.progress_bar.setFormat(
                 f"{self.current_section + 1} / {self.num_slices}"
             )
-            self.adjust_positions()
             self.update_display()
             self.schedule_autosave("previous_section")
 
