@@ -6,6 +6,23 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.0.3
+
+**What's new**
+
+Sharpen and Top-hat **Preview filter** no longer turns the tissue completely black. The filter now runs on the same preview image you see in the wizard, pan/zoom clears a stale filter overlay, and display min/max sliders apply to the filtered region.
+
+**Changes**
+
+- Sharpen / Top-hat: preview filter uses the displayed signal preview (not mismatched full-res coordinates).
+- Sharpen / Top-hat: filtered ROI overlay respects display levels; pan/zoom resets filter preview until you click Preview filter again.
+
+**Commit subject**
+
+Sharpen and Top-hat preview filter no longer black out the image
+
+---
+
 ## v4.0.2
 
 **What's new**

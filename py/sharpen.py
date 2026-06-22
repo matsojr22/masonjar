@@ -37,10 +37,32 @@ def enhance_contrast(image, saturation_level=0.05):
 
 
 def load_grayscale(path: Path) -> np.ndarray:
+    suffix = path.suffix.lower()
+    if suffix == ".png":
+        img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            raise ValueError(f"could not read {path}")
+        return img
     img = tiff.imread(str(path))
     if img.ndim > 2:
         img = np.max(img, axis=0)
     return img
+
+
+def stretch_preview_for_display(roi: np.ndarray) -> np.ndarray:
+    """Percentile stretch for wizard preview PNG only (not batch output)."""
+    if roi.size == 0:
+        return roi.astype(np.uint8)
+    out = roi.astype(np.float64)
+    lo = float(np.percentile(out, 2))
+    hi = float(np.percentile(out, 98))
+    if hi <= lo:
+        lo = float(out.min())
+        hi = float(out.max())
+    if hi <= lo:
+        return np.zeros(out.shape, dtype=np.uint8)
+    stretched = np.clip((out - lo) / (hi - lo) * 255.0, 0, 255)
+    return stretched.astype(np.uint8)
 
 
 def sharpen_image(img: np.ndarray, radius: float, amount: float, equalize: bool) -> np.ndarray:
@@ -92,6 +114,7 @@ def run_preview(args) -> int:
     amount = float(args.amount or 2)
     equalize = bool(args.equalize)
     roi = process_roi(img, x, y, w, h, radius, amount, equalize)
+    roi = stretch_preview_for_display(roi)
     out_dir = Path(args.preview_dir.strip()) if args.preview_dir else path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "_sharpen_preview.png"

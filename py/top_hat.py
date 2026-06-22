@@ -23,6 +23,12 @@ def adjust_gamma(image, gamma=1.25):
 
 
 def load_grayscale_uint8(path: Path) -> np.ndarray:
+    suffix = path.suffix.lower()
+    if suffix == ".png":
+        raw = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if raw is None:
+            raise ValueError(f"could not read {path}")
+        return np.ascontiguousarray(raw)
     raw = tf.imread(str(path))
     if raw.ndim > 2:
         if raw.shape[-1] in (3, 4):
@@ -60,6 +66,22 @@ def emit_preview_json(payload: dict) -> None:
     print("PREVIEW_JSON:" + json.dumps(payload), flush=True)
 
 
+def stretch_preview_for_display(roi: np.ndarray) -> np.ndarray:
+    """Percentile stretch for wizard preview PNG only (not batch output)."""
+    if roi.size == 0:
+        return roi.astype(np.uint8)
+    out = roi.astype(np.float64)
+    lo = float(np.percentile(out, 2))
+    hi = float(np.percentile(out, 98))
+    if hi <= lo:
+        lo = float(out.min())
+        hi = float(out.max())
+    if hi <= lo:
+        return np.zeros(out.shape, dtype=np.uint8)
+    stretched = np.clip((out - lo) / (hi - lo) * 255.0, 0, 255)
+    return stretched.astype(np.uint8)
+
+
 def run_preview(args) -> int:
     path = Path(args.image.strip())
     if not path.is_file():
@@ -74,6 +96,7 @@ def run_preview(args) -> int:
     radius = int(args.filter or args.radius or 10)
     gamma = float(args.correction or args.gamma or 1.25)
     roi = process_roi(img, x, y, w, h, radius, gamma)
+    roi = stretch_preview_for_display(roi)
     out_dir = Path(args.preview_dir.strip()) if args.preview_dir else path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "_tophat_preview.png"

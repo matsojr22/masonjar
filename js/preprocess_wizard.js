@@ -14,8 +14,6 @@ var IDLE_PREVIEW_MS = 5000;
 var DEFAULT_VIEW_W = 512;
 var DEFAULT_VIEW_H = 512;
 var TIFF_SLICE_RE = /\.(tif|tiff)$/i;
-var DEFAULT_VIEW_W = 512;
-var DEFAULT_VIEW_H = 512;
 
 /** When false, param/pan/wheel/load never auto-schedule filter preview (manual button only). */
 var AUTO_PREVIEW_ON_INTERACTION = false;
@@ -119,6 +117,65 @@ function scaleRoiForFullRes(roi, previewW, previewH, fullW, fullH) {
 		w: Math.max(8, Math.round(roi.w * scaleX)),
 		h: Math.max(8, Math.round(roi.h * scaleY)),
 	};
+}
+
+/**
+ * Resolve filter IPC target: WYSIWYG on displayed image (preview PNG) or scaled full TIFF.
+ * @returns {{ ready: boolean, filterAbs?: string, roi?: object, reason?: string }}
+ */
+function resolvePreviewFilterRequest(state, roi, sourceSliceAbs) {
+	var baseAbs = state.baseAbs || sourceSliceAbs;
+	var imgW = state.baseNaturalW;
+	var imgH = state.baseNaturalH;
+	var usingDisplayPreview = baseAbs && baseAbs !== sourceSliceAbs;
+
+	if (usingDisplayPreview) {
+		return {
+			ready: true,
+			filterAbs: baseAbs,
+			roi: roi,
+		};
+	}
+
+	if (!state.fullNaturalW || !state.fullNaturalH) {
+		return { ready: false, reason: "waiting_for_dimensions" };
+	}
+
+	return {
+		ready: true,
+		filterAbs: sourceSliceAbs,
+		roi: scaleRoiForFullRes(roi, imgW, imgH, state.fullNaturalW, state.fullNaturalH),
+	};
+}
+
+function autoStretchImageDataIfFlat(imgData) {
+	var data = imgData.data;
+	var maxGray = 0;
+	for (var i = 0; i < data.length; i += 4) {
+		if (data[i] > maxGray) {
+			maxGray = data[i];
+		}
+	}
+	if (maxGray >= 32) {
+		return imgData;
+	}
+	var minGray = 255;
+	for (var j = 0; j < data.length; j += 4) {
+		if (data[j] < minGray) {
+			minGray = data[j];
+		}
+	}
+	if (maxGray <= minGray) {
+		return imgData;
+	}
+	var span = maxGray - minGray;
+	for (var k = 0; k < data.length; k += 4) {
+		var out = Math.round(((data[k] - minGray) / span) * 255);
+		data[k] = out;
+		data[k + 1] = out;
+		data[k + 2] = out;
+	}
+	return imgData;
 }
 
 function applyDisplayWindow(imgData, minVal, maxVal) {
@@ -236,6 +293,7 @@ function wirePreprocessWizard(opts) {
 	var idlePreviewTimer = null;
 	var baseBitmap = null;
 	var filteredBitmap = null;
+	var pendingPreviewAfterDims = false;
 
 	pipelineRun.ensureRunModeUi("runModePanel", stepId);
 
@@ -319,8 +377,22 @@ function wirePreprocessWizard(opts) {
 		applyDisplayWindow(imgData, state.displayMin, state.displayMax);
 		ctx.putImageData(imgData, 0, 0);
 		if (state.showingFiltered && filteredBitmap && state.lastRoi) {
+			var patchCanvas = document.createElement("canvas");
+			patchCanvas.width = filteredBitmap.width;
+			patchCanvas.height = filteredBitmap.height;
+			var patchCtx = patchCanvas.getContext("2d");
+			patchCtx.drawImage(filteredBitmap, 0, 0);
+			var patchData = patchCtx.getImageData(
+				0,
+				0,
+				patchCanvas.width,
+				patchCanvas.height,
+			);
+			patchData = autoStretchImageDataIfFlat(patchData);
+			applyDisplayWindow(patchData, state.displayMin, state.displayMax);
+			patchCtx.putImageData(patchData, 0, 0);
 			ctx.drawImage(
-				filteredBitmap,
+				patchCanvas,
 				state.lastRoi.x,
 				state.lastRoi.y,
 				state.lastRoi.w,
@@ -375,6 +447,10 @@ function wirePreprocessWizard(opts) {
 		loadFullResDimensions(state.currentSlice.abs, function (fw, fh) {
 			state.fullNaturalW = fw;
 			state.fullNaturalH = fh;
+			if (pendingPreviewAfterDims && fw > 0 && fh > 0) {
+				pendingPreviewAfterDims = false;
+				requestPreview();
+			}
 		});
 		var img = new Image();
 		img.onload = function () {
@@ -534,6 +610,33 @@ function wirePreprocessWizard(opts) {
 			")";
 	}
 
+	function clearFilterOnViewChange() {
+		if (!state.showingFiltered) {
+			return;
+		}
+		clearFilteredOverlay();
+		renderPreviewComposite();
+		if (previewStatus) {
+			previewStatus.textContent =
+				"Pan/zoom cleared filter preview — click Preview filter to refresh.";
+		}
+	}
+
+	function sendPreviewIpc(resolved, previewPayload) {
+		state.previewBusy = true;
+		if (previewStatus) {
+			previewStatus.textContent = "Updating preview…";
+		}
+		ipc.send(opts.previewIpc, [
+			resolved.filterAbs,
+			resolved.roi.x,
+			resolved.roi.y,
+			resolved.roi.w,
+			resolved.roi.h,
+			previewPayload,
+		]);
+	}
+
 	function requestPreview() {
 		cancelIdlePreview();
 		if (!state.currentSlice || state.previewBusy || state.running) {
@@ -544,16 +647,22 @@ function wirePreprocessWizard(opts) {
 		var imgH = state.baseNaturalH || previewImg.naturalHeight || DEFAULT_VIEW_H;
 		var roi = viewportRoi(state, imgW, imgH);
 		state.lastRoi = roi;
-		var fullW = state.fullNaturalW || imgW;
-		var fullH = state.fullNaturalH || imgH;
-		var scaledRoi = scaleRoiForFullRes(roi, imgW, imgH, fullW, fullH);
+		var resolved = resolvePreviewFilterRequest(
+			state,
+			roi,
+			state.currentSlice.abs,
+		);
+		if (!resolved.ready) {
+			pendingPreviewAfterDims = true;
+			if (previewStatus) {
+				previewStatus.textContent = "Loading full image dimensions…";
+			}
+			return;
+		}
+		pendingPreviewAfterDims = false;
 		var metaDir = bundleRoot()
 			? path.join(bundleRoot(), branding.META_DIR)
 			: path.dirname(state.currentSlice.abs);
-		state.previewBusy = true;
-		if (previewStatus) {
-			previewStatus.textContent = "Updating preview…";
-		}
 		var previewPayload = {
 			previewDir: metaDir,
 		};
@@ -565,14 +674,7 @@ function wirePreprocessWizard(opts) {
 			previewPayload.amount = params.amount;
 			previewPayload.equalize = !!params.equalize;
 		}
-		ipc.send(opts.previewIpc, [
-			state.currentSlice.abs,
-			scaledRoi.x,
-			scaledRoi.y,
-			scaledRoi.w,
-			scaledRoi.h,
-			previewPayload,
-		]);
+		sendPreviewIpc(resolved, previewPayload);
 	}
 
 	function wirePreviewPane() {
@@ -587,6 +689,7 @@ function wirePreprocessWizard(opts) {
 			"wheel",
 			function (ev) {
 				ev.preventDefault();
+				clearFilterOnViewChange();
 				var delta = ev.deltaY > 0 ? 0.9 : 1.1;
 				state.scale = Math.min(8, Math.max(0.1, state.scale * delta));
 				applyPanZoomCss();
@@ -598,6 +701,7 @@ function wirePreprocessWizard(opts) {
 		var lastX = 0;
 		var lastY = 0;
 		viewport.addEventListener("mousedown", function (ev) {
+			clearFilterOnViewChange();
 			dragging = true;
 			lastX = ev.clientX;
 			lastY = ev.clientY;
@@ -956,5 +1060,7 @@ module.exports = {
 	findSignalPreviewAbs: findSignalPreviewAbs,
 	findLowResPreviewAbs: findLowResPreviewAbs,
 	scaleRoiForFullRes: scaleRoiForFullRes,
+	resolvePreviewFilterRequest: resolvePreviewFilterRequest,
 	isProcessableTiffName: isProcessableTiffName,
+	autoStretchImageDataIfFlat: autoStretchImageDataIfFlat,
 };

@@ -25,6 +25,74 @@ function testScaleRoiForFullRes() {
 	assert.deepStrictEqual(same, roi);
 }
 
+function testResolvePreviewFilterRequest() {
+	var previewAbs = "C:\\bundle\\data\\counting\\_previews\\M528_s001_rabies.png";
+	var tiffAbs = "C:\\bundle\\data\\counting\\03_max\\rabies\\max\\run\\M528_s001.tif";
+	var roi = { x: 10, y: 20, w: 100, h: 80 };
+
+	var onPreview = preprocessWizard.resolvePreviewFilterRequest(
+		{
+			baseAbs: previewAbs,
+			baseNaturalW: 500,
+			baseNaturalH: 400,
+			fullNaturalW: 10000,
+			fullNaturalH: 8000,
+		},
+		roi,
+		tiffAbs,
+	);
+	assert.strictEqual(onPreview.ready, true);
+	assert.strictEqual(onPreview.filterAbs, previewAbs);
+	assert.deepStrictEqual(onPreview.roi, roi);
+
+	var onFull = preprocessWizard.resolvePreviewFilterRequest(
+		{
+			baseAbs: tiffAbs,
+			baseNaturalW: 10000,
+			baseNaturalH: 8000,
+			fullNaturalW: 10000,
+			fullNaturalH: 8000,
+		},
+		roi,
+		tiffAbs,
+	);
+	assert.strictEqual(onFull.ready, true);
+	assert.strictEqual(onFull.filterAbs, tiffAbs);
+	assert.strictEqual(onFull.roi.x, 10);
+	assert.strictEqual(onFull.roi.w, 100);
+
+	var deferred = preprocessWizard.resolvePreviewFilterRequest(
+		{
+			baseAbs: tiffAbs,
+			baseNaturalW: 10000,
+			baseNaturalH: 8000,
+			fullNaturalW: 0,
+			fullNaturalH: 0,
+		},
+		roi,
+		tiffAbs,
+	);
+	assert.strictEqual(deferred.ready, false);
+	assert.strictEqual(deferred.reason, "waiting_for_dimensions");
+}
+
+function testAutoStretchImageDataIfFlat() {
+	var flat = {
+		data: new Uint8ClampedArray([5, 5, 5, 255, 8, 8, 8, 255]),
+		width: 2,
+		height: 1,
+	};
+	var out = preprocessWizard.autoStretchImageDataIfFlat(flat);
+	assert.ok(out.data[0] < out.data[4]);
+	var bright = {
+		data: new Uint8ClampedArray([100, 100, 100, 255, 200, 200, 200, 255]),
+		width: 2,
+		height: 1,
+	};
+	var unchanged = preprocessWizard.autoStretchImageDataIfFlat(bright);
+	assert.strictEqual(unchanged.data[0], 100);
+}
+
 function testFindSignalPreviewAbs() {
 	var helpers = require("./test-helpers");
 	var bundle = helpers.tmpDir("mj-prev-");
@@ -82,6 +150,8 @@ function testApplyDisplayWindow() {
 
 testViewportRoi();
 testScaleRoiForFullRes();
+testResolvePreviewFilterRequest();
+testAutoStretchImageDataIfFlat();
 testFindSignalPreviewAbs();
 testIsProcessableTiffName();
 testParsePreviewJson();
