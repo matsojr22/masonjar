@@ -6,6 +6,7 @@ var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
+var alignIpc = require("./align_ipc");
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
 var run = document.getElementById("run");
@@ -106,6 +107,7 @@ run.addEventListener("click", function () {
 			a,
 			useLegacy,
 			plan.sliceListPath || "",
+			project.isActive() ? project.getBundleRoot() || "" : "",
 		]);
 	}
 });
@@ -130,9 +132,14 @@ ipc.on("alignResult", function (event, response) {
 	back.classList.add("btn-warning");
 	back.classList.remove("btn-danger");
 	back.innerHTML = "Back";
-	loadmessage.innerHTML = "";
 	loadbar.style.width = "0";
-	if (project.isActive() && lastRunRel) {
+	if (response && response.cancelled) {
+		loadmessage.textContent =
+			"Tuning saved. Run Align again and click Finish to warp sections.";
+		return;
+	}
+	loadmessage.innerHTML = "";
+	if (project.isActive() && lastRunRel && alignIpc.shouldApplyAlignRunSideEffects(response)) {
 		pipelineRuns.setActiveRunRel("align", lastRunRel);
 		var alignLeaf = pipelineRuns.resolveActiveRunLeafAbs("slices");
 		project.mergeAlignWarpReport(project.getBundleRoot(), alignLeaf);

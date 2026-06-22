@@ -1553,37 +1553,76 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
   }
   var total: number = 0;
   var current: number = 0;
+  let resultSent = false;
+
+  const finalizeAlign = (
+    cancelled: boolean,
+    err: unknown,
+    code: unknown,
+    signal: unknown,
+  ) => {
+    if (resultSent) {
+      return;
+    }
+    resultSent = true;
+    releaseJob();
+    const pyFail = describePythonShellFailure(err, code, signal);
+    if (pyFail) {
+      reportPythonFailure(pyFail);
+    } else {
+      console.log("The exit code was: " + code);
+      console.log("The exit signal was: " + signal);
+    }
+    event.sender.send("alignResult", { cancelled });
+    if (pyFail) {
+      event.sender.send("alignError", [pyFail]);
+    }
+    ipcMain.removeAllListeners("killAlign");
+  };
 
   pyshell.on("stderr", function (stderr: string) {
     queueLogLineForUi(stderr);
   });
 
   pyshell.on("message", (message: string) => {
-    if (total === 0) {
-      total = Number(message);
-    } else if (message == "Done!") {
+    const trimmed = String(message || "").trim();
+    if (total === 0 && /^\d+$/.test(trimmed)) {
+      total = Number(trimmed);
+      return;
+    }
+    if (trimmed === "Done!") {
       pyshell.end((err: unknown, code: unknown, signal: unknown) => {
-        releaseJob();
-        const pyFail = describePythonShellFailure(err, code, signal);
-        if (pyFail) {
-          reportPythonFailure(pyFail);
-        } else {
-          console.log("The exit code was: " + code);
-          console.log("The exit signal was: " + signal);
-        }
-        event.sender.send("alignResult");
-        if (pyFail) {
-          event.sender.send("alignError", [pyFail]);
-        }
-        ipcMain.removeAllListeners("killAlign");
+        finalizeAlign(false, err, code, signal);
       });
-    } else {
+      return;
+    }
+    if (trimmed === "Viewer closed") {
+      pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        finalizeAlign(true, err, code, signal);
+      });
+      return;
+    }
+    if (total > 0) {
       current++;
       event.sender.send("updateLoad", [
         Math.round((current / total) * 100),
         message,
       ]);
     }
+  });
+
+  pyshell.on("close", function (code: unknown, signal: unknown) {
+    if (resultSent) {
+      return;
+    }
+    const exitCode = typeof code === "number" ? code : Number(code) || 1;
+    if (exitCode === 0) {
+      finalizeAlign(true, null, code, signal);
+      return;
+    }
+    const pyFail = `Python exited with code ${exitCode}`;
+    reportPythonFailure(pyFail);
+    finalizeAlign(false, pyFail, code, signal);
   });
 
   ipcMain.once("killAlign", function (event: any, data: any[]) {

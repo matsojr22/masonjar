@@ -1,0 +1,292 @@
+"""Crash-safe alignment session persistence under the DAPI input directory."""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import pickle
+import shutil
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+SESSION_VERSION = 1
+PKL_NAME = "alignment.pkl"
+PKL_BAK_NAME = "alignment.pkl.bak"
+PKL_TMP_NAME = "alignment.pkl.tmp"
+SESSION_JSON_NAME = "alignment_session.json"
+
+
+def session_paths(dapi_dir: Path | str) -> dict[str, Path]:
+    root = Path(dapi_dir)
+    return {
+        "pkl": root / PKL_NAME,
+        "bak": root / PKL_BAK_NAME,
+        "tmp": root / PKL_TMP_NAME,
+        "json": root / SESSION_JSON_NAME,
+    }
+
+
+def compute_tuning_fingerprint(
+    file_list: list[str],
+    layout_mode: str,
+    legacy: bool,
+    slice_filter: set[str] | None,
+) -> str:
+    """Identity for DAPI-side tuning (independent of align output leaf)."""
+    parts = [
+        str(SESSION_VERSION),
+        "|".join(sorted(file_list)),
+        str(layout_mode),
+        "legacy" if legacy else "modern",
+    ]
+    if slice_filter is not None:
+        parts.append("|".join(sorted(slice_filter)))
+    digest = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
+def compute_fingerprint(
+    file_list: list[str],
+    output_path: str | Path,
+    layout_mode: str,
+    legacy: bool,
+    slice_filter: set[str] | None,
+) -> str:
+    """Legacy full run fingerprint (includes output path). Prefer tuning fingerprint."""
+    parts = [
+        str(SESSION_VERSION),
+        "|".join(sorted(file_list)),
+        str(Path(output_path).resolve()),
+        str(layout_mode),
+        "legacy" if legacy else "modern",
+    ]
+    if slice_filter is not None:
+        parts.append("|".join(sorted(slice_filter)))
+    digest = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
+def _session_tuning_fingerprint(session: dict[str, Any]) -> str | None:
+    saved = session.get("tuning_fingerprint")
+    if saved:
+        return str(saved)
+    legacy = session.get("fingerprint")
+    return str(legacy) if legacy else None
+
+
+def _atomic_replace(src: Path, dest: Path) -> None:
+    for attempt in range(2):
+        try:
+            src.replace(dest)
+            return
+        except OSError:
+            if attempt == 0:
+                time.sleep(0.05)
+            else:
+                raise
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+        handle.flush()
+    _atomic_replace(tmp, path)
+
+
+def _write_pickle_atomic(paths: dict[str, Path], payload: dict) -> None:
+    paths["tmp"].parent.mkdir(parents=True, exist_ok=True)
+    with open(paths["tmp"], "wb") as handle:
+        pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        handle.flush()
+    if paths["pkl"].is_file():
+        shutil.copy2(paths["pkl"], paths["bak"])
+    _atomic_replace(paths["tmp"], paths["pkl"])
+
+
+def _strip_atlas_slices_for_pickle(atlas_slices: dict) -> dict:
+    saved: dict = {}
+    for section_name, atlas_slice in atlas_slices.items():
+        atlas_slice.eraser_window = None
+        this_copy = copy.deepcopy(atlas_slice)
+        this_copy.image = None
+        this_copy.label = None
+        saved[section_name] = this_copy
+    return saved
+
+
+def _slice_summary(atlas_slice) -> dict[str, Any]:
+    return {
+        "filename": atlas_slice.section_name,
+        "slice_id": atlas_slice.slice_id(),
+        "ap_position": int(atlas_slice.ap_position),
+        "x_angle": float(atlas_slice.x_angle),
+        "y_angle": float(atlas_slice.y_angle),
+        "region": str(atlas_slice.region),
+        "hemisphere": str(getattr(atlas_slice, "hemisphere", "W")),
+        "linked": bool(getattr(atlas_slice, "linked", True)),
+        "layout_confidence": float(getattr(atlas_slice, "layout_confidence", 1.0)),
+        "layout_low_confidence": bool(getattr(atlas_slice, "layout_low_confidence", False)),
+        "layout_overridden": bool(getattr(atlas_slice, "layout_overridden", False)),
+        "use_tissue_cleanup_mask": bool(
+            getattr(atlas_slice, "use_tissue_cleanup_mask", False)
+        ),
+        "tissue_mask_warp_mode": str(
+            getattr(atlas_slice, "tissue_mask_warp_mode", "") or ""
+        ),
+        "has_damage_mask": getattr(atlas_slice, "damage_mask", None) is not None,
+    }
+
+
+def persist_session(
+    dapi_dir: Path | str,
+    atlas_slices: dict,
+    *,
+    tuning_fingerprint: str,
+    output_path: str | Path | None,
+    current_section: int,
+    visited: int,
+    parcellation: dict[str, Any],
+    reason: str,
+    status: str = "in_progress",
+) -> None:
+    paths = session_paths(dapi_dir)
+    payload = _strip_atlas_slices_for_pickle(atlas_slices)
+    _write_pickle_atomic(paths, payload)
+    output_abs = str(Path(output_path).resolve()) if output_path else None
+    session_doc = {
+        "version": SESSION_VERSION,
+        "status": status,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "reason": reason,
+        "tuning_fingerprint": tuning_fingerprint,
+        "fingerprint": tuning_fingerprint,
+        "output_path": output_abs,
+        "current_section": int(current_section),
+        "visited": int(visited),
+        "parcellation": dict(parcellation or {}),
+        "slice_count": len(atlas_slices),
+        "slices": [_slice_summary(s) for s in atlas_slices.values()],
+    }
+    _write_json_atomic(paths["json"], session_doc)
+
+
+def _load_pickle(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    try:
+        with open(path, "rb") as handle:
+            data = pickle.load(handle)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        return None
+    return None
+
+
+def _read_session_json(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+@dataclass
+class LoadResult:
+    atlas_slices: dict
+    session: dict[str, Any] | None = None
+    source: str = "pkl"
+    restore_navigation: bool = True
+
+
+def diagnose_load_failure(
+    dapi_dir: Path | str,
+    expected_tuning_fingerprint: str,
+) -> str:
+    paths = session_paths(dapi_dir)
+    session = _read_session_json(paths["json"])
+    has_pkl = paths["pkl"].is_file()
+    has_bak = paths["bak"].is_file()
+
+    if session is not None:
+        saved = _session_tuning_fingerprint(session)
+        if saved and saved != expected_tuning_fingerprint:
+            return (
+                f"fingerprint_mismatch saved={saved} expected={expected_tuning_fingerprint}"
+            )
+
+    if not has_pkl and not has_bak:
+        return "no_pickle"
+
+    if _load_pickle(paths["pkl"]) is None and _load_pickle(paths["bak"]) is None:
+        return "corrupt_pickle"
+
+    return "unknown"
+
+
+def load_session(
+    dapi_dir: Path | str,
+    expected_tuning_fingerprint: str,
+) -> LoadResult | None:
+    paths = session_paths(dapi_dir)
+    session = _read_session_json(paths["json"])
+
+    if session is not None:
+        saved = _session_tuning_fingerprint(session)
+        if saved != expected_tuning_fingerprint:
+            return None
+        restore_nav = session.get("status") != "completed"
+    else:
+        restore_nav = False
+
+    raw = _load_pickle(paths["pkl"])
+    source = "pkl"
+    if raw is None:
+        raw = _load_pickle(paths["bak"])
+        source = "bak"
+    if raw is None:
+        return None
+
+    return LoadResult(
+        atlas_slices=raw,
+        session=session,
+        source=source,
+        restore_navigation=restore_nav,
+    )
+
+
+def mark_session_completed(
+    dapi_dir: Path | str,
+    tuning_fingerprint: str,
+) -> None:
+    paths = session_paths(dapi_dir)
+    session = _read_session_json(paths["json"])
+    if session is None:
+        session = {
+            "version": SESSION_VERSION,
+            "tuning_fingerprint": tuning_fingerprint,
+            "fingerprint": tuning_fingerprint,
+        }
+    session["status"] = "completed"
+    session["completed_at"] = datetime.now(timezone.utc).isoformat()
+    session["updated_at"] = session["completed_at"]
+    _write_json_atomic(paths["json"], session)
+
+
+def clear_session_markers(dapi_dir: Path | str, *, keep_pkl: bool = True) -> None:
+    paths = session_paths(dapi_dir)
+    for key in ("json", "bak", "tmp"):
+        p = paths[key]
+        if p.is_file():
+            p.unlink()
+    if not keep_pkl and paths["pkl"].is_file():
+        paths["pkl"].unlink()

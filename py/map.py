@@ -7,11 +7,32 @@ import cv2
 import pickle
 from pathlib import Path
 from demons import register_to_atlas
+from align_tissue_mask import (
+    WARP_MODE_CHOICES,
+    WARP_MODE_DEFAULT,
+    WARP_MODE_HYBRID,
+    WARP_MODE_PER_ISLAND,
+    WARP_MODE_REGION_DUAL,
+    append_alignment_mask_log,
+    keep_mask_stats,
+    load_keep_mask,
+    mask_is_trivial,
+    resolve_bundle_root_from_dapi_dir,
+    warp_mode_index,
+)
+from align_tissue_warp import warp_section_with_masks
 from slice_atlas import slice_3d_volume, add_outlines, mask_slice_by_region
 from align_tissue_layout import (
     crop_planar_for_hemisphere,
     detect_tissue_layout,
     parse_layout_mode,
+)
+from align_session import (
+    compute_tuning_fingerprint,
+    diagnose_load_failure,
+    load_session,
+    mark_session_completed,
+    persist_session,
 )
 from model import TissuePredictor
 import nrrd
@@ -22,6 +43,7 @@ import napari
 import copy
 import argparse
 from qtpy.QtWidgets import (
+    QApplication,
     QGraphicsView,
     QGraphicsScene,
     QPushButton,
@@ -47,8 +69,15 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 
-class ImageEraser(QMainWindow):
+class AtlasDamageMarker(QMainWindow):
+    """Mark atlas regions missing on tissue due to damage (exclude from warp)."""
+
     closed = QtCore.Signal()
+
+    INSTRUCTION = (
+        "Attempt to mark the parts of this atlas section which are "
+        "missing on your tissue due to damage."
+    )
 
     def __init__(self, image):
         super().__init__()
@@ -59,9 +88,14 @@ class ImageEraser(QMainWindow):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowTitle("Image Eraser")
+        self.setWindowTitle("Identify tissue damage")
         container = QWidget()
         ui_layout = QVBoxLayout()
+        instruction = QLabel(self.INSTRUCTION)
+        instruction.setWordWrap(True)
+        instruction.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeading)
+        ui_layout.addWidget(instruction)
+
         self.img_view = QGraphicsView(self)
         self.img_view.setMouseTracking(True)
         self.img_view.viewport().installEventFilter(self)
@@ -71,9 +105,8 @@ class ImageEraser(QMainWindow):
         self.img_pixmap = QtGui.QPixmap.fromImage(self.qimg)
         self.img_scene.addPixmap(self.img_pixmap)
         self.img_view.setScene(self.img_scene)
-        # Slider for brush size
+
         self.brush_size_slider = QSlider(QtCore.Qt.Horizontal, self)
-        # Set label
         self.brush_size_slider_label = QLabel("Brush Size")
         self.brush_size_slider_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeading)
         self.brush_size_slider.setMinimum(1)
@@ -81,7 +114,6 @@ class ImageEraser(QMainWindow):
         self.brush_size_slider.setValue(self.brush_size)
         self.brush_size_slider.valueChanged.connect(self.update_brush_size)
 
-        # Buttons
         self.save_button = QPushButton("Save", self)
         self.cancel_button = QPushButton("Cancel", self)
         self.save_button.clicked.connect(self.save_mask)
@@ -99,7 +131,7 @@ class ImageEraser(QMainWindow):
         if source is self.img_view.viewport():
             if event.type() == QtCore.QEvent.MouseMove and self.drawing:
                 self.draw_on_image(event.pos())
-                return True  # Indicate that the event is handled
+                return True
             elif (
                 event.type() == QtCore.QEvent.MouseButtonPress
                 and event.button() == QtCore.Qt.LeftButton
@@ -114,42 +146,34 @@ class ImageEraser(QMainWindow):
                 self.drawing = False
                 return True
 
-        # Call base class method to continue normal event processing
         return super().eventFilter(source, event)
 
     def draw_on_image(self, qpoint):
-        # Convert QGraphicsView coordinates to image coordinates
         image_point = self.img_view.mapToScene(qpoint).toPoint()
         if image_point:
-            # Calculate the points to draw using a helper function
             points_to_draw = self.points_in_circle(
                 (image_point.x(), image_point.y()), self.brush_size * 2
             )
 
-            # Draw on the mask and image
             painter = QtGui.QPainter(self.img_pixmap)
             pen = QtGui.QPen(
-                QtGui.QColor(255, 0, 0), self.brush_size * 2, cap=QtCore.Qt.RoundCap
-            )  # *2 for diameter
+                QtGui.QColor(255, 0, 255),
+                self.brush_size * 2,
+                cap=QtCore.Qt.RoundCap,
+            )
             painter.setPen(pen)
             for pt in points_to_draw:
                 try:
-                    # Draw red point on the image
                     painter.drawPoint(pt[0], pt[1])
-                    # Set corresponding point in the mask
                     self.mask_image[pt[1], pt[0]] = 1
                 except IndexError:
-                    # Ignore any out of bounds points
                     pass
             painter.end()
 
-            # Update the scene to reflect the changes
             self.img_scene.update()
-
             self.update_image()
 
     def points_in_circle(self, center, radius):
-        """Return a list of points in a circle"""
         points = []
         for x in range(center[0] - radius, center[0] + radius + 1):
             for y in range(center[1] - radius, center[1] + radius + 1):
@@ -158,7 +182,6 @@ class ImageEraser(QMainWindow):
         return points
 
     def update_image(self):
-        # Update the QGraphicsScene with the new QPixmap
         self.img_scene.clear()
         self.img_scene.addPixmap(self.img_pixmap)
         self.img_view.setScene(self.img_scene)
@@ -168,13 +191,9 @@ class ImageEraser(QMainWindow):
 
     def save_mask(self):
         self.mask_image = self.mask_image.astype(np.uint8)
-        # close holes
         kernel = np.ones((5, 5), np.uint8)
-        # dilate
         self.mask_image = cv2.dilate(self.mask_image, kernel, iterations=5)
-        # erode
         self.mask_image = cv2.erode(self.mask_image, kernel, iterations=5)
-        # invert
         self.mask_image = np.logical_not(self.mask_image).astype(np.uint8)
         self.close()
 
@@ -186,6 +205,9 @@ class ImageEraser(QMainWindow):
         self.closed.emit()
         event.accept()
 
+
+# Backward compatibility alias
+ImageEraser = AtlasDamageMarker
 
 class AtlasSlice:
     """
@@ -216,7 +238,11 @@ class AtlasSlice:
         self.image = None
         self.sam_image = None
         self.label = None
+        self.damage_mask = None
         self.mask = None
+        self.use_tissue_cleanup_mask = False
+        self.tissue_mask_warp_mode = WARP_MODE_DEFAULT
+        self.keep_mask_source = None
         self.eraser_window = None
 
     def layout_label(self) -> str:
@@ -224,16 +250,31 @@ class AtlasSlice:
             return "Left hemi"
         return "Whole brain"
 
-    def set_mask(self):
-        """Set the mask of the slice"""
-        self.eraser_window = ImageEraser(self.image)
-        self.eraser_window.show()
+    def slice_id(self) -> str:
+        stem = ".".join(self.section_name.split(".")[:-1]) if "." in self.section_name else self.section_name
+        return stem.split(".")[0]
 
-        # on exit
-        self.eraser_window.closed.connect(self.on_exit)
+    def set_damage_mask(self):
+        """Open atlas damage marker for regions missing on tissue."""
+        self.eraser_window = AtlasDamageMarker(self.image)
+        self.eraser_window.show()
+        self.eraser_window.closed.connect(self.on_damage_marker_exit)
+
+    def on_damage_marker_exit(self):
+        keep_mask = self.eraser_window.mask_image
+        if keep_mask is not None and keep_mask.size:
+            self.damage_mask = (1 - keep_mask.astype(np.uint8)).astype(np.uint8)
+        self.eraser_window = None
+        autosave_cb = getattr(self, "_autosave_cb", None)
+        if autosave_cb is not None:
+            autosave_cb()
+
+    def set_mask(self):
+        """Legacy alias for set_damage_mask."""
+        self.set_damage_mask()
 
     def on_exit(self):
-        self.mask = self.eraser_window.mask_image
+        self.on_damage_marker_exit()
 
     def set_slice(self, atlas, annotation):
         """
@@ -256,34 +297,60 @@ class AtlasSlice:
         self.image = crop_planar_for_hemisphere(self.image, self.hemisphere)
         self.label = crop_planar_for_hemisphere(self.label, self.hemisphere)
 
-    def get_registered(self, tissue):
+    def get_registered(
+        self,
+        tissue,
+        structure_map_path,
+        bundle_root=None,
+        structure_map=None,
+    ):
         """
         Runs multi-modal registration between this atlas slice and the provided tissue section.
 
-        Args:
-            tissue (numpy.ndarray): the tissue section
-
         Returns:
-            numpy.ndarray: the warped atlas slice
-            numpy.ndarray: the warped annotation slice
-            numpy.ndarray: the color annotation slice
+            warped_labels, warped_atlas, color_label, warp_meta
         """
-        if self.mask is not None:
-            try:
-                self.image = self.image * self.mask
-                self.label = self.label * self.mask
-            except:
-                self.mask = None
-                print("Bad mask! Reset next alignment.")
+        slice_id = self.slice_id()
+        damage_mask = self.damage_mask
+        if damage_mask is None and self.mask is not None:
+            damage_mask = (1 - self.mask.astype(np.uint8)).astype(np.uint8)
+
+        keep_mask = None
+        if self.use_tissue_cleanup_mask and bundle_root is not None:
+            keep_mask, self.keep_mask_source = load_keep_mask(Path(bundle_root), slice_id)
+
+        if self.use_tissue_cleanup_mask and keep_mask is not None:
+            warped_labels, warped_atlas, color_label, warp_meta = warp_section_with_masks(
+                tissue,
+                self.image,
+                self.label,
+                structure_map_path,
+                keep_mask=keep_mask,
+                damage_mask=damage_mask,
+                warp_mode=self.tissue_mask_warp_mode or WARP_MODE_DEFAULT,
+                region_code=self.region,
+                structure_map=structure_map,
+                slice_id=slice_id,
+            )
+            warp_meta["keep_mask_source"] = self.keep_mask_source
+            return warped_labels, warped_atlas, color_label, warp_meta
 
         warped_labels, warped_atlas, color_label = register_to_atlas(
             tissue,
             self.image,
             self.label,
-            args.map.strip(),
+            structure_map_path,
+            fixed_keep_mask=None,
+            moving_exclude_mask=damage_mask,
         )
-
-        return warped_labels, warped_atlas, color_label
+        warp_meta = {
+            "tissue_mask_used": False,
+            "tissue_mask_warp_mode": "standard",
+            "keep_mask_source": None,
+            "keep_components": 0,
+            "damage_mask_applied": damage_mask is not None and bool(np.any(damage_mask)),
+        }
+        return warped_labels, warped_atlas, color_label, warp_meta
 
 
 class AlignmentController:
@@ -315,6 +382,7 @@ class AlignmentController:
         layout_mode=None,
         use_legacy=False,
         slice_filter=None,
+        bundle_root=None,
     ):
         if layout_mode is None:
             layout_mode = "whole" if is_whole else "hemi"
@@ -324,6 +392,11 @@ class AlignmentController:
         self.input_path = input_path
         self.output_path = output_path
         self.structures_path = structures_path
+        if bundle_root:
+            self.bundle_root = Path(bundle_root).resolve()
+        else:
+            resolved = resolve_bundle_root_from_dapi_dir(input_path)
+            self.bundle_root = resolved
         graph_path = Path(structures_path).parent / "structure_graph.json"
         self.catalog = None
         self.parcel_ccf_advanced = False
@@ -437,8 +510,28 @@ class AlignmentController:
         self.parcel_level_combo.setVisible(False)
         self._init_parcellation_controls()
 
-        self.mask_button = QPushButton("Set Mask")
-        self.mask_button.clicked.connect(self.update_mask)
+        self.tissue_mask_checkbox = QCheckBox(
+            "Use tissue edge-cleanup mask for warping"
+        )
+        self.tissue_mask_checkbox.stateChanged.connect(self._on_tissue_mask_toggled)
+
+        self.tissue_mask_mode_combo = QComboBox()
+        for mode_id, label in WARP_MODE_CHOICES:
+            self.tissue_mask_mode_combo.addItem(label, mode_id)
+        self.tissue_mask_mode_combo.currentIndexChanged.connect(
+            self._on_tissue_mask_mode_changed
+        )
+        self.tissue_mask_mode_combo.setVisible(False)
+
+        self.tissue_mask_status = QLabel("")
+        self.tissue_mask_status.setWordWrap(True)
+        self.tissue_mask_status.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeading)
+
+        self.damage_mask_button = QPushButton("Identify tissue damage")
+        self.damage_mask_button.clicked.connect(self.update_damage_mask)
+
+        # Legacy alias
+        self.mask_button = self.damage_mask_button
 
         # Section title + progress (left dock)
         self.section_info_label = QLabel("")
@@ -486,6 +579,13 @@ class AlignmentController:
         # Timers
         self.slice_update_timer = QTimer()
         self.pos_update_timer = QTimer()
+        self._autosave_timer = QTimer()
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.timeout.connect(
+            lambda: self.persist_alignment_session("debounced")
+        )
+        self._session_restore_nav = False
+        self._session_finished = False
         self.viewer.window.add_dock_widget(
             [
                 x_angle_widget,
@@ -510,7 +610,11 @@ class AlignmentController:
                 self.parcel_advanced,
                 self.parcel_level_combo,
                 self.link_angles_button,
-                self.mask_button,
+                self.tissue_mask_checkbox,
+                QLabel("Gap warp strategy"),
+                self.tissue_mask_mode_combo,
+                self.tissue_mask_status,
+                self.damage_mask_button,
                 self.next_button,
                 self.previous_button,
                 self.finish_button,
@@ -533,6 +637,11 @@ class AlignmentController:
                 )
             )
             self._sync_layout_selection_from_slice()
+            if self._session_restore_nav:
+                self.progress_bar.setValue(self.current_section + 1)
+                self.progress_bar.setFormat(
+                    f"{self.current_section + 1} / {self.num_slices}"
+                )
 
         print("Awaiting fine tuning...", flush=True)
 
@@ -568,11 +677,118 @@ class AlignmentController:
             return
 
         self.parcel_advanced.toggled.connect(self._on_parcel_advanced_toggled)
+        self.parcel_selection.currentIndexChanged.connect(
+            lambda _idx: self.schedule_autosave("parcellation")
+        )
+        self.parcel_level_combo.currentIndexChanged.connect(
+            lambda _idx: self.schedule_autosave("parcellation")
+        )
 
     def _on_parcel_advanced_toggled(self, checked: bool):
         self.parcel_ccf_advanced = bool(checked)
         self.parcel_selection.setVisible(not self.parcel_ccf_advanced)
         self.parcel_level_combo.setVisible(self.parcel_ccf_advanced)
+        self.schedule_autosave("parcellation")
+
+    def _tuning_fingerprint(self) -> str:
+        return compute_tuning_fingerprint(
+            self.file_list,
+            self.layout_mode,
+            self.use_legacy,
+            self.slice_filter,
+        )
+
+    def _parcellation_state(self) -> dict:
+        from structure_catalog import FULL_DETAIL_TIER
+
+        if self.parcel_ccf_advanced:
+            level = self.parcel_level_combo.currentData()
+            return {
+                "ccf_advanced": True,
+                "st_level": int(level) if level is not None else None,
+                "tier_id": None,
+            }
+        tier = self.parcel_selection.currentData()
+        return {
+            "ccf_advanced": False,
+            "st_level": None,
+            "tier_id": str(tier) if tier is not None else FULL_DETAIL_TIER,
+        }
+
+    def _apply_parcellation_state(self, state: dict | None) -> None:
+        if not state or not self.catalog:
+            return
+        self.parcel_selection.blockSignals(True)
+        self.parcel_level_combo.blockSignals(True)
+        self.parcel_advanced.blockSignals(True)
+        try:
+            if state.get("ccf_advanced"):
+                self.parcel_advanced.setChecked(True)
+                level = state.get("st_level")
+                if level is not None:
+                    idx = self.parcel_level_combo.findData(level)
+                    if idx >= 0:
+                        self.parcel_level_combo.setCurrentIndex(idx)
+            else:
+                self.parcel_advanced.setChecked(False)
+                tier = state.get("tier_id")
+                if tier is not None:
+                    idx = self.parcel_selection.findData(tier)
+                    if idx >= 0:
+                        self.parcel_selection.setCurrentIndex(idx)
+        finally:
+            self.parcel_selection.blockSignals(False)
+            self.parcel_level_combo.blockSignals(False)
+            self.parcel_advanced.blockSignals(False)
+
+    def _bind_slice_autosave(self, atlas_slice: AtlasSlice) -> None:
+        atlas_slice._autosave_cb = lambda: self.persist_alignment_session("damage_mask")
+
+    def schedule_autosave(self, reason: str) -> None:
+        immediate = {
+            "next_section",
+            "previous_section",
+            "damage_mask",
+            "finish",
+            "predict_complete",
+            "edit",
+            "viewer_close",
+            "window_close",
+        }
+        if reason in immediate:
+            self._flush_autosave(reason)
+            return
+        self._autosave_timer.stop()
+        self._autosave_timer.start(300)
+
+    def _flush_autosave(self, reason: str) -> None:
+        self._autosave_timer.stop()
+        self.persist_alignment_session(reason)
+
+    def persist_alignment_session(self, reason: str) -> None:
+        if not self.atlas_slices:
+            return
+        try:
+            persist_session(
+                self.input_path,
+                self.atlas_slices,
+                tuning_fingerprint=self._tuning_fingerprint(),
+                output_path=self.output_path,
+                current_section=self.current_section,
+                visited=self.visited,
+                parcellation=self._parcellation_state(),
+                reason=reason,
+            )
+            print(
+                f"LOG: align_session_saved reason={reason} files={len(self.atlas_slices)}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(f"LOG: align_session_save_failed reason={reason} error={exc}", flush=True)
+
+    def save_alignment(self):
+        """Save alignment tuning and session sidecar (atomic pickle + JSON)."""
+        self.persist_alignment_session("finish")
 
     def _parcel_target(self) -> tuple[str | None, int | None]:
         from structure_catalog import FULL_DETAIL_TIER
@@ -678,51 +894,161 @@ class AlignmentController:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
         print(f"Recorded flag for {slice_id} in {out_path}", flush=True)
 
+    def _current_atlas_slice(self) -> AtlasSlice | None:
+        if not self.file_list or self.num_slices == 0:
+            return None
+        return self.atlas_slices[self.file_list[self.current_section]]
+
+    def _on_tissue_mask_toggled(self, _state):
+        current = self._current_atlas_slice()
+        if current is None:
+            return
+        current.use_tissue_cleanup_mask = self.tissue_mask_checkbox.isChecked()
+        self.tissue_mask_mode_combo.setVisible(current.use_tissue_cleanup_mask)
+        self._sync_tissue_mask_status()
+        self.schedule_autosave("tissue_mask")
+
+    def _on_tissue_mask_mode_changed(self, _index):
+        current = self._current_atlas_slice()
+        if current is None:
+            return
+        mode_id = self.tissue_mask_mode_combo.currentData()
+        if mode_id:
+            current.tissue_mask_warp_mode = str(mode_id)
+        self.schedule_autosave("tissue_mask")
+
+    def _sync_tissue_mask_status(self):
+        current = self._current_atlas_slice()
+        if current is None:
+            return
+        if self.bundle_root is None:
+            self.tissue_mask_checkbox.setEnabled(False)
+            self.tissue_mask_status.setText(
+                "Keep mask: bundle root not found — open a project bundle"
+            )
+            return
+        keep_mask, source = load_keep_mask(self.bundle_root, current.slice_id())
+        if keep_mask is None:
+            self.tissue_mask_checkbox.setEnabled(False)
+            self.tissue_mask_status.setText(
+                "Keep mask: not found — run tissue edge cleanup first"
+            )
+            self.tissue_mask_mode_combo.setVisible(False)
+            return
+        self.tissue_mask_checkbox.setEnabled(True)
+        stats = keep_mask_stats(keep_mask)
+        trivial = mask_is_trivial(keep_mask)
+        islands = stats.get("n_components", 0)
+        if trivial:
+            detail = "full keep (background exclusion only)"
+        else:
+            detail = f"{islands} island(s)"
+        self.tissue_mask_status.setText(
+            f"Keep mask: {detail}, source={source or 'unknown'}"
+        )
+        self.tissue_mask_mode_combo.setVisible(
+            self.tissue_mask_checkbox.isChecked()
+        )
+
+    def update_damage_mask(self):
+        """Open atlas damage marker for the current section."""
+        self.atlas_slices[self.file_list[self.current_section]].set_damage_mask()
+
+    def update_mask(self):
+        """Legacy alias."""
+        self.update_damage_mask()
+
+    def _rehydrate_atlas_slices(self, raw_slices: dict) -> None:
+        """Rebuild AtlasSlice objects from a pickled dict."""
+        rehydrated: dict = {}
+        for _, atlas_slice in raw_slices.items():
+            old_name = atlas_slice.section_name
+            old_x = atlas_slice.x_angle
+            old_y = atlas_slice.y_angle
+            old_pos = atlas_slice.ap_position
+            old_region = atlas_slice.region
+            old_hemi = getattr(atlas_slice, "hemisphere", "W")
+            old_conf = float(getattr(atlas_slice, "layout_confidence", 1.0))
+            old_low = bool(getattr(atlas_slice, "layout_low_confidence", False))
+            old_over = bool(getattr(atlas_slice, "layout_overridden", False))
+            old_linked = bool(getattr(atlas_slice, "linked", True))
+            old_damage = getattr(atlas_slice, "damage_mask", None)
+            if old_damage is None and getattr(atlas_slice, "mask", None) is not None:
+                old_keep = atlas_slice.mask.astype(np.uint8)
+                old_damage = (1 - old_keep).astype(np.uint8)
+            old_use_mask = bool(getattr(atlas_slice, "use_tissue_cleanup_mask", False))
+            old_warp_mode = getattr(
+                atlas_slice, "tissue_mask_warp_mode", WARP_MODE_DEFAULT
+            )
+            old_keep_source = getattr(atlas_slice, "keep_mask_source", None)
+
+            restored = AtlasSlice(
+                old_name,
+                old_pos,
+                old_x,
+                old_y,
+                region=old_region,
+                hemisphere=old_hemi,
+            )
+            restored.linked = old_linked
+            restored.layout_confidence = old_conf
+            restored.layout_low_confidence = old_low
+            restored.layout_overridden = old_over
+            restored.damage_mask = old_damage
+            restored.use_tissue_cleanup_mask = old_use_mask
+            restored.tissue_mask_warp_mode = old_warp_mode
+            restored.keep_mask_source = old_keep_source
+            restored.set_slice(self.atlas, self.annotation)
+            self._bind_slice_autosave(restored)
+            rehydrated[old_name] = restored
+        self.atlas_slices = rehydrated
+
     def load_alignment(self):
-        """Check the input path for a saved alignment pkl"""
+        """Load saved alignment session from the DAPI directory."""
         try:
-            with open(Path(self.input_path) / "alignment.pkl", "rb") as f:
-                self.atlas_slices = pickle.load(f)
+            tuning_fp = self._tuning_fingerprint()
+            result = load_session(self.input_path, tuning_fp)
+            if result is None:
+                detail = diagnose_load_failure(self.input_path, tuning_fp)
+                if detail.startswith("fingerprint_mismatch"):
+                    print(f"LOG: align_session_fingerprint_mismatch {detail}", flush=True)
+                print(f"LOG: align_session_not_loaded reason={detail}", flush=True)
+                print("No compatible alignment found...", flush=True)
+                return
+
+            self._rehydrate_atlas_slices(result.atlas_slices)
             self.prior_alignment = True
+            restore_nav = result.restore_navigation
+            print(
+                f"LOG: align_session_loaded source={result.source} "
+                f"sections={len(result.atlas_slices)} restore_nav={restore_nav}",
+                flush=True,
+            )
+            print(
+                f"Found prior alignment! (source={result.source})",
+                flush=True,
+            )
 
-            # reload slices and refresh class definition
-            for _, atlas_slice in self.atlas_slices.items():
-                # re-init with old values
-                old_name = atlas_slice.section_name
-                old_x = atlas_slice.x_angle
-                old_y = atlas_slice.y_angle
-                old_pos = atlas_slice.ap_position
-                old_region = atlas_slice.region
-                old_hemi = getattr(atlas_slice, "hemisphere", "W")
-                old_conf = float(getattr(atlas_slice, "layout_confidence", 1.0))
-                old_low = bool(getattr(atlas_slice, "layout_low_confidence", False))
-                old_over = bool(getattr(atlas_slice, "layout_overridden", False))
-                old_mask = atlas_slice.mask
+            if result.session:
+                self._apply_parcellation_state(result.session.get("parcellation"))
+                if result.restore_navigation:
+                    self._session_restore_nav = True
+                    max_idx = max(0, self.num_slices - 1)
+                    self.current_section = min(
+                        int(result.session.get("current_section", 0)),
+                        max_idx,
+                    )
+                    self.visited = min(
+                        int(result.session.get("visited", self.current_section)),
+                        max_idx,
+                    )
 
-                self.atlas_slices[old_name] = AtlasSlice(
-                    old_name,
-                    old_pos,
-                    old_x,
-                    old_y,
-                    region=old_region,
-                    hemisphere=old_hemi,
-                )
-                self.atlas_slices[old_name].layout_confidence = old_conf
-                self.atlas_slices[old_name].layout_low_confidence = old_low
-                self.atlas_slices[old_name].layout_overridden = old_over
-                self.atlas_slices[old_name].mask = old_mask
-                self.atlas_slices[old_name].set_slice(self.atlas, self.annotation)
-
-            print("Found prior alignment!")
-            # Check if we have any new slices in our input
-            # Compare files names to keys in atlas_slices
             new_files = set(self.file_list) - set(self.atlas_slices.keys())
             if new_files:
                 print("New slices found, re-predicting...", flush=True)
                 self.predict_sample_slices()
-
-        except:
-            print("No comptabile alignment found...")
+        except Exception as exc:
+            print(f"LOG: align_session_load_failed error={exc}", flush=True)
 
     def predict_sample_slices(self):
         """Predict the positions of the samples using the tissue predictor"""
@@ -855,25 +1181,12 @@ class AlignmentController:
                 predicted_slice.layout_overridden = False
 
                 predicted_slice.set_slice(self.atlas, self.annotation)
+                self._bind_slice_autosave(predicted_slice)
                 self.atlas_slices[self.file_list[i]] = predicted_slice
 
-    def save_alignment(self):
-        """Save the slices to a pickle file"""
-        # get rid of image and label
-        saved_copy = {}
-        for section_name, atlas_slice in self.atlas_slices.items():
-            atlas_slice.eraser_window = None
-            this_copy = copy.deepcopy(atlas_slice)
-            this_copy.image = None
-            this_copy.label = None
-            saved_copy[section_name] = this_copy
-
-        with open(Path(self.input_path) / "alignment.pkl", "wb") as f:
-            pickle.dump(saved_copy, f)
-
-    def update_mask(self):
-        """Update the mask of the current slice"""
-        self.atlas_slices[self.file_list[self.current_section]].set_mask()
+        for atlas_slice in self.atlas_slices.values():
+            self._bind_slice_autosave(atlas_slice)
+        self.schedule_autosave("predict_complete")
 
     def _find_aspect_constrained_size(self, img1, img2):
         """
@@ -962,10 +1275,21 @@ class AlignmentController:
         )
         self._sync_layout_selection_from_slice()
 
-        self.mask_button.setText(
-            "Set Mask"
-            if self.atlas_slices[self.file_list[self.current_section]].mask is None
-            else "Update Mask"
+        current = self.atlas_slices[self.file_list[self.current_section]]
+        self.tissue_mask_checkbox.blockSignals(True)
+        self.tissue_mask_checkbox.setChecked(bool(current.use_tissue_cleanup_mask))
+        self.tissue_mask_checkbox.blockSignals(False)
+        mode_idx = warp_mode_index(
+            current.tissue_mask_warp_mode or WARP_MODE_DEFAULT
+        )
+        self.tissue_mask_mode_combo.blockSignals(True)
+        self.tissue_mask_mode_combo.setCurrentIndex(mode_idx)
+        self.tissue_mask_mode_combo.blockSignals(False)
+        self._sync_tissue_mask_status()
+
+        has_damage = current.damage_mask is not None and bool(np.any(current.damage_mask))
+        self.damage_mask_button.setText(
+            "Update damage marks" if has_damage else "Identify tissue damage"
         )
 
         self.update_section_header()
@@ -1028,6 +1352,7 @@ class AlignmentController:
         current_slice.set_slice(self.atlas, self.annotation)
         self.set_all_angles()
         self.update_display()
+        self._flush_autosave("edit")
 
     def update_layout(self):
         """Update the tissue layout (hemisphere) of the current slice."""
@@ -1038,6 +1363,7 @@ class AlignmentController:
         current_slice.layout_low_confidence = False
         current_slice.set_slice(self.atlas, self.annotation)
         self.update_display()
+        self._flush_autosave("edit")
 
     def update_position(self):
         """Update the position of the current slice"""
@@ -1045,6 +1371,7 @@ class AlignmentController:
         current_slice.ap_position = self.ap_position_spinbox.value()
         current_slice.set_slice(self.atlas, self.annotation)
         self.update_display()
+        self._flush_autosave("edit")
 
     def adjust_positions(self):
         """Adjust the positions of all slices based on trend in visited slices"""
@@ -1093,6 +1420,7 @@ class AlignmentController:
             )
             self.adjust_positions()
             self.update_display()
+            self.schedule_autosave("next_section")
 
     def previous_section(self):
         """Move to previous section"""
@@ -1104,7 +1432,7 @@ class AlignmentController:
             )
             self.adjust_positions()
             self.update_display()
-
+            self.schedule_autosave("previous_section")
 
     def isolate_section(self, sample):
         """
@@ -1169,6 +1497,7 @@ class AlignmentController:
 
     def finish(self):
         """Finish alignment"""
+        self._session_finished = True
         # disconnect signals
         self.x_angle_spinbox.valueChanged.disconnect(self.que_update_slice)
         self.y_angle_spinbox.valueChanged.disconnect(self.que_update_slice)
@@ -1191,6 +1520,13 @@ class AlignmentController:
 
         warp_ok = []
         warp_failed = []
+        slice_warp_masks = {}
+        multi_region_modes = {
+            WARP_MODE_HYBRID,
+            WARP_MODE_REGION_DUAL,
+            WARP_MODE_PER_ISLAND,
+        }
+        warped_at = datetime.now(timezone.utc).isoformat()
         for i in range(self.num_slices):
             filename = self.file_list[i]
             slice_stem = slice_stem_from_image_filename(filename)
@@ -1201,9 +1537,15 @@ class AlignmentController:
                 cv2.IMREAD_GRAYSCALE,
             )
 
+            use_mask = bool(getattr(current_slice, "use_tissue_cleanup_mask", False))
+            warp_mode = getattr(
+                current_slice, "tissue_mask_warp_mode", WARP_MODE_DEFAULT
+            )
+            skip_region_prefilter = use_mask and warp_mode in multi_region_modes
+
             atlas_image = current_slice.image
             atlas_label = current_slice.label
-            if current_slice.region != "A":
+            if current_slice.region != "A" and not skip_region_prefilter:
                 atlas_image, atlas_label = mask_slice_by_region(
                     current_slice.image,
                     current_slice.label,
@@ -1213,11 +1555,20 @@ class AlignmentController:
 
             saved_image = current_slice.image
             saved_label = current_slice.label
+            warp_meta = None
             try:
                 current_slice.image = atlas_image
                 current_slice.label = atlas_label
-                warped_labels, warped_atlas, color_label = current_slice.get_registered(
+                (
+                    warped_labels,
+                    warped_atlas,
+                    color_label,
+                    warp_meta,
+                ) = current_slice.get_registered(
                     sample,
+                    self.structures_path,
+                    bundle_root=self.bundle_root,
+                    structure_map=structure_map,
                 )
             except Exception as exc:
                 err_msg = str(exc)
@@ -1226,6 +1577,7 @@ class AlignmentController:
                         "slice_id": slice_stem,
                         "file": filename,
                         "error": err_msg,
+                        "tissue_mask_warp_mode": warp_mode if use_mask else "standard",
                     }
                 )
                 print(
@@ -1236,6 +1588,21 @@ class AlignmentController:
             finally:
                 current_slice.image = saved_image
                 current_slice.label = saved_label
+
+            if warp_meta:
+                record = {
+                    **warp_meta,
+                    "warped_at": warped_at,
+                }
+                slice_warp_masks[slice_stem] = record
+                append_alignment_mask_log(
+                    Path(self.output_path),
+                    {
+                        "slice_id": slice_stem,
+                        "align_output_rel": str(Path(self.output_path)),
+                        **warp_meta,
+                    },
+                )
 
             from annotation_relabel import (
                 colorize_labels,
@@ -1326,6 +1693,7 @@ class AlignmentController:
             "warp_ok": warp_ok,
             "warp_failed": warp_failed,
             "slice_layouts": {},
+            "slice_warp_masks": slice_warp_masks,
         }
         for section_name, atlas_slice in self.atlas_slices.items():
             slice_id = self._slice_id_from_filename(section_name)
@@ -1357,7 +1725,37 @@ class AlignmentController:
         if not warp_ok:
             print("LOG: align_warp_zero_slices_warped", flush=True)
             raise SystemExit(1)
+        try:
+            mark_session_completed(self.input_path, self._tuning_fingerprint())
+        except Exception as exc:
+            print(f"LOG: align_session_complete_failed error={exc}", flush=True)
         print("Done!", flush=True)
+
+    def _bind_viewer_close_flush(self) -> None:
+        try:
+            qt_window = self.viewer.window._qt_window
+            if qt_window is None:
+                return
+
+            controller = self
+
+            class _CloseFilter(QtCore.QObject):
+                def eventFilter(self, obj, event):
+                    if event.type() == QtCore.QEvent.Close:
+                        if not controller._session_finished:
+                            controller._flush_autosave("window_close")
+                            try:
+                                app = QApplication.instance()
+                                if app is not None:
+                                    app.quit()
+                            except Exception:
+                                pass
+                    return False
+
+            self._close_filter = _CloseFilter(qt_window)
+            qt_window.installEventFilter(self._close_filter)
+        except Exception:
+            pass
 
     def start_viewer(self):
         """Start the viewer"""
@@ -1365,7 +1763,12 @@ class AlignmentController:
         self.viewer.show()
         self.update_display()
         raise_and_activate_napari(self.viewer)
+        self._bind_viewer_close_flush()
         napari.run()
+        if not self._session_finished:
+            self._flush_autosave("viewer_close")
+            print("LOG: align_viewer_closed", flush=True)
+            print("Viewer closed", flush=True)
 
 
 if __name__ == "__main__":
@@ -1393,6 +1796,12 @@ if __name__ == "__main__":
         help="JSON file with slice ids to process",
         default="",
     )
+    parser.add_argument(
+        "-b",
+        "--bundle",
+        help="Mason Jar bundle root (for tissue cleanup mask lookup)",
+        default="",
+    )
     args = parser.parse_args()
 
     from slice_index import load_slice_list
@@ -1410,4 +1819,5 @@ if __name__ == "__main__":
         layout_mode=parse_layout_mode(str(args.whole)),
         use_legacy=args.legacy.strip().lower() == "true",
         slice_filter=slice_filter,
+        bundle_root=args.bundle.strip() or None,
     )

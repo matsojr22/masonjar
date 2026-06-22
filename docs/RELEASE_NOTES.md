@@ -6,6 +6,23 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.0.4
+
+**What's new**
+
+Closing the Atlas Alignment Napari window without clicking **Finish** no longer leaves Mason Jar stuck on a running job. Your section tuning (AP, angles, layout) is saved automatically, and the Align page returns to **Run** so you can reopen and continue—or click **Finish** when you are ready to warp.
+
+**Changes**
+
+- Align: tuning autosave when you close Napari; saved choices restore on the next run even if the output folder slug changed.
+- Align: closing Napari without Finish resets the UI without marking a completed alignment run.
+
+**Commit subject**
+
+Align saves tuning on Napari close and no longer hangs the UI
+
+---
+
 ## v4.0.3
 
 **What's new**

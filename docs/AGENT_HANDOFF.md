@@ -1,8 +1,18 @@
 # Agent session handoff
 
-Last updated: 2026-06-17 (v4.0.3). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-13 (v4.0.4). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.0.4 — Align autosave + graceful Napari close (2026-06-13)
+
+- **`py/align_session.py`**: tuning fingerprint decoupled from align output path; load/save diagnostics via `LOG:` lines.
+- **`py/map.py`**: immediate edit autosave, flush on Napari/window close, prints `Viewer closed` for IPC; `QApplication.quit()` on close event.
+- **`src/main.ts` / `main.js`**: `runAlign` handles `Viewer closed` + process `close` fallback (`alignResult` `{ cancelled: true }`).
+- **`js/align.js` / `js/align_ipc.js`**: cancelled close skips active-run side effects; user message to click Finish to warp.
+- Tests: `python/tests/test_align_session.py`, `scripts/test-align-ipc.js`.
+
+**Open follow-ups:** Adjust (`runAdjust`) still uses Done-only handshake — same hung-UI pattern if viewer closed without save; Align **Cancel** still hard-kills Python.
 
 ## v4.0.3 — Preview filter blackout fix (2026-06-17)
 
