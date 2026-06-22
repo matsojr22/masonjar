@@ -8,6 +8,10 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ## v4.0.7
 
+**What's new**
+
+Align again opens with sensible predicted AP positions and angles on the first section. If a bad autosave from v4.0.6 is on disk, Mason Jar clears it automatically and re-runs predictions.
+
 **Fixes**
 
 - Align: restored tissue predictor results on startup (v4.0.6 could save AP=0 and zero angles before the viewer opened).
