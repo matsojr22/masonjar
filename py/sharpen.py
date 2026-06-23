@@ -16,6 +16,11 @@ import tifffile as tiff
 from skimage.filters import unsharp_mask
 from skimage.morphology import disk, white_tophat
 
+# Full-frame sharpen on ~15k×12k uint8 peaks ~6 GB RAM (unsharp + tophat); use tiles above this.
+TILED_SHARPEN_PIXEL_THRESHOLD = 50_000_000
+TILED_SHARPEN_TILE = 4096
+TILED_SHARPEN_PAD = 32
+
 
 def enhance_contrast(image, saturation_level=0.05):
     saturation_point = saturation_level / 100
@@ -65,15 +70,119 @@ def stretch_preview_for_display(roi: np.ndarray) -> np.ndarray:
     return stretched.astype(np.uint8)
 
 
-def sharpen_image(img: np.ndarray, radius: float, amount: float, equalize: bool) -> np.ndarray:
-    if equalize:
-        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
-        img = clahe.apply(img.astype(np.uint8) if img.dtype == np.uint8 else img.astype(np.uint8))
-        img = enhance_contrast(img)
+def _contrast_bounds_from_sample(sample: np.ndarray, saturation_level: float = 0.05) -> tuple[float, float]:
+    flat = sample.astype(np.float64).ravel()
+    sat = saturation_level / 100.0
+    lo = float(np.percentile(flat, sat * 100.0))
+    hi = float(np.percentile(flat, 100.0 - sat * 100.0))
+    return lo, hi
+
+
+def _apply_equalize_with_bounds(img_u8: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
+    work = clahe.apply(np.clip(img_u8, 0, 255).astype(np.uint8)).astype(np.float64)
+    if hi <= lo:
+        return enhance_contrast(work.astype(np.uint8))
+    clipped = np.clip(work, lo, hi)
+    rescaled = np.interp(clipped, (lo, hi), (0, 255))
+    return np.clip(rescaled, 0, 255).astype(np.uint8)
+
+
+def _equalize_image(img: np.ndarray) -> np.ndarray:
+    clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
+    work = img.astype(np.uint8) if img.dtype == np.uint8 else img.astype(np.uint8)
+    work = clahe.apply(work)
+    return enhance_contrast(work)
+
+
+def _sharpen_unsharp_tophat(img: np.ndarray, radius: float, amount: float) -> np.ndarray:
     original_dtype = img.dtype
-    img = unsharp_mask(img, radius=radius, amount=amount, preserve_range=True)
-    img = white_tophat(img, disk(15))
-    return img.astype(original_dtype)
+    work = img.astype(np.uint8) if img.dtype != np.uint8 else img
+    sharpened = unsharp_mask(work, radius=radius, amount=amount, preserve_range=True)
+    sharpened = white_tophat(sharpened, disk(15))
+    return sharpened.astype(original_dtype)
+
+
+def _sharpen_image_tiled(
+    img: np.ndarray,
+    radius: float,
+    amount: float,
+    equalize: bool,
+) -> np.ndarray:
+    h, w = img.shape[:2]
+    out = np.empty_like(img)
+    contrast_bounds: tuple[float, float] | None = None
+    if equalize:
+        step = max(1, int(np.sqrt(img.size / 1_000_000)))
+        sample = img[::step, ::step]
+        if sample.dtype == np.uint16:
+            sample = (sample / 256).astype(np.uint8)
+        elif sample.dtype != np.uint8:
+            sample = np.clip(sample, 0, 255).astype(np.uint8)
+        contrast_bounds = _contrast_bounds_from_sample(sample)
+        print(
+            f"LOG: sharpen_tiled equalize subsample step={step} bounds={contrast_bounds[0]:.1f}-{contrast_bounds[1]:.1f}",
+            flush=True,
+        )
+
+    tile = TILED_SHARPEN_TILE
+    pad = TILED_SHARPEN_PAD
+    tiles_x = (w + tile - 1) // tile
+    tiles_y = (h + tile - 1) // tile
+    tiles_total = tiles_x * tiles_y
+    tiles_done = 0
+    print(
+        f"LOG: sharpen_tiled size={w}x{h} tile={tile} pad={pad} tiles={tiles_total}",
+        flush=True,
+    )
+
+    for y0 in range(0, h, tile):
+        for x0 in range(0, w, tile):
+            ye = min(h, y0 + tile)
+            xe = min(w, x0 + tile)
+            cy0 = max(0, y0 - pad)
+            cx0 = max(0, x0 - pad)
+            cy1 = min(h, ye + pad)
+            cx1 = min(w, xe + pad)
+            crop = np.asarray(img[cy0:cy1, cx0:cx1])
+            if crop.dtype == np.uint16:
+                crop_u8 = (crop / 256).astype(np.uint8)
+            elif crop.dtype != np.uint8:
+                crop_u8 = np.clip(crop, 0, 255).astype(np.uint8)
+            else:
+                crop_u8 = crop
+            if equalize and contrast_bounds is not None:
+                crop_u8 = _apply_equalize_with_bounds(crop_u8, *contrast_bounds)
+            proc = _sharpen_unsharp_tophat(crop_u8, radius, amount)
+            oy, ox = y0 - cy0, x0 - cx0
+            th, tw = ye - y0, xe - x0
+            out[y0:ye, x0:xe] = proc[oy : oy + th, ox : ox + tw]
+            tiles_done += 1
+            if tiles_done == 1 or tiles_done == tiles_total or tiles_done % 4 == 0:
+                print(
+                    f"LOG: sharpen_tiled progress {tiles_done}/{tiles_total}",
+                    flush=True,
+                )
+
+    return out
+
+
+def sharpen_image(img: np.ndarray, radius: float, amount: float, equalize: bool) -> np.ndarray:
+    if img.ndim != 2:
+        raise ValueError(f"expected 2D image, got ndim={img.ndim}")
+    use_tiled = img.size > TILED_SHARPEN_PIXEL_THRESHOLD
+    if use_tiled:
+        print(f"LOG: sharpen_mode=tiled pixels={img.size}", flush=True)
+        return _sharpen_image_tiled(img, radius, amount, equalize)
+    print(f"LOG: sharpen_mode=full pixels={img.size}", flush=True)
+    work = img
+    if equalize:
+        if work.dtype == np.uint16:
+            work = (work / 256).astype(np.uint8)
+        elif work.dtype != np.uint8:
+            work = np.clip(work, 0, 255).astype(np.uint8)
+        work = _equalize_image(work)
+    return _sharpen_unsharp_tophat(work, radius, amount)
 
 
 def process_roi(
@@ -177,6 +286,7 @@ def run_batch(args) -> int:
             out_path = output_path / fpath.name
             tiff.imwrite(str(out_path), out)
             written.append(fpath.name)
+            print(f"LOG: sharpen_done {fpath.name}", flush=True)
         except Exception as e:
             print(f"LOG: Failed {fpath.name}: {e}", flush=True)
             traceback.print_exc()

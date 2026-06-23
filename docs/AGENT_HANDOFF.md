@@ -1,8 +1,17 @@
 # Agent session handoff
 
-Last updated: 2026-06-23 (v4.1.2). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-23 (v4.1.3). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.1.3 — Tiled sharpen OOM fix (2026-06-23)
+
+- **`py/sharpen.py`**: tiled sharpen above 50M pixels (4096 px tiles, 32 px pad); subsampled global equalize bounds; `LOG: sharpen_done` per file.
+- **`src/main.ts` / `main.js`**: `spawnPreprocessBatch` advances progress on `LOG: sharpen_done` / `LOG: tophat_done` only.
+- **`py/top_hat.py`**: emits `LOG: tophat_done` for wizard progress.
+- Tests: `test_sharpen_image_uses_tiled_for_large_arrays` in `python/tests/test_sharpen_batch.py`.
+
+**Open follow-ups:** none critical from this release.
 
 ## v4.1.2 — Align damage mask, retry blocking, Napari UI (2026-06-23)
 

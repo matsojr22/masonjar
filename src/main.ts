@@ -2191,14 +2191,23 @@ function spawnPreprocessBatch(
         const ok = !runFailed && exitCode === 0 && !pyFail;
         sendResult(ok, exitCode, failMessage || pyFail || "");
       });
-    } else if (total > 0) {
-      current++;
-      event.sender.send("updateLoad", [
-        Math.round((current / total) * 100),
-        message,
-      ]);
+    } else if (
+      message.startsWith("LOG: sharpen_done ") ||
+      message.startsWith("LOG: tophat_done ")
+    ) {
+      if (total > 0) {
+        current++;
+        event.sender.send("updateLoad", [
+          Math.round((current / total) * 100),
+          message,
+        ]);
+      }
     } else if (message.startsWith("LOG:")) {
-      event.sender.send("updateLoad", [Math.min(99, current), message]);
+      const pct =
+        total > 0
+          ? Math.min(99, Math.round((current / total) * 100))
+          : Math.min(99, current);
+      event.sender.send("updateLoad", [pct, message]);
     }
   });
   pyshell.on("close", (code: number) => {

@@ -6,6 +6,23 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.1.3
+
+**What's new**
+
+Large full-resolution sharpen slices run reliably on remote desktops and memory-limited machines.
+
+**Fixes**
+
+- Sharpen: large max-projection TIFFs no longer fail with "Python exited with code 1" on memory-limited or remote-desktop machines; processing runs in tiles with progress in the log.
+- Sharpen wizard: progress bar no longer jumps to 100% as soon as processing starts.
+
+**Commit subject**
+
+Sharpen: tile large slices to avoid OOM on remote desktops
+
+---
+
 ## v4.1.2
 
 **What's new**

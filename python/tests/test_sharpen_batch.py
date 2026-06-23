@@ -45,6 +45,16 @@ def _write_uint8_tiff(path: Path, shape: tuple[int, int] = (32, 32)) -> None:
     tifffile.imwrite(str(path), img)
 
 
+def test_sharpen_image_uses_tiled_for_large_arrays(monkeypatch) -> None:
+    monkeypatch.setattr(sharpen, "TILED_SHARPEN_PIXEL_THRESHOLD", 1000)
+    monkeypatch.setattr(sharpen, "TILED_SHARPEN_TILE", 64)
+    monkeypatch.setattr(sharpen, "TILED_SHARPEN_PAD", 8)
+    img = np.random.randint(10, 200, (48, 48), dtype=np.uint8)
+    out = sharpen.sharpen_image(img, radius=2.0, amount=1.5, equalize=False)
+    assert out.shape == img.shape
+    assert out.dtype == img.dtype
+
+
 def test_batch_writes_two_files(tmp_path: Path) -> None:
     in_dir = tmp_path / "in"
     out_dir = tmp_path / "out"

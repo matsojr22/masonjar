@@ -157,6 +157,7 @@ def run_batch(args) -> int:
             out_path = output_dir / fpath.name
             tf.imwrite(str(out_path), out)
             written.append(fpath.name)
+            print(f"LOG: tophat_done {fpath.name}", flush=True)
         except Exception as e:
             print(f"LOG: Failed {fpath.name}: {e}", flush=True)
 
