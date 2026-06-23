@@ -25,6 +25,28 @@ var alignmentMethod = "auto";
 var useLegacy = "False";
 var methods = document.querySelector("#methods");
 var lastRunRel = "";
+var alignNapariBanner = document.getElementById("alignNapariBanner");
+
+function setAlignNapariBannerVisible(visible) {
+	if (!alignNapariBanner) {
+		return;
+	}
+	if (visible) {
+		alignNapariBanner.classList.remove("d-none");
+	} else {
+		alignNapariBanner.classList.add("d-none");
+	}
+}
+
+function resetAlignRunUi() {
+	run.innerHTML = "Run";
+	run.classList.remove("disabled");
+	back.classList.add("btn-warning");
+	back.classList.remove("btn-danger");
+	back.innerHTML = "Back";
+	loadbar.style.width = "0";
+	setAlignNapariBannerVisible(false);
+}
 
 pipelineRun.ensureRunModeUi("runModePanel", "align");
 
@@ -100,6 +122,7 @@ run.addEventListener("click", function () {
 		if (loadmessage) {
 			loadmessage.innerHTML = msg;
 		}
+		setAlignNapariBannerVisible(true);
 		ipc.send("runAlign", [
 			indir.value,
 			finalOut,
@@ -120,12 +143,7 @@ back.addEventListener("click", function (event) {
 });
 
 ipc.on("alignResult", function (event, response) {
-	run.innerHTML = "Run";
-	run.classList.remove("disabled");
-	back.classList.add("btn-warning");
-	back.classList.remove("btn-danger");
-	back.innerHTML = "Back";
-	loadbar.style.width = "0";
+	resetAlignRunUi();
 	if (response && response.cancelled) {
 		loadmessage.textContent =
 			"Tuning saved. Run Align again and click Finish to warp sections.";
@@ -142,12 +160,7 @@ ipc.on("alignResult", function (event, response) {
 });
 
 ipc.on("alignError", function (event, response) {
-	run.innerHTML = "Run";
-	run.classList.remove("disabled");
-	back.classList.add("btn-warning");
-	back.classList.remove("btn-danger");
-	back.innerHTML = "Back";
-	loadbar.style.width = "0";
+	resetAlignRunUi();
 	if (response && response[0]) {
 		loadmessage.textContent = String(response[0]);
 	}

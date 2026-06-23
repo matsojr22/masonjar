@@ -112,6 +112,117 @@ def raise_and_activate_napari(viewer: Any) -> None:
     raise_and_activate(qt_window)
 
 
+def ensure_qt_dock_visible(dock_widget: Any) -> None:
+    """Best-effort show for a Qt dock widget or toolbar (Napari defaults hidden)."""
+    if dock_widget is None:
+        return
+    _safe_attempt(dock_widget.setVisible, True)
+    _safe_attempt(dock_widget.show)
+
+
+def _windows_maximize(hwnd: int) -> None:
+    """Best-effort ShowWindow SW_MAXIMIZE on Windows."""
+    if sys.platform != "win32" or hwnd == 0:
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.user32.ShowWindow(hwnd, 3)
+    except Exception:
+        pass
+
+
+def ensure_napari_tool_docks_visible(viewer: Any) -> None:
+    """Show Napari layer list, layer controls, and viewer tool buttons.
+
+    After ``relocate_napari_layer_docks_to_right``, these docks live on the right.
+    """
+    if viewer is None:
+        return
+    try:
+        win = getattr(viewer, "window", None)
+        if win is None:
+            return
+        qt_viewer = getattr(win, "_qt_viewer", None)
+        if qt_viewer is None:
+            return
+        for attr in ("dockLayerList", "dockLayerControls"):
+            ensure_qt_dock_visible(getattr(qt_viewer, attr, None))
+        buttons = getattr(qt_viewer, "viewerButtons", None)
+        if buttons is not None:
+            ensure_qt_dock_visible(buttons)
+            parent = buttons.parent()
+            if parent is not None:
+                ensure_qt_dock_visible(parent)
+    except Exception:
+        pass
+
+
+def relocate_napari_layer_docks_to_right(viewer: Any) -> None:
+    """Move Napari layer list and layer controls from left to right dock area."""
+    if viewer is None:
+        return
+    try:
+        from qtpy.QtCore import Qt
+
+        qt_window = resolve_napari_qt_window(viewer)
+        win = getattr(viewer, "window", None)
+        qt_viewer = getattr(win, "_qt_viewer", None) if win is not None else None
+        if qt_window is None or qt_viewer is None:
+            return
+        right = Qt.DockWidgetArea.RightDockWidgetArea
+        for attr in ("dockLayerList", "dockLayerControls"):
+            dock = getattr(qt_viewer, attr, None)
+            if dock is not None:
+                qt_window.addDockWidget(right, dock)
+                ensure_qt_dock_visible(dock)
+    except Exception:
+        pass
+
+
+def show_napari_maximized_and_activate(viewer: Any) -> None:
+    """Maximize Napari's Qt window and bring it to the foreground with retries."""
+    qt_window = resolve_napari_qt_window(viewer)
+    if qt_window is None:
+        return
+    try:
+        from qtpy.QtCore import Qt
+        from qtpy.QtGui import QGuiApplication
+        from qtpy.QtWidgets import QApplication
+
+        _safe_attempt(qt_window.showNormal)
+        app = QApplication.instance() or QGuiApplication.instance()
+        if app is not None:
+            screen = app.primaryScreen()
+            if screen is not None:
+                _safe_attempt(qt_window.setGeometry, screen.availableGeometry())
+        _safe_attempt(
+            qt_window.setWindowState,
+            Qt.WindowState.WindowMaximized,
+        )
+    except Exception:
+        pass
+    _safe_attempt(qt_window.showMaximized)
+    raise_and_activate(qt_window)
+    try:
+        from qtpy.QtCore import QTimer
+
+        def _retry() -> None:
+            _safe_attempt(qt_window.showMaximized)
+            if sys.platform == "win32":
+                try:
+                    _windows_maximize(int(qt_window.winId()))
+                except Exception:
+                    pass
+            _bring_to_front_now(qt_window)
+
+        QTimer.singleShot(0, _retry)
+        QTimer.singleShot(200, _retry)
+        QTimer.singleShot(500, _retry)
+    except Exception:
+        pass
+
+
 def align_section_heading(text: str) -> Any:
     """Bold section label for scrollable alignment dock panels."""
     from qtpy.QtWidgets import QLabel

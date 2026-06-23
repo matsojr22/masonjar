@@ -1107,6 +1107,32 @@ function dialogParentWindow(event: { sender: any }): typeof BrowserWindow | null
   return focused && !focused.isDestroyed() ? focused : null;
 }
 
+/** Minimize Mason Jar when an external tool (e.g. Napari) takes over the desktop. */
+function handoffParentForExternalTool(parent: typeof BrowserWindow | null): void {
+  try {
+    if (parent && !parent.isDestroyed()) {
+      parent.minimize();
+    }
+  } catch (_e) {
+    // best effort: handoff should never block tool launch
+  }
+}
+
+/** Restore Mason Jar after an external tool session ends. */
+function restoreParentAfterExternalTool(parent: typeof BrowserWindow | null): void {
+  try {
+    if (parent && !parent.isDestroyed()) {
+      if (parent.isMinimized()) {
+        parent.restore();
+      }
+      parent.show();
+      parent.focus();
+    }
+  } catch (_e) {
+    // best effort
+  }
+}
+
 function directoryDialogOptions(
   tag: string,
   defaultPath?: string,
@@ -1639,14 +1665,8 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
   let pyshell = new PythonShell("map.py", options);
   const releaseJob = attachIoFairshareRelease(pyshell, release);
   attachPythonShellKillCleanup(pyshell, "killAlign");
-  try {
-    const parent = dialogParentWindow(event);
-    if (parent && !parent.isDestroyed()) {
-      parent.blur();
-    }
-  } catch (_e) {
-    // best effort: blur should never block tool launch
-  }
+  const alignParent = dialogParentWindow(event);
+  handoffParentForExternalTool(alignParent);
   var total: number = 0;
   var current: number = 0;
   let resultSent = false;
@@ -1687,6 +1707,7 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
     if (pyFail) {
       event.sender.send("alignError", [pyFail]);
     }
+    restoreParentAfterExternalTool(alignParent);
     ipcMain.removeAllListeners("killAlign");
     ipcMain.removeAllListeners("saveAndExitAlign");
   };

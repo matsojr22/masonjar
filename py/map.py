@@ -59,6 +59,7 @@ from qtpy.QtWidgets import (
     QWidget,
     QMainWindow,
     QInputDialog,
+    QToolBar,
 )
 from segment_anything import SamPredictor, sam_model_registry
 from qtpy import QtCore, QtGui
@@ -66,10 +67,11 @@ from qtpy.QtCore import QTimer
 from qt_image_utils import numpy_array_to_qimage
 from qt_window_utils import (
     align_section_heading,
-    build_scroll_dock_panel,
-    clamp_qt_window_to_available_screen,
-    raise_and_activate_napari,
+    ensure_napari_tool_docks_visible,
+    ensure_qt_dock_visible,
+    relocate_napari_layer_docks_to_right,
     resolve_napari_qt_window,
+    show_napari_maximized_and_activate,
 )
 
 
@@ -540,27 +542,20 @@ class AlignmentController:
         self.tissue_mask_status.setWordWrap(True)
         self.tissue_mask_status.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeading)
 
-        self.damage_mask_button = QPushButton("Identify tissue damage")
-        self.damage_mask_button.clicked.connect(self.update_damage_mask)
-
-        # Legacy alias
-        self.mask_button = self.damage_mask_button
-
-        # Section title + progress (left dock)
         self.section_info_label = QLabel("")
         self.section_info_label.setWordWrap(True)
         self.section_info_label.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
         )
-        self.section_info_label.setMinimumWidth(220)
+        self.section_info_label.setMinimumWidth(180)
 
         self.flag_section_button = QPushButton("Flag section…")
         self.flag_section_button.clicked.connect(self.flag_current_section)
 
-        # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(1, self.num_slices)
         self.progress_bar.setValue(1)
+        self.progress_bar.setMinimumWidth(120)
 
         self.next_button = QPushButton("Next")
         self.next_button.clicked.connect(self.next_section)
@@ -585,12 +580,12 @@ class AlignmentController:
         self._controls_seeded = False
         self._save_exit_timer = QTimer()
         self._save_exit_flag = Path(self.input_path) / ".align_save_exit"
-        controls_panel = build_scroll_dock_panel(
+        self._align_toolbar = None
+        self._tuning_dock = None
+        self._options_dock = None
+
+        tuning_panel = self._build_dock_panel(
             [
-                self.section_info_label,
-                self.flag_section_button,
-                self.progress_bar,
-                align_section_heading("Tuning"),
                 QLabel("X Angle"),
                 self.x_angle_spinbox,
                 QLabel("Y Angle"),
@@ -598,6 +593,17 @@ class AlignmentController:
                 QLabel("AP Position"),
                 self.ap_position_spinbox,
                 self.link_angles_button,
+            ]
+        )
+        self._tuning_dock = self.viewer.window.add_dock_widget(
+            tuning_panel,
+            area="left",
+            name="Tuning",
+            add_vertical_stretch=False,
+        )
+
+        options_panel = self._build_dock_panel(
+            [
                 align_section_heading("Region & layout"),
                 QLabel("Region"),
                 self.region_selection,
@@ -613,20 +619,18 @@ class AlignmentController:
                 QLabel("Gap warp strategy"),
                 self.tissue_mask_mode_combo,
                 self.tissue_mask_status,
-                self.damage_mask_button,
-            ],
-            pinned_footer=[
-                self.previous_button,
-                self.next_button,
-                self.finish_button,
-            ],
+            ]
         )
-        self.viewer.window.add_dock_widget(
-            controls_panel,
+        self._options_dock = self.viewer.window.add_dock_widget(
+            options_panel,
             area="left",
-            name="Controls",
+            name="Options",
             add_vertical_stretch=False,
         )
+
+        qt_window = resolve_napari_qt_window(self.viewer)
+        if qt_window is not None:
+            self._init_align_toolbar(qt_window)
 
         self.scan_input()
 
@@ -651,6 +655,45 @@ class AlignmentController:
         print("Awaiting fine tuning...", flush=True)
 
         self.start_viewer()
+
+    @staticmethod
+    def _build_dock_panel(content_widgets, margins=(4, 4, 4, 4)):
+        """Simple vertical dock body for Napari left panels."""
+        inner = QWidget()
+        layout = QVBoxLayout()
+        layout.setContentsMargins(*margins)
+        layout.setSpacing(6)
+        for widget in content_widgets:
+            if widget is not None:
+                layout.addWidget(widget)
+        layout.addStretch()
+        inner.setLayout(layout)
+        return inner
+
+    def _init_align_toolbar(self, qt_window):
+        """Top toolbar: section info, nav, and flag."""
+        self._align_toolbar = QToolBar("Alignment", qt_window)
+        self._align_toolbar.setObjectName("MasonJarAlignmentToolbar")
+        self._align_toolbar.setMovable(False)
+        qt_window.addToolBar(QtCore.Qt.ToolBarArea.TopToolBarArea, self._align_toolbar)
+
+        self._align_toolbar.addWidget(self.section_info_label)
+        self._align_toolbar.addSeparator()
+        self._align_toolbar.addWidget(self.progress_bar)
+        self._align_toolbar.addSeparator()
+        self._align_toolbar.addWidget(self.previous_button)
+        self._align_toolbar.addWidget(self.next_button)
+        self._align_toolbar.addWidget(self.finish_button)
+        self._align_toolbar.addSeparator()
+        self._align_toolbar.addWidget(self.flag_section_button)
+
+    def _show_align_chrome(self):
+        """Napari 0.7 defaults custom docks/toolbars to hidden — force them visible."""
+        relocate_napari_layer_docks_to_right(self.viewer)
+        ensure_qt_dock_visible(self._align_toolbar)
+        ensure_qt_dock_visible(self._tuning_dock)
+        ensure_qt_dock_visible(self._options_dock)
+        ensure_napari_tool_docks_visible(self.viewer)
 
     @staticmethod
     def _slice_id_from_filename(name: str) -> str:
@@ -998,14 +1041,6 @@ class AlignmentController:
             self.tissue_mask_checkbox.isChecked()
         )
 
-    def update_damage_mask(self):
-        """Open atlas damage marker for the current section."""
-        self.atlas_slices[self.file_list[self.current_section]].set_damage_mask()
-
-    def update_mask(self):
-        """Legacy alias."""
-        self.update_damage_mask()
-
     def _rehydrate_atlas_slices(self, raw_slices: dict) -> None:
         """Rebuild AtlasSlice objects from a pickled dict."""
         rehydrated: dict = {}
@@ -1340,11 +1375,6 @@ class AlignmentController:
         self.tissue_mask_mode_combo.setCurrentIndex(mode_idx)
         self.tissue_mask_mode_combo.blockSignals(False)
         self._sync_tissue_mask_status()
-
-        has_damage = current.damage_mask is not None and bool(np.any(current.damage_mask))
-        self.damage_mask_button.setText(
-            "Update damage marks" if has_damage else "Identify tissue damage"
-        )
 
         self.update_section_header()
         self._controls_seeded = True
@@ -1864,13 +1894,10 @@ class AlignmentController:
 
     def start_viewer(self):
         """Start the viewer"""
-        qt_window = resolve_napari_qt_window(self.viewer)
-        if qt_window is not None:
-            clamp_qt_window_to_available_screen(qt_window)
-        # enable grid
         self.viewer.show()
+        self._show_align_chrome()
         self.update_display()
-        raise_and_activate_napari(self.viewer)
+        show_napari_maximized_and_activate(self.viewer)
         self._bind_viewer_close_flush()
         self._bind_save_exit_poll()
         napari.run()

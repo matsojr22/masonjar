@@ -6,6 +6,24 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.1.4
+
+**What's new**
+
+- Align: Mason Jar minimizes when Napari opens and shows a clear handoff message; Mason Jar restores when you Finish or Cancel.
+- Align: Napari layout uses a top toolbar plus Tuning/Options docks on the left; layer list and layer controls on the right.
+
+**Fixes**
+
+- Align: Napari opens maximized and keeps focus on remote desktops (no double-click maximize).
+- Image preprocessing: DAPI cleanup and Orient slices moved under **Deprecated & Experimental** (collapsed by default).
+
+**Commit subject**
+
+Align: calmer Napari handoff, layout polish, and deprecated preprocess submenu
+
+---
+
 ## v4.1.3
 
 **What's new**

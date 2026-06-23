@@ -14,12 +14,17 @@ var CATEGORIES = {
 			{ label: "Max Projection", href: "./max.html" },
 			{ label: "Sharpen", href: "./sharpen_wizard.html" },
 			{ label: "Top-hat filter", href: "./tophat_wizard.html" },
-			{ label: "Orient slices", href: "./orient.html" },
 			{ label: "Re-import sections from CZI", href: "./czi_reimport_wizard.html" },
-			{ label: "DAPI cleanup", href: "./dapi_cleanup.html" },
 			{
 				label: "Semi-manual tissue edge cleanup",
 				href: "./tissue_cleanup_wizard.html",
+			},
+			{
+				group: "Deprecated & Experimental",
+				tools: [
+					{ label: "Orient slices", href: "./orient.html" },
+					{ label: "DAPI cleanup", href: "./dapi_cleanup.html" },
+				],
 			},
 		],
 	},
@@ -64,18 +69,63 @@ navTrail.renderTrail(
 	"navTrail",
 );
 
+function appendToolLink(container, tool) {
+	var link = document.createElement("a");
+	link.role = "button";
+	link.className = tool.secondary ? "btn btn-secondary" : "btn btn-primary";
+	link.href = tool.href;
+	link.textContent = tool.label;
+	container.appendChild(link);
+}
+
+function appendToolGroup(container, groupDef, groupIndex) {
+	var collapseId = "toolGroup" + groupIndex;
+	var wrapper = document.createElement("div");
+	wrapper.className = "mb-2 text-start";
+
+	var toggle = document.createElement("button");
+	toggle.type = "button";
+	toggle.className = "btn btn-outline-secondary w-100";
+	toggle.setAttribute("data-bs-toggle", "collapse");
+	toggle.setAttribute("data-bs-target", "#" + collapseId);
+	toggle.setAttribute("aria-expanded", "false");
+	toggle.setAttribute("aria-controls", collapseId);
+	toggle.textContent = groupDef.group;
+
+	var collapse = document.createElement("div");
+	collapse.id = collapseId;
+	collapse.className = "collapse mt-2";
+
+	var inner = document.createElement("div");
+	inner.className = "d-grid gap-2";
+	for (var j = 0; j < groupDef.tools.length; j++) {
+		var subTool = groupDef.tools[j];
+		var subLink = document.createElement("a");
+		subLink.role = "button";
+		subLink.className = "btn btn-outline-secondary";
+		subLink.href = subTool.href;
+		subLink.textContent = subTool.label;
+		inner.appendChild(subLink);
+	}
+	collapse.appendChild(inner);
+	wrapper.appendChild(toggle);
+	wrapper.appendChild(collapse);
+	container.appendChild(wrapper);
+}
+
 if (categoryTitle) {
 	categoryTitle.textContent = config.title;
 }
 if (toolLinks) {
 	toolLinks.innerHTML = "";
+	var groupIndex = 0;
 	for (var i = 0; i < config.tools.length; i++) {
 		var tool = config.tools[i];
-		var link = document.createElement("a");
-		link.role = "button";
-		link.className = tool.secondary ? "btn btn-secondary" : "btn btn-primary";
-		link.href = tool.href;
-		link.textContent = tool.label;
-		toolLinks.appendChild(link);
+		if (tool.group && tool.tools && tool.tools.length) {
+			appendToolGroup(toolLinks, tool, groupIndex);
+			groupIndex++;
+		} else if (tool.href) {
+			appendToolLink(toolLinks, tool);
+		}
 	}
 }

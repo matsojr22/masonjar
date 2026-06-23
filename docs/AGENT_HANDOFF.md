@@ -1,8 +1,18 @@
 # Agent session handoff
 
-Last updated: 2026-06-23 (v4.1.3). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-23 (v4.1.4). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.1.4 — Align handoff, Napari layout, deprecated preprocess submenu (2026-06-23)
+
+- **`src/main.ts` / `main.js`**: Align minimizes Mason Jar on spawn, restores on finish (`handoffParentForExternalTool` / `restoreParentAfterExternalTool`).
+- **`pages/align.html` / `js/align.js`**: Napari handoff banner while Align runs.
+- **`py/qt_window_utils.py`**: `show_napari_maximized_and_activate` work-area fit + Win32 SW_MAXIMIZE; `relocate_napari_layer_docks_to_right`.
+- **`py/map.py`**: toolbar without Tuning/Options toggles; Tuning/Options left docks; layer list/controls on right.
+- **`js/menu_category.js`**: DAPI cleanup + Orient slices under collapsed **Deprecated & Experimental** group.
+
+**Open follow-ups:** none critical from this release.
 
 ## v4.1.3 — Tiled sharpen OOM fix (2026-06-23)
 
