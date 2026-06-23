@@ -6,6 +6,23 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.1.1
+
+**What's new**
+
+Sharpen batch runs reliably on Windows and network drives — the same sequential processing model as the top-hat filter.
+
+**Fixes**
+
+- Sharpen: fixed batch runs that wrote zero files with `SHARPEN_NO_OUTPUT` and "process pool was terminated abruptly" on Windows/NAS.
+- Sharpen: per-slice error messages in the log when a file fails.
+
+**Commit subject**
+
+Sharpen: fix batch failures on Windows by processing slices sequentially
+
+---
+
 ## v4.1.0
 
 **What's new**

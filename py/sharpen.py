@@ -7,7 +7,7 @@ import argparse
 import json
 import os
 import sys
-from functools import partial
+import traceback
 from pathlib import Path
 
 import cv2
@@ -130,30 +130,10 @@ def run_preview(args) -> int:
     return 0
 
 
-def process_file(file, output_path, equalize: bool, radius: float, amount: float) -> bool:
-    try:
-        print(f"Processing {file}", flush=True)
-        src = Path(file)
-        img = load_grayscale(src)
-        out = sharpen_image(img, radius, amount, equalize)
-        if out.dtype == np.uint16:
-            out = (out / 256).astype(np.uint8)
-        elif out.dtype != np.uint8:
-            out = np.clip(out, 0, 255).astype(np.uint8)
-        out_path = Path(output_path) / src.name
-        tiff.imwrite(str(out_path), out)
-        return True
-    except Exception as e:
-        print(f"Failed to process {file}. Error: {e}", flush=True)
-        return False
-
-
 from slice_input_files import list_input_files  # noqa: E402
 
 
 def run_batch(args) -> int:
-    import concurrent.futures
-
     if args.config:
         with open(args.config.strip(), encoding="utf-8") as f:
             cfg = json.load(f)
@@ -184,28 +164,24 @@ def run_batch(args) -> int:
         print("LOG: no input files", flush=True)
         return 1
 
-    import io_fairshare
+    written = []
+    for fpath in input_files:
+        print(f"LOG: Processing {fpath.name}", flush=True)
+        try:
+            img = load_grayscale(fpath)
+            out = sharpen_image(img, radius, amount, equalize)
+            if out.dtype == np.uint16:
+                out = (out / 256).astype(np.uint8)
+            elif out.dtype != np.uint8:
+                out = np.clip(out, 0, 255).astype(np.uint8)
+            out_path = output_path / fpath.name
+            tiff.imwrite(str(out_path), out)
+            written.append(fpath.name)
+        except Exception as e:
+            print(f"LOG: Failed {fpath.name}: {e}", flush=True)
+            traceback.print_exc()
 
-    max_workers = io_fairshare.suggested_max_workers(4)
-
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        fn = partial(
-            process_file,
-            output_path=str(output_path),
-            equalize=equalize,
-            radius=radius,
-            amount=amount,
-        )
-        futures = [executor.submit(fn, str(f)) for f in input_files]
-        written = 0
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                if future.result():
-                    written += 1
-            except Exception as e:
-                print(f"An error occurred: {e}", flush=True)
-
-    if written == 0:
+    if not written:
         # Inputs existed (guarded above) but every file failed to write.
         print(
             f"SHARPEN_NO_OUTPUT: 0 of {len(input_files)} files written.",
@@ -222,7 +198,7 @@ def run_batch(args) -> int:
         {
             "step": "sharpen",
             "input_dir": str(input_path),
-            "input_files": [f.name for f in input_files],
+            "input_files": written,
             "radius": radius,
             "amount": amount,
             "equalize": equalize,

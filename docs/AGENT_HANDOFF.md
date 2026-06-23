@@ -1,8 +1,17 @@
 # Agent session handoff
 
-Last updated: 2026-06-22 (v4.1.0). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-13 (v4.1.1). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.1.1 — Sharpen batch reliability (2026-06-13)
+
+- **`py/sharpen.py`**: removed `ProcessPoolExecutor`; sequential per-file loop matching top-hat; `LOG:` per slice + traceback on failure.
+- **`py/io_fairshare.py`**: removed unused `suggested_max_workers()`.
+- **`AGENTS.md`**: documented sequential batch convention for Electron `py/` steps.
+- Tests: `python/tests/test_sharpen_batch.py`.
+
+**Open follow-ups:** none critical from this release.
 
 ## v4.1.0 — Align session recovery + persistence (2026-06-22)
 

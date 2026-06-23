@@ -154,6 +154,8 @@ Some renderer files register `*Error` listeners (e.g. `alignError`, `detectError
 
 **Outputs** stay under `data/counting/03_max/{branch}/` in branch folders `max/`, `sharpen/`, or `tophat/top{R}_…/`. Config JSON in `.masonjar/` (`sharpen_run_config.json`, `tophat_run_config.json`). Optional **Set as active max task** on finish.
 
+**Batch I/O:** Electron `py/` preprocess steps (max, sharpen, top-hat, DAPI cleanup, detect, etc.) process slices **sequentially in the main PythonShell process**; [`py/io_fairshare.py`](py/io_fairshare.py) throttles NAS reads/writes in that single process. Do not use `ProcessPoolExecutor` in Electron batch scripts.
+
 **Downstream** ([`js/max_dataset_picker.js`](js/max_dataset_picker.js)): Cell Detection and Isolate Regions show **Intensity dataset** when multiple leaves exist; default max projection per branch.
 
 ## Isolate Regions wizard and config

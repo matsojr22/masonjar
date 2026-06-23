@@ -422,13 +422,6 @@ def _install_patches() -> None:
         Path.write_bytes = lambda self, data: _wrap_path_write_bytes(_orig["Path.write_bytes"], self, data)  # type: ignore[assignment]
 
 
-def suggested_max_workers(default: int = 4) -> int:
-    if not _activated:
-        return default
-    limit = compute_limit_mbps()
-    return max(1, min(default, int(limit // 100) or 1))
-
-
 def deactivate() -> None:
     global _activated, _heartbeat_stop, _heartbeat_thread
     with _state_lock:

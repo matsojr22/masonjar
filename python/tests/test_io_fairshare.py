@@ -90,16 +90,6 @@ def test_small_file_bypass(tmp_path: Path, monkeypatch):
     assert io_fairshare.throttled_read_bytes(p) == b"hello"
 
 
-def test_suggested_max_workers(monkeypatch, coordinator: Path):
-    monkeypatch.setenv("MASONJAR_IO_FAIRSHARE", "1")
-    io_fairshare._activated = True
-    io_fairshare._coordinator_dir = str(coordinator)
-    monkeypatch.setattr(io_fairshare, "compute_limit_mbps", lambda: 150.0)
-    assert io_fairshare.suggested_max_workers(4) == 1
-    monkeypatch.setattr(io_fairshare, "compute_limit_mbps", lambda: 450.0)
-    assert io_fairshare.suggested_max_workers(4) == 4
-
-
 def test_throttled_tiff_imwrite_roundtrip(tmp_path: Path, coordinator: Path, monkeypatch):
     import numpy as np
     import tifffile
