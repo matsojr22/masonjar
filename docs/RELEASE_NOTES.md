@@ -6,6 +6,24 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.1.2
+
+**What's new**
+
+Align controls in Napari use one scrollable panel; Previous, Next, and Finish stay visible on short or remote-desktop screens.
+
+**Fixes**
+
+- Align: canceling the tissue-damage marker no longer excludes the whole atlas from registration.
+- Align and DAPI cleanup: a prior align failure no longer blocks re-running align or DAPI cleanup on the same slice.
+- Align: the Napari window opens within your screen bounds on remote desktops.
+
+**Commit subject**
+
+Align: fix damage-mask cancel, retry blocking, and Napari controls on RDP
+
+---
+
 ## v4.1.1
 
 **What's new**

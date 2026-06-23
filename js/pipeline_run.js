@@ -28,7 +28,9 @@ function preparePipelineRun(stepId, runMode) {
 		bundleRoot: bundleRoot,
 		roles: roles,
 	});
-	var candidateIds = fileIndex.getProcessingSliceIds(bundleRoot, proj, index, report);
+	var candidateIds = fileIndex.getProcessingSliceIds(bundleRoot, proj, index, report, {
+		stepId: stepId,
+	});
 	var modes = (proj.processing && proj.processing.run_modes) || {};
 	var mode = runMode || modes[stepId] || "merge";
 	var plan = fileIndex.planRun(bundleRoot, stepId, {
@@ -190,7 +192,9 @@ function prepareAdjustSession() {
 		return { sliceListPath: "", summary: "", sliceIds: [] };
 	}
 	var report = fileIndex.computeMatchReport(index, ["dapi", "slices"]);
-	var ids = fileIndex.getProcessingSliceIds(bundleRoot, proj, index, report);
+	var ids = fileIndex.getProcessingSliceIds(bundleRoot, proj, index, report, {
+		stepId: "adjust",
+	});
 	var sliceListPath = "";
 	if (ids.length) {
 		sliceListPath = fileIndex.writeRunSliceList(

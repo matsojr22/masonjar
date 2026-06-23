@@ -134,7 +134,9 @@ function listSliceIds() {
 	var pj = project.readProjectJson(root);
 	var index = fileIndex.readFileIndex(root, metaDir());
 	var report = fileIndex.computeMatchReport(index, fileIndex.INPUT_MATCH_ROLES);
-	return fileIndex.getProcessingSliceIds(root, pj, index, report).filter(function (sid) {
+	return fileIndex.getProcessingSliceIds(root, pj, index, report, {
+		stepId: "tissue_cleanup",
+	}).filter(function (sid) {
 		return ids.indexOf(sid) >= 0;
 	});
 }

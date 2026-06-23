@@ -129,9 +129,36 @@ function testGetProcessingSliceIdsExcludesFailedAlign() {
 	helpers.rmDir(bundle);
 }
 
+function testGetProcessingSliceIdsAllowsAlignRetry() {
+	var bundle = setupBundle();
+	project.recordStepFailure("align", "M528_s062", {
+		message: "warp failed",
+		at: "2026-05-26T12:00:00.000Z",
+	});
+	var index = project.readProjectFileIndex();
+	var report = fileIndex.computeMatchReport(index, fileIndex.INPUT_MATCH_ROLES);
+	var ids = fileIndex.getProcessingSliceIds(bundle, project.getProject(), index, report, {
+		stepId: "align",
+	});
+	assert.deepStrictEqual(ids.sort(), ["M528_s061", "M528_s062", "M528_s063"]);
+
+	var dapiIds = fileIndex.getProcessingSliceIds(
+		bundle,
+		project.getProject(),
+		index,
+		report,
+		{ stepId: "dapi_cleanup" },
+	);
+	assert.deepStrictEqual(dapiIds.sort(), ["M528_s061", "M528_s062", "M528_s063"]);
+
+	project.clearActiveProject();
+	helpers.rmDir(bundle);
+}
+
 function main() {
 	testMergeAlignWarpReportRecordsAndClears();
 	testGetProcessingSliceIdsExcludesFailedAlign();
+	testGetProcessingSliceIdsAllowsAlignRetry();
 	console.log("test-step-failures.js: ok");
 }
 

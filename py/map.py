@@ -64,7 +64,13 @@ from segment_anything import SamPredictor, sam_model_registry
 from qtpy import QtCore, QtGui
 from qtpy.QtCore import QTimer
 from qt_image_utils import numpy_array_to_qimage
-from qt_window_utils import raise_and_activate_napari
+from qt_window_utils import (
+    align_section_heading,
+    build_scroll_dock_panel,
+    clamp_qt_window_to_available_screen,
+    raise_and_activate_napari,
+    resolve_napari_qt_window,
+)
 
 
 class AtlasDamageMarker(QMainWindow):
@@ -81,6 +87,7 @@ class AtlasDamageMarker(QMainWindow):
         super().__init__()
         self.image = image
         self.mask_image = np.zeros_like(self.image)
+        self._committed = False
         self.drawing = False
         self.brush_size = 3
         self.init_ui()
@@ -193,10 +200,12 @@ class AtlasDamageMarker(QMainWindow):
         self.mask_image = cv2.dilate(self.mask_image, kernel, iterations=5)
         self.mask_image = cv2.erode(self.mask_image, kernel, iterations=5)
         self.mask_image = np.logical_not(self.mask_image).astype(np.uint8)
+        self._committed = True
         self.close()
 
     def cancel_changes(self):
         self.mask_image = np.zeros_like(self.image)
+        self._committed = False
         self.close()
 
     def closeEvent(self, event):
@@ -259,10 +268,16 @@ class AtlasSlice:
         self.eraser_window.closed.connect(self.on_damage_marker_exit)
 
     def on_damage_marker_exit(self):
-        keep_mask = self.eraser_window.mask_image
-        if keep_mask is not None and keep_mask.size:
-            self.damage_mask = (1 - keep_mask.astype(np.uint8)).astype(np.uint8)
+        eraser = self.eraser_window
         self.eraser_window = None
+        if eraser is not None and getattr(eraser, "_committed", False):
+            keep_mask = eraser.mask_image
+            if keep_mask is not None and keep_mask.size:
+                damage = (1 - keep_mask.astype(np.uint8)).astype(np.uint8)
+                if bool(np.any(damage)):
+                    self.damage_mask = damage
+                else:
+                    self.damage_mask = None
         autosave_cb = getattr(self, "_autosave_cb", None)
         if autosave_cb is not None:
             autosave_cb()
@@ -556,24 +571,6 @@ class AlignmentController:
         self.finish_button = QPushButton("Finish")
         self.finish_button.clicked.connect(self.finish)
 
-        x_angle_widget = QWidget()
-        x_angle_layout = QVBoxLayout()
-        x_angle_layout.addWidget(QLabel("X Angle"))
-        x_angle_layout.addWidget(self.x_angle_spinbox)
-        x_angle_widget.setLayout(x_angle_layout)
-
-        y_angle_widget = QWidget()
-        y_angle_layout = QVBoxLayout()
-        y_angle_layout.addWidget(QLabel("Y Angle"))
-        y_angle_layout.addWidget(self.y_angle_spinbox)
-        y_angle_widget.setLayout(y_angle_layout)
-
-        ap_position_widget = QWidget()
-        ap_position_layout = QVBoxLayout()
-        ap_position_layout.addWidget(QLabel("AP Position"))
-        ap_position_layout.addWidget(self.ap_position_spinbox)
-        ap_position_widget.setLayout(ap_position_layout)
-
         # Timers
         self.slice_update_timer = QTimer()
         self.pos_update_timer = QTimer()
@@ -588,41 +585,47 @@ class AlignmentController:
         self._controls_seeded = False
         self._save_exit_timer = QTimer()
         self._save_exit_flag = Path(self.input_path) / ".align_save_exit"
-        self.viewer.window.add_dock_widget(
-            [
-                x_angle_widget,
-                y_angle_widget,
-                ap_position_widget,
-            ],
-            area="bottom",
-            name="Slice Options",
-        )
-
-        self.viewer.window.add_dock_widget(
+        controls_panel = build_scroll_dock_panel(
             [
                 self.section_info_label,
                 self.flag_section_button,
                 self.progress_bar,
+                align_section_heading("Tuning"),
+                QLabel("X Angle"),
+                self.x_angle_spinbox,
+                QLabel("Y Angle"),
+                self.y_angle_spinbox,
+                QLabel("AP Position"),
+                self.ap_position_spinbox,
+                self.link_angles_button,
+                align_section_heading("Region & layout"),
                 QLabel("Region"),
                 self.region_selection,
                 QLabel("Section layout"),
                 self.layout_selection,
+                align_section_heading("Parcellation"),
                 QLabel("Parcellation (all sections on Finish)"),
                 self.parcel_selection,
                 self.parcel_advanced,
                 self.parcel_level_combo,
-                self.link_angles_button,
+                align_section_heading("Warp options"),
                 self.tissue_mask_checkbox,
                 QLabel("Gap warp strategy"),
                 self.tissue_mask_mode_combo,
                 self.tissue_mask_status,
                 self.damage_mask_button,
-                self.next_button,
+            ],
+            pinned_footer=[
                 self.previous_button,
+                self.next_button,
                 self.finish_button,
             ],
+        )
+        self.viewer.window.add_dock_widget(
+            controls_panel,
             area="left",
             name="Controls",
+            add_vertical_stretch=False,
         )
 
         self.scan_input()
@@ -1861,6 +1864,9 @@ class AlignmentController:
 
     def start_viewer(self):
         """Start the viewer"""
+        qt_window = resolve_napari_qt_window(self.viewer)
+        if qt_window is not None:
+            clamp_qt_window_to_available_screen(qt_window)
         # enable grid
         self.viewer.show()
         self.update_display()

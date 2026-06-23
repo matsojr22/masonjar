@@ -1,8 +1,17 @@
 # Agent session handoff
 
-Last updated: 2026-06-13 (v4.1.1). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-23 (v4.1.2). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.1.2 — Align damage mask, retry blocking, Napari UI (2026-06-23)
+
+- **`py/map.py`**: `AtlasDamageMarker` only applies damage mask on Save; Cancel/close no longer writes all-exclude mask.
+- **`js/file_index.js`**: align `step_failures` filter applies only to downstream steps (count, intensity, adjust, …); align retry and DAPI cleanup can run on failed slices.
+- **`py/map.py` / `py/qt_window_utils.py`**: single scrollable Controls dock; pinned Prev/Next/Finish; `clamp_qt_window_to_available_screen`.
+- Tests: extended `scripts/test-step-failures.js`.
+
+**Open follow-ups:** none critical from this release.
 
 ## v4.1.1 — Sharpen batch reliability (2026-06-13)
 

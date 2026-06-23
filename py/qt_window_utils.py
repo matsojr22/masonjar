@@ -87,21 +87,128 @@ def raise_and_activate(widget: Any) -> None:
         pass
 
 
+def resolve_napari_qt_window(viewer: Any) -> Any | None:
+    """Return Napari's underlying ``QMainWindow`` (``viewer.window._qt_window``)."""
+    if viewer is None:
+        return None
+    try:
+        win = getattr(viewer, "window", None)
+        if win is not None:
+            return getattr(win, "_qt_window", None) or win
+    except Exception:
+        return None
+    return None
+
+
 def raise_and_activate_napari(viewer: Any) -> None:
     """Resolve Napari viewer's underlying Qt window and call raise_and_activate.
 
     Napari's main window is ``viewer.window._qt_window`` (see ``map.py``
     ``update_section_header``). Falls back to ``viewer.window`` if needed.
     """
-    if viewer is None:
-        return
-    qt_window = None
-    try:
-        win = getattr(viewer, "window", None)
-        if win is not None:
-            qt_window = getattr(win, "_qt_window", None) or win
-    except Exception:
-        qt_window = None
+    qt_window = resolve_napari_qt_window(viewer)
     if qt_window is None:
         return
     raise_and_activate(qt_window)
+
+
+def align_section_heading(text: str) -> Any:
+    """Bold section label for scrollable alignment dock panels."""
+    from qtpy.QtWidgets import QLabel
+
+    label = QLabel(text)
+    font = label.font()
+    font.setBold(True)
+    label.setFont(font)
+    return label
+
+
+def build_scroll_dock_panel(
+    content_widgets,
+    *,
+    pinned_footer=None,
+    margins=(4, 4, 4, 4),
+) -> Any:
+    """Build a dock panel with a scrollable body and optional pinned footer row."""
+    from qtpy.QtCore import Qt
+    from qtpy.QtWidgets import (
+        QHBoxLayout,
+        QScrollArea,
+        QSizePolicy,
+        QVBoxLayout,
+        QWidget,
+    )
+
+    outer = QWidget()
+    outer_layout = QVBoxLayout()
+    outer_layout.setContentsMargins(*margins)
+    outer_layout.setSpacing(6)
+
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
+    inner = QWidget()
+    inner_layout = QVBoxLayout()
+    inner_layout.setContentsMargins(0, 0, 0, 0)
+    inner_layout.setSpacing(6)
+    for widget in content_widgets:
+        if widget is not None:
+            inner_layout.addWidget(widget)
+    inner_layout.addStretch()
+    inner.setLayout(inner_layout)
+    scroll.setWidget(inner)
+    scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+    outer_layout.addWidget(scroll, stretch=1)
+
+    if pinned_footer:
+        footer_row = QHBoxLayout()
+        footer_row.setContentsMargins(0, 4, 0, 0)
+        footer_row.setSpacing(6)
+        for widget in pinned_footer:
+            if widget is not None:
+                footer_row.addWidget(widget)
+        footer_widget = QWidget()
+        footer_widget.setLayout(footer_row)
+        outer_layout.addWidget(footer_widget)
+
+    outer.setLayout(outer_layout)
+    return outer
+
+
+def clamp_qt_window_to_available_screen(
+    qt_window: Any,
+    *,
+    margin: int = 32,
+    min_width: int = 900,
+    min_height: int = 700,
+) -> None:
+    """Resize and center a top-level Qt window within the primary screen work area."""
+    if qt_window is None:
+        return
+    try:
+        from qtpy.QtGui import QGuiApplication
+        from qtpy.QtWidgets import QApplication
+    except Exception:
+        return
+
+    app = QApplication.instance() or QGuiApplication.instance()
+    if app is None:
+        return
+    screen = app.primaryScreen()
+    if screen is None:
+        return
+
+    available = screen.availableGeometry()
+    max_w = max(min_width, available.width() - margin)
+    max_h = max(min_height, available.height() - margin)
+
+    current = qt_window.size()
+    target_w = min(max(current.width(), min_width), max_w)
+    target_h = min(max(current.height(), min_height), max_h)
+    qt_window.resize(target_w, target_h)
+
+    frame = qt_window.frameGeometry()
+    frame.moveCenter(available.center())
+    qt_window.move(frame.topLeft())

@@ -21,6 +21,15 @@ var SCAN_ROLES = [
 
 var INPUT_MATCH_ROLES = ["dapi", "max", "slices"];
 
+/** Steps that require a successful align warp; others (align retry, dapi_cleanup, …) may run. */
+var STEPS_BLOCKED_BY_ALIGN_FAILURE = {
+	count: true,
+	intensity: true,
+	dual: true,
+	collate: true,
+	adjust: true,
+};
+
 var FLAT_INDEX_ROLES = ["original_scans", "dapi"];
 
 var STEP_OUTPUT = {
@@ -961,7 +970,7 @@ function readFileIndex(bundleRoot, metaDirPath) {
 	}
 }
 
-function getProcessingSliceIds(bundleRoot, projectData, index, report) {
+function getProcessingSliceIds(bundleRoot, projectData, index, report, options) {
 	report =
 		report ||
 		(index ? computeMatchReport(index, INPUT_MATCH_ROLES) : { matchedSliceIds: [] });
@@ -976,17 +985,25 @@ function getProcessingSliceIds(bundleRoot, projectData, index, report) {
 			return subset[sid];
 		});
 	}
-	var alignFailures =
-		proc.step_failures && proc.step_failures.align ? proc.step_failures.align : {};
-	var failedAlignIds = Object.keys(alignFailures);
-	if (failedAlignIds.length) {
-		var failedSet = {};
-		for (var f = 0; f < failedAlignIds.length; f++) {
-			failedSet[failedAlignIds[f]] = true;
+	options = options || {};
+	var stepId = options.stepId || "";
+	var filterAlignFailures =
+		options.filterAlignFailures != null
+			? options.filterAlignFailures
+			: !stepId || !!STEPS_BLOCKED_BY_ALIGN_FAILURE[stepId];
+	if (filterAlignFailures) {
+		var alignFailures =
+			proc.step_failures && proc.step_failures.align ? proc.step_failures.align : {};
+		var failedAlignIds = Object.keys(alignFailures);
+		if (failedAlignIds.length) {
+			var failedSet = {};
+			for (var f = 0; f < failedAlignIds.length; f++) {
+				failedSet[failedAlignIds[f]] = true;
+			}
+			ids = ids.filter(function (sid) {
+				return !failedSet[sid];
+			});
 		}
-		ids = ids.filter(function (sid) {
-			return !failedSet[sid];
-		});
 	}
 	return ids;
 }
@@ -1035,6 +1052,7 @@ module.exports = {
 	MANIFEST_V2: MANIFEST_V2,
 	SCAN_ROLES: SCAN_ROLES,
 	INPUT_MATCH_ROLES: INPUT_MATCH_ROLES,
+	STEPS_BLOCKED_BY_ALIGN_FAILURE: STEPS_BLOCKED_BY_ALIGN_FAILURE,
 	STEP_OUTPUT: STEP_OUTPUT,
 	sliceIdFromFilename: sliceIdFromFilename,
 	sliceStemFromAnnotationPklBasename: sliceStemFromAnnotationPklBasename,
