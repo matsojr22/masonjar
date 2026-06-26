@@ -16,6 +16,8 @@ import tifffile as tiff
 from skimage.filters import unsharp_mask
 from skimage.morphology import disk, white_tophat
 
+from grayscale_load import load_grayscale_uint8, to_uint8_grayscale
+
 # Full-frame sharpen on ~15k×12k uint8 peaks ~6 GB RAM (unsharp + tophat); use tiles above this.
 TILED_SHARPEN_PIXEL_THRESHOLD = 50_000_000
 TILED_SHARPEN_TILE = 4096
@@ -39,19 +41,6 @@ def enhance_contrast(image, saturation_level=0.05):
     )
     enhanced_image = rescaled_image.reshape(image.shape)
     return enhanced_image.astype(image.dtype)
-
-
-def load_grayscale(path: Path) -> np.ndarray:
-    suffix = path.suffix.lower()
-    if suffix == ".png":
-        img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            raise ValueError(f"could not read {path}")
-        return img
-    img = tiff.imread(str(path))
-    if img.ndim > 2:
-        img = np.max(img, axis=0)
-    return img
 
 
 def stretch_preview_for_display(roi: np.ndarray) -> np.ndarray:
@@ -89,18 +78,17 @@ def _apply_equalize_with_bounds(img_u8: np.ndarray, lo: float, hi: float) -> np.
 
 
 def _equalize_image(img: np.ndarray) -> np.ndarray:
+    work = to_uint8_grayscale(img)
     clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
-    work = img.astype(np.uint8) if img.dtype == np.uint8 else img.astype(np.uint8)
     work = clahe.apply(work)
     return enhance_contrast(work)
 
 
 def _sharpen_unsharp_tophat(img: np.ndarray, radius: float, amount: float) -> np.ndarray:
-    original_dtype = img.dtype
-    work = img.astype(np.uint8) if img.dtype != np.uint8 else img
+    work = to_uint8_grayscale(img)
     sharpened = unsharp_mask(work, radius=radius, amount=amount, preserve_range=True)
     sharpened = white_tophat(sharpened, disk(15))
-    return sharpened.astype(original_dtype)
+    return np.clip(sharpened, 0, 255).astype(np.uint8)
 
 
 def _sharpen_image_tiled(
@@ -110,15 +98,12 @@ def _sharpen_image_tiled(
     equalize: bool,
 ) -> np.ndarray:
     h, w = img.shape[:2]
-    out = np.empty_like(img)
+    work = to_uint8_grayscale(img)
+    out = np.empty((h, w), dtype=np.uint8)
     contrast_bounds: tuple[float, float] | None = None
     if equalize:
-        step = max(1, int(np.sqrt(img.size / 1_000_000)))
-        sample = img[::step, ::step]
-        if sample.dtype == np.uint16:
-            sample = (sample / 256).astype(np.uint8)
-        elif sample.dtype != np.uint8:
-            sample = np.clip(sample, 0, 255).astype(np.uint8)
+        step = max(1, int(np.sqrt(work.size / 1_000_000)))
+        sample = work[::step, ::step]
         contrast_bounds = _contrast_bounds_from_sample(sample)
         print(
             f"LOG: sharpen_tiled equalize subsample step={step} bounds={contrast_bounds[0]:.1f}-{contrast_bounds[1]:.1f}",
@@ -144,13 +129,7 @@ def _sharpen_image_tiled(
             cx0 = max(0, x0 - pad)
             cy1 = min(h, ye + pad)
             cx1 = min(w, xe + pad)
-            crop = np.asarray(img[cy0:cy1, cx0:cx1])
-            if crop.dtype == np.uint16:
-                crop_u8 = (crop / 256).astype(np.uint8)
-            elif crop.dtype != np.uint8:
-                crop_u8 = np.clip(crop, 0, 255).astype(np.uint8)
-            else:
-                crop_u8 = crop
+            crop_u8 = work[cy0:cy1, cx0:cx1]
             if equalize and contrast_bounds is not None:
                 crop_u8 = _apply_equalize_with_bounds(crop_u8, *contrast_bounds)
             proc = _sharpen_unsharp_tophat(crop_u8, radius, amount)
@@ -175,12 +154,8 @@ def sharpen_image(img: np.ndarray, radius: float, amount: float, equalize: bool)
         print(f"LOG: sharpen_mode=tiled pixels={img.size}", flush=True)
         return _sharpen_image_tiled(img, radius, amount, equalize)
     print(f"LOG: sharpen_mode=full pixels={img.size}", flush=True)
-    work = img
+    work = to_uint8_grayscale(img)
     if equalize:
-        if work.dtype == np.uint16:
-            work = (work / 256).astype(np.uint8)
-        elif work.dtype != np.uint8:
-            work = np.clip(work, 0, 255).astype(np.uint8)
         work = _equalize_image(work)
     return _sharpen_unsharp_tophat(work, radius, amount)
 
@@ -195,8 +170,6 @@ def process_roi(
     x1 = min(img.shape[1], x + w + pad)
     crop = img[y0:y1, x0:x1]
     out = sharpen_image(crop, radius, amount, equalize)
-    if out.dtype != np.uint8:
-        out = np.clip(out, 0, 255).astype(np.uint8)
     oy = y - y0
     ox = x - x0
     return out[oy : oy + h, ox : ox + w]
@@ -211,9 +184,7 @@ def run_preview(args) -> int:
     if not path.is_file():
         emit_preview_json({"ok": False, "error": "image not found"})
         return 1
-    img = load_grayscale(path)
-    if img.dtype == np.uint16:
-        img = (img / 256).astype(np.uint8)
+    img = load_grayscale_uint8(path)
     x, y, w, h = int(args.x), int(args.y), int(args.w), int(args.h)
     w = max(8, min(w, img.shape[1]))
     h = max(8, min(h, img.shape[0]))
@@ -277,12 +248,14 @@ def run_batch(args) -> int:
     for fpath in input_files:
         print(f"LOG: Processing {fpath.name}", flush=True)
         try:
-            img = load_grayscale(fpath)
-            out = sharpen_image(img, radius, amount, equalize)
-            if out.dtype == np.uint16:
-                out = (out / 256).astype(np.uint8)
-            elif out.dtype != np.uint8:
-                out = np.clip(out, 0, 255).astype(np.uint8)
+            raw = tiff.imread(str(fpath))
+            if raw.ndim > 2:
+                raw = np.max(raw, axis=0)
+            print(
+                f"LOG: sharpen_input dtype={raw.dtype} shape={tuple(raw.shape)}",
+                flush=True,
+            )
+            out = sharpen_image(raw, radius, amount, equalize)
             out_path = output_path / fpath.name
             tiff.imwrite(str(out_path), out)
             written.append(fpath.name)

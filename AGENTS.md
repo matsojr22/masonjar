@@ -156,6 +156,8 @@ Some renderer files register `*Error` listeners (e.g. `alignError`, `detectError
 
 **Batch I/O:** Electron `py/` preprocess steps (max, sharpen, top-hat, DAPI cleanup, detect, etc.) process slices **sequentially in the main PythonShell process**; [`py/io_fairshare.py`](py/io_fairshare.py) throttles NAS reads/writes in that single process. Do not use `ProcessPoolExecutor` in Electron batch scripts.
 
+**16-bit max TIFFs:** Sharpen and Top-hat batch input may be uint16 (CZI axon 16-bit or legacy max). Both normalize to uint8 via [`py/grayscale_load.py`](py/grayscale_load.py) before OpenCV/skimage filters and always write uint8 TIFFs. Other import→preprocess tools (CZI extract, apply geometry, max projection, DAPI/tissue cleanup) preserve dtype or normalize once at load — only sharpen had a tiled double-scale bug (fixed v4.1.5).
+
 **Downstream** ([`js/max_dataset_picker.js`](js/max_dataset_picker.js)): Cell Detection and Isolate Regions show **Intensity dataset** when multiple leaves exist; default max projection per branch.
 
 ## Isolate Regions wizard and config

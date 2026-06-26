@@ -13,6 +13,8 @@ import cv2
 import numpy as np
 import tifffile as tf
 
+from grayscale_load import load_grayscale_uint8, to_uint8_grayscale  # noqa: F401
+
 
 def adjust_gamma(image, gamma=1.25):
     inv_gamma = 1.0 / float(gamma)
@@ -20,26 +22,6 @@ def adjust_gamma(image, gamma=1.25):
         [((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]
     ).astype("uint8")
     return cv2.LUT(image, table)
-
-
-def load_grayscale_uint8(path: Path) -> np.ndarray:
-    suffix = path.suffix.lower()
-    if suffix == ".png":
-        raw = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-        if raw is None:
-            raise ValueError(f"could not read {path}")
-        return np.ascontiguousarray(raw)
-    raw = tf.imread(str(path))
-    if raw.ndim > 2:
-        if raw.shape[-1] in (3, 4):
-            raw = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
-        else:
-            raw = np.max(raw, axis=0)
-    if raw.dtype == np.uint16:
-        raw = (raw / 256).astype(np.uint8)
-    elif raw.dtype != np.uint8:
-        raw = np.clip(raw, 0, 255).astype(np.uint8)
-    return np.ascontiguousarray(raw)
 
 
 def apply_tophat(img: np.ndarray, radius: int, gamma: float) -> np.ndarray:

@@ -6,6 +6,23 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.1.5
+
+**What's new**
+
+Sharpen on large 16-bit max-projection slices now produces clean output that matches the wizard preview.
+
+**Fixes**
+
+- Sharpen: fixed severe banding, dark voids, and speckle corruption on large 16-bit TIFFs (tiled path). Input is normalized to 8-bit before filtering, same as Top-hat; output is always 8-bit TIFF.
+- Verified Top-hat and other import/preprocess tools do not share the sharpen double-scale bug; shared grayscale loader keeps preprocess filters aligned.
+
+**Commit subject**
+
+Sharpen: fix 16-bit corruption on large tiled max projections
+
+---
+
 ## v4.1.4
 
 **What's new**

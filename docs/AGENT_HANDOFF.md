@@ -1,8 +1,18 @@
 # Agent session handoff
 
-Last updated: 2026-06-23 (v4.1.4). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-22 (v4.1.5). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.1.5 — Sharpen 16-bit dtype fix (2026-06-22)
+
+- **`py/grayscale_load.py`**: shared `to_uint8_grayscale` / `load_grayscale_uint8` for preprocess filters.
+- **`py/sharpen.py`**: normalize at entry; tiled path uses uint8 output buffer; removed post-batch `/256`; always writes uint8 TIFF.
+- **`py/top_hat.py`**: imports shared loader (behavior unchanged).
+- Tests: uint16 + tiled regression in `python/tests/test_sharpen_batch.py`; uint16 load/batch in `python/tests/test_tophat_filter.py`.
+- Audit: only sharpen had the tiled double-scale bug; other import→preprocess tools OK.
+
+**Open follow-ups:** re-run Sharpen on bundles with corrupted sharpen outputs from v4.1.3–4.1.4.
 
 ## v4.1.4 — Align handoff, Napari layout, deprecated preprocess submenu (2026-06-23)
 

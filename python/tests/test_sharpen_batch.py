@@ -52,7 +52,35 @@ def test_sharpen_image_uses_tiled_for_large_arrays(monkeypatch) -> None:
     img = np.random.randint(10, 200, (48, 48), dtype=np.uint8)
     out = sharpen.sharpen_image(img, radius=2.0, amount=1.5, equalize=False)
     assert out.shape == img.shape
-    assert out.dtype == img.dtype
+    assert out.dtype == np.uint8
+
+
+def test_uint16_input_scales_not_truncates() -> None:
+    h, w = 64, 64
+    ramp = (np.arange(h * w, dtype=np.uint16).reshape(h, w) % 256) * 257
+    out = sharpen.sharpen_image(ramp, radius=2.0, amount=1.5, equalize=False)
+    assert out.dtype == np.uint8
+    assert int(out.max()) > 10
+    assert float(out.mean()) > 5.0
+
+
+def test_large_uint16_tiled_output_is_uint8(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(sharpen, "TILED_SHARPEN_PIXEL_THRESHOLD", 1000)
+    monkeypatch.setattr(sharpen, "TILED_SHARPEN_TILE", 64)
+    monkeypatch.setattr(sharpen, "TILED_SHARPEN_PAD", 8)
+
+    in_dir = tmp_path / "in"
+    out_dir = tmp_path / "out"
+    in_dir.mkdir()
+    h, w = 48, 48
+    uint16 = (np.random.randint(0, 256, (h, w), dtype=np.uint16) * 257).astype(np.uint16)
+    tifffile.imwrite(str(in_dir / "big.tif"), uint16)
+
+    rc = sharpen.run_batch(_batch_args(in_dir, out_dir))
+    assert rc == 0
+    written = tifffile.imread(str(out_dir / "big.tif"))
+    assert written.dtype == np.uint8
+    assert int(written.max()) > 10
 
 
 def test_batch_writes_two_files(tmp_path: Path) -> None:
