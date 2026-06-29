@@ -1,8 +1,20 @@
 # Agent session handoff
 
-Last updated: 2026-06-22 (v4.1.6). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-22 (v4.1.7). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.1.7 — Sharpen Bell Jar parity restore (2026-06-22)
+
+- **`docs/SHARPEN_BELLJAR_DIFF.md`**: line-by-line Bell Jar vs Mason audit; verdict = same filter math, divergent dtype handling in v4.1.5–4.1.6.
+- **`py/sharpen.py`**: `sharpen_image_belljar` ports `belljar-main/py/sharpen.py` `process_file`; removed `_apply_equalize_with_bounds`; tiled path runs Bell Jar core per crop; batch logs `sharpen_input`/`sharpen_output` stats; preview uses `load_grayscale_native` for TIFF.
+- **`py/grayscale_load.py`**: `load_grayscale_native` preserves uint16 on TIFF read.
+- **`scripts/sharpen-debug-probe.py`**: post-run input/output/preview stats CLI.
+- **`js/preprocess_wizard.js`**: `fitViewportToImage` on slice load (sharpen + top-hat wizards).
+- Tests: `python/tests/test_sharpen_belljar_parity.py`; updated `test_sharpen_batch.py`.
+- Debug: set `MASONJAR_SHARPEN_DEBUG=1` for extra `LOG: sharpen_core` lines during live sharpen sessions.
+
+**Open follow-ups:** re-run Sharpen on bundles with corrupted sharpen outputs from v4.1.3–4.1.6; user visual verify on test project slices.
 
 ## v4.1.6 — Adjust search, Count rollup, Intensity label warnings (2026-06-22)
 

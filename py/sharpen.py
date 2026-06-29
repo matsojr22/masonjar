@@ -16,12 +16,41 @@ import tifffile as tiff
 from skimage.filters import unsharp_mask
 from skimage.morphology import disk, white_tophat
 
-from grayscale_load import load_grayscale_uint8, to_uint8_grayscale
+from grayscale_load import load_grayscale_native, load_grayscale_uint8
 
 # Full-frame sharpen on ~15k×12k uint8 peaks ~6 GB RAM (unsharp + tophat); use tiles above this.
 TILED_SHARPEN_PIXEL_THRESHOLD = 50_000_000
 TILED_SHARPEN_TILE = 4096
 TILED_SHARPEN_PAD = 32
+TOPHAT_DISK_RADIUS = 15
+
+
+def _sharpen_debug_enabled() -> bool:
+    return os.environ.get("MASONJAR_SHARPEN_DEBUG", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _image_stats(arr: np.ndarray) -> dict[str, float | int | str]:
+    flat = np.asarray(arr).astype(np.float64).ravel()
+    if flat.size == 0:
+        return {"dtype": str(arr.dtype), "min": 0, "max": 0, "p50": 0, "p95": 0}
+    return {
+        "dtype": str(arr.dtype),
+        "min": float(flat.min()),
+        "max": float(flat.max()),
+        "p50": float(np.percentile(flat, 50)),
+        "p95": float(np.percentile(flat, 95)),
+    }
+
+
+def _log_debug(prefix: str, **fields: object) -> None:
+    if not _sharpen_debug_enabled():
+        return
+    parts = " ".join(f"{k}={v}" for k, v in fields.items())
+    print(f"LOG: {prefix} {parts}".strip(), flush=True)
 
 
 def enhance_contrast(image, saturation_level=0.05):
@@ -43,6 +72,29 @@ def enhance_contrast(image, saturation_level=0.05):
     return enhanced_image.astype(image.dtype)
 
 
+def sharpen_image_belljar(
+    img: np.ndarray,
+    radius: float,
+    amount: float,
+    equalize: bool,
+    tophat_radius: int = TOPHAT_DISK_RADIUS,
+) -> np.ndarray:
+    """Bell Jar Electron core: native dtype through filters, astype(original_dtype) at end."""
+    work = np.asarray(img)
+    if work.ndim != 2:
+        raise ValueError(f"expected 2D image, got ndim={work.ndim}")
+
+    if equalize:
+        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
+        work = clahe.apply(work)
+        work = enhance_contrast(work)
+
+    original_dtype = work.dtype
+    work = unsharp_mask(work, radius=radius, amount=amount, preserve_range=True)
+    work = white_tophat(work, disk(tophat_radius))
+    return work.astype(original_dtype)
+
+
 def stretch_preview_for_display(roi: np.ndarray) -> np.ndarray:
     """Percentile stretch for wizard preview PNG only (not batch output)."""
     if roi.size == 0:
@@ -59,38 +111,6 @@ def stretch_preview_for_display(roi: np.ndarray) -> np.ndarray:
     return stretched.astype(np.uint8)
 
 
-def _contrast_bounds_from_sample(sample: np.ndarray, saturation_level: float = 0.05) -> tuple[float, float]:
-    flat = sample.astype(np.float64).ravel()
-    sat = saturation_level / 100.0
-    lo = float(np.percentile(flat, sat * 100.0))
-    hi = float(np.percentile(flat, 100.0 - sat * 100.0))
-    return lo, hi
-
-
-def _apply_equalize_with_bounds(img_u8: np.ndarray, lo: float, hi: float) -> np.ndarray:
-    clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
-    work = clahe.apply(np.clip(img_u8, 0, 255).astype(np.uint8)).astype(np.float64)
-    if hi <= lo:
-        return enhance_contrast(work.astype(np.uint8))
-    clipped = np.clip(work, lo, hi)
-    rescaled = np.interp(clipped, (lo, hi), (0, 255))
-    return np.clip(rescaled, 0, 255).astype(np.uint8)
-
-
-def _equalize_image(img: np.ndarray) -> np.ndarray:
-    work = to_uint8_grayscale(img)
-    clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
-    work = clahe.apply(work)
-    return enhance_contrast(work)
-
-
-def _sharpen_unsharp_tophat(img: np.ndarray, radius: float, amount: float) -> np.ndarray:
-    work = to_uint8_grayscale(img)
-    sharpened = unsharp_mask(work, radius=radius, amount=amount, preserve_range=True)
-    sharpened = white_tophat(sharpened, disk(15))
-    return np.clip(sharpened, 0, 255).astype(np.uint8)
-
-
 def _sharpen_image_tiled(
     img: np.ndarray,
     radius: float,
@@ -98,18 +118,8 @@ def _sharpen_image_tiled(
     equalize: bool,
 ) -> np.ndarray:
     h, w = img.shape[:2]
-    work = to_uint8_grayscale(img)
-    out = np.empty((h, w), dtype=np.uint8)
-    contrast_bounds: tuple[float, float] | None = None
-    if equalize:
-        step = max(1, int(np.sqrt(work.size / 1_000_000)))
-        sample = work[::step, ::step]
-        contrast_bounds = _contrast_bounds_from_sample(sample)
-        print(
-            f"LOG: sharpen_tiled equalize subsample step={step} bounds={contrast_bounds[0]:.1f}-{contrast_bounds[1]:.1f}",
-            flush=True,
-        )
-
+    original_dtype = img.dtype
+    out = np.empty((h, w), dtype=original_dtype)
     tile = TILED_SHARPEN_TILE
     pad = TILED_SHARPEN_PAD
     tiles_x = (w + tile - 1) // tile
@@ -129,10 +139,8 @@ def _sharpen_image_tiled(
             cx0 = max(0, x0 - pad)
             cy1 = min(h, ye + pad)
             cx1 = min(w, xe + pad)
-            crop_u8 = work[cy0:cy1, cx0:cx1]
-            if equalize and contrast_bounds is not None:
-                crop_u8 = _apply_equalize_with_bounds(crop_u8, *contrast_bounds)
-            proc = _sharpen_unsharp_tophat(crop_u8, radius, amount)
+            crop = img[cy0:cy1, cx0:cx1]
+            proc = sharpen_image_belljar(crop, radius, amount, equalize)
             oy, ox = y0 - cy0, x0 - cx0
             th, tw = ye - y0, xe - x0
             out[y0:ye, x0:xe] = proc[oy : oy + th, ox : ox + tw]
@@ -150,14 +158,21 @@ def sharpen_image(img: np.ndarray, radius: float, amount: float, equalize: bool)
     if img.ndim != 2:
         raise ValueError(f"expected 2D image, got ndim={img.ndim}")
     use_tiled = img.size > TILED_SHARPEN_PIXEL_THRESHOLD
+    mode = "tiled" if use_tiled else "full"
+    _log_debug(
+        "sharpen_core",
+        mode=mode,
+        equalize=equalize,
+        radius=radius,
+        amount=amount,
+        work_dtype=str(img.dtype),
+        shape=f"{img.shape[0]}x{img.shape[1]}",
+    )
     if use_tiled:
         print(f"LOG: sharpen_mode=tiled pixels={img.size}", flush=True)
         return _sharpen_image_tiled(img, radius, amount, equalize)
     print(f"LOG: sharpen_mode=full pixels={img.size}", flush=True)
-    work = to_uint8_grayscale(img)
-    if equalize:
-        work = _equalize_image(work)
-    return _sharpen_unsharp_tophat(work, radius, amount)
+    return sharpen_image_belljar(img, radius, amount, equalize)
 
 
 def process_roi(
@@ -184,7 +199,9 @@ def run_preview(args) -> int:
     if not path.is_file():
         emit_preview_json({"ok": False, "error": "image not found"})
         return 1
-    img = load_grayscale_uint8(path)
+    suffix = path.suffix.lower()
+    source_kind = "png" if suffix == ".png" else "tiff"
+    img = load_grayscale_native(path) if source_kind == "tiff" else load_grayscale_uint8(path)
     x, y, w, h = int(args.x), int(args.y), int(args.w), int(args.h)
     w = max(8, min(w, img.shape[1]))
     h = max(8, min(h, img.shape[0]))
@@ -193,6 +210,14 @@ def run_preview(args) -> int:
     radius = float(args.radius or 3)
     amount = float(args.amount or 2)
     equalize = bool(args.equalize)
+    _log_debug(
+        "sharpen_preview",
+        source_path=str(path.resolve()),
+        source_kind=source_kind,
+        roi=f"x={x} y={y} w={w} h={h}",
+        display_stretch="on",
+        input_dtype=str(img.dtype),
+    )
     roi = process_roi(img, x, y, w, h, radius, amount, equalize)
     roi = stretch_preview_for_display(roi)
     out_dir = Path(args.preview_dir.strip()) if args.preview_dir else path.parent
@@ -251,21 +276,32 @@ def run_batch(args) -> int:
             raw = tiff.imread(str(fpath))
             if raw.ndim > 2:
                 raw = np.max(raw, axis=0)
+            stats_in = _image_stats(raw)
             print(
-                f"LOG: sharpen_input dtype={raw.dtype} shape={tuple(raw.shape)}",
+                "LOG: sharpen_input "
+                f"path={fpath.name} dtype={stats_in['dtype']} shape={tuple(raw.shape)} "
+                f"min={stats_in['min']:.1f} max={stats_in['max']:.1f} "
+                f"p50={stats_in['p50']:.1f} p95={stats_in['p95']:.1f}",
                 flush=True,
             )
             out = sharpen_image(raw, radius, amount, equalize)
+            stats_out = _image_stats(out)
             out_path = output_path / fpath.name
             tiff.imwrite(str(out_path), out)
             written.append(fpath.name)
+            print(
+                "LOG: sharpen_output "
+                f"path={fpath.name} dtype={stats_out['dtype']} "
+                f"min={stats_out['min']:.1f} max={stats_out['max']:.1f} "
+                f"p50={stats_out['p50']:.1f} p95={stats_out['p95']:.1f}",
+                flush=True,
+            )
             print(f"LOG: sharpen_done {fpath.name}", flush=True)
         except Exception as e:
             print(f"LOG: Failed {fpath.name}: {e}", flush=True)
             traceback.print_exc()
 
     if not written:
-        # Inputs existed (guarded above) but every file failed to write.
         print(
             f"SHARPEN_NO_OUTPUT: 0 of {len(input_files)} files written.",
             flush=True,

@@ -59,12 +59,11 @@ def test_uint16_input_scales_not_truncates() -> None:
     h, w = 64, 64
     ramp = (np.arange(h * w, dtype=np.uint16).reshape(h, w) % 256) * 257
     out = sharpen.sharpen_image(ramp, radius=2.0, amount=1.5, equalize=False)
-    assert out.dtype == np.uint8
-    assert int(out.max()) > 10
-    assert float(out.mean()) > 5.0
+    assert out.dtype == np.uint16
+    assert int(out.max()) > 1000
 
 
-def test_large_uint16_tiled_output_is_uint8(tmp_path: Path, monkeypatch) -> None:
+def test_large_uint16_tiled_output_preserves_dtype(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(sharpen, "TILED_SHARPEN_PIXEL_THRESHOLD", 1000)
     monkeypatch.setattr(sharpen, "TILED_SHARPEN_TILE", 64)
     monkeypatch.setattr(sharpen, "TILED_SHARPEN_PAD", 8)
@@ -79,8 +78,8 @@ def test_large_uint16_tiled_output_is_uint8(tmp_path: Path, monkeypatch) -> None
     rc = sharpen.run_batch(_batch_args(in_dir, out_dir))
     assert rc == 0
     written = tifffile.imread(str(out_dir / "big.tif"))
-    assert written.dtype == np.uint8
-    assert int(written.max()) > 10
+    assert written.dtype == np.uint16
+    assert int(written.max()) > 1000
 
 
 def test_batch_writes_two_files(tmp_path: Path) -> None:

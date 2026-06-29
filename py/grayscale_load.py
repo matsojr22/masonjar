@@ -19,6 +19,20 @@ def to_uint8_grayscale(arr: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(np.clip(raw, 0, 255).astype(np.uint8))
 
 
+def load_grayscale_native(path: Path) -> np.ndarray:
+    """Read a grayscale TIFF preserving native dtype (uint8/uint16). PNG stays uint8."""
+    suffix = path.suffix.lower()
+    if suffix == ".png":
+        return load_grayscale_uint8(path)
+    raw = tf.imread(str(path))
+    if raw.ndim > 2:
+        if raw.shape[-1] in (3, 4):
+            raw = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+        else:
+            raw = np.max(raw, axis=0)
+    return np.ascontiguousarray(raw)
+
+
 def load_grayscale_uint8(path: Path) -> np.ndarray:
     """Read a grayscale PNG or TIFF and normalize to uint8."""
     suffix = path.suffix.lower()

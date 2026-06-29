@@ -6,6 +6,24 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.1.7
+
+**What's new**
+
+- Sharpen filter core restored to match Bell Jar (native bit depth through CLAHE, unsharp mask, and white top-hat; output dtype preserved).
+- Sharpen wizard preview fits the slice to the viewport on load.
+
+**Fixes**
+
+- Sharpen: fixed patchy contrast and banding on 16-bit max projections caused by forced 8-bit normalization and per-tile equalize bounds (v4.1.5–4.1.6 regression).
+- Large slices still use tiled processing for memory safety; each tile runs the same Bell Jar filter core.
+
+**Commit subject**
+
+Sharpen: restore Bell Jar filter core; fix 16-bit preprocess regression
+
+---
+
 ## v4.1.6
 
 **What's new**

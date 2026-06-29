@@ -148,8 +148,30 @@ function testApplyDisplayWindow() {
 	assert.ok(stretched.data[4] > 100);
 }
 
+function testFitScaleToViewport() {
+	var scale = preprocessWizard.fitScaleToViewport(2000, 1000, 512, 512);
+	assert.ok(scale > 0 && scale <= 1);
+	assert.strictEqual(preprocessWizard.fitScaleToViewport(256, 256, 512, 512), 1);
+	var pan = preprocessWizard.centerPanForFit(200, 100, 512, 512, 0.5);
+	assert.ok(pan.panX > 0);
+	assert.ok(pan.panY > 0);
+	var state = {
+		baseNaturalW: 2000,
+		baseNaturalH: 1000,
+		viewW: 512,
+		viewH: 512,
+		scale: 1,
+		panX: 0,
+		panY: 0,
+	};
+	preprocessWizard.fitViewportToImage(state);
+	assert.ok(state.scale < 1);
+	assert.ok(state.panX !== 0 || state.panY !== 0);
+}
+
 testViewportRoi();
 testScaleRoiForFullRes();
+testFitScaleToViewport();
 testResolvePreviewFilterRequest();
 testAutoStretchImageDataIfFlat();
 testFindSignalPreviewAbs();

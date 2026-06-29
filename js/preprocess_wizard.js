@@ -119,6 +119,33 @@ function scaleRoiForFullRes(roi, previewW, previewH, fullW, fullH) {
 	};
 }
 
+function fitScaleToViewport(imgW, imgH, viewW, viewH) {
+	if (!imgW || !imgH || !viewW || !viewH) {
+		return 1;
+	}
+	return Math.min(viewW / imgW, viewH / imgH, 1);
+}
+
+function centerPanForFit(imgW, imgH, viewW, viewH, scale) {
+	var dw = imgW * scale;
+	var dh = imgH * scale;
+	return {
+		panX: (viewW - dw) / 2,
+		panY: (viewH - dh) / 2,
+	};
+}
+
+function fitViewportToImage(state) {
+	var imgW = state.baseNaturalW || DEFAULT_VIEW_W;
+	var imgH = state.baseNaturalH || DEFAULT_VIEW_H;
+	var viewW = state.viewW || DEFAULT_VIEW_W;
+	var viewH = state.viewH || DEFAULT_VIEW_H;
+	state.scale = fitScaleToViewport(imgW, imgH, viewW, viewH);
+	var pan = centerPanForFit(imgW, imgH, viewW, viewH, state.scale);
+	state.panX = pan.panX;
+	state.panY = pan.panY;
+}
+
 /**
  * Resolve filter IPC target: WYSIWYG on displayed image (preview PNG) or scaled full TIFF.
  * @returns {{ ready: boolean, filterAbs?: string, roi?: object, reason?: string }}
@@ -457,6 +484,8 @@ function wirePreprocessWizard(opts) {
 			baseBitmap = img;
 			state.baseNaturalW = img.naturalWidth;
 			state.baseNaturalH = img.naturalHeight;
+			fitViewportToImage(state);
+			applyPanZoomCss();
 			renderPreviewComposite();
 		};
 		img.onerror = function () {
@@ -1060,6 +1089,9 @@ module.exports = {
 	findSignalPreviewAbs: findSignalPreviewAbs,
 	findLowResPreviewAbs: findLowResPreviewAbs,
 	scaleRoiForFullRes: scaleRoiForFullRes,
+	fitScaleToViewport: fitScaleToViewport,
+	centerPanForFit: centerPanForFit,
+	fitViewportToImage: fitViewportToImage,
 	resolvePreviewFilterRequest: resolvePreviewFilterRequest,
 	isProcessableTiffName: isProcessableTiffName,
 	autoStretchImageDataIfFlat: autoStretchImageDataIfFlat,
