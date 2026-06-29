@@ -11,6 +11,7 @@ var branding = require("./branding");
 var structureCatalog = require("./structure_catalog");
 var atlasStyle = require("./atlas_region_style");
 var parcelCtx = require("./parcellation_context");
+var labelAudit = require("./annotation_label_audit");
 var wizardBusy = require("./wizard_busy");
 
 var SETUP_KEY = "masonjar.intensity.setup";
@@ -31,6 +32,7 @@ var lastRunRel = "";
 var lastResult = { slices: 0, pkls: 0, outputDir: "" };
 var pickerMode = "tiers"; // "tiers" | "advanced"
 var parcelSummary = null;
+var labelAuditData = null;
 
 function qs(id) {
 	return document.getElementById(id);
@@ -387,6 +389,44 @@ function writeRunConfig(finalOut) {
 	return { cfgPath: cfgPath, includeLayers: includeLayers };
 }
 
+function updateLabelResolutionBannerWizard() {
+	var banner = qs("labelResolutionBanner");
+	if (!setup || !setup.annodir || !banner) return;
+	var bundleRoot = setup.bundleRoot || "";
+	var stale = labelAudit.annotationsNewerThanIntensity(setup.annodir, bundleRoot);
+	var html = labelAudit.formatIntensityAuditBanner(labelAuditData, parcelSummary, {
+		staleIntensity: stale,
+	});
+	if (!html) {
+		banner.classList.add("d-none");
+		return;
+	}
+	banner.innerHTML = html;
+	banner.classList.remove("d-none");
+}
+
+function refreshLabelAuditWizard() {
+	if (!setup || !setup.annodir) {
+		labelAuditData = null;
+		updateLabelResolutionBannerWizard();
+		return;
+	}
+	labelAudit.ensureAudit(setup.annodir, "").then(function (payload) {
+		labelAuditData = payload && payload.audit ? payload.audit : null;
+		updateLabelResolutionBannerWizard();
+		var layers = qs("includeLayers");
+		if (
+			layers &&
+			labelAuditData &&
+			labelAudit.auditSuggestsIncludeLayers(labelAuditData)
+		) {
+			if (parcelSummary && parcelCtx.includeLayersAllowed(parcelSummary)) {
+				layers.checked = true;
+			}
+		}
+	});
+}
+
 function updateParcellationBannerWizard() {
 	var banner = qs("intensityParcellationBanner");
 	var layers = qs("includeLayers");
@@ -415,6 +455,7 @@ function updateParcellationBannerWizard() {
 		layers.disabled = !allowed;
 		if (!allowed) layers.checked = false;
 	}
+	updateLabelResolutionBannerWizard();
 }
 
 function startProcess() {
@@ -427,6 +468,24 @@ function startProcess() {
 			alert(
 				"Include cortical layers is not available when annotations are parcellated above layer resolution.",
 			);
+			return;
+		}
+	}
+	var bundleRoot = setup.bundleRoot || "";
+	var stale = labelAudit.annotationsNewerThanIntensity(setup.annodir, bundleRoot);
+	var hasAuditIssues =
+		labelAuditData && labelAuditData.summary && labelAuditData.summary.any_issues;
+	if (stale || hasAuditIssues) {
+		var msg =
+			labelAudit.formatIntensityAuditBanner(labelAuditData, parcelSummary, {
+				staleIntensity: stale,
+			}) || "Annotation labels may not match your last Isolate Regions run.";
+		var proceed = window.confirm(
+			"Label resolution warnings:\n\n" +
+				msg.replace(/<[^>]+>/g, "") +
+				"\n\nContinue with Isolate Regions anyway?",
+		);
+		if (!proceed) {
 			return;
 		}
 	}
@@ -590,6 +649,7 @@ if (!setup || !setup.indir || !setup.annodir) {
 		renderSelectedList();
 	});
 	updateParcellationBannerWizard();
+	refreshLabelAuditWizard();
 	qs("step2Process").addEventListener("click", startProcess);
 	qs("cancelExtract").addEventListener("click", function () {
 		if (extractRunning) {

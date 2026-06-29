@@ -113,6 +113,44 @@ def resolve_selection_id(
     )
 
 
+def resolve_count_label_id(
+    atlas_id: int,
+    context: ParcellationContext,
+    catalog: dict[str, Any],
+    structure_map: dict,
+    *,
+    include_layers: bool,
+) -> int:
+    """Map a pixel label id to the atlas id used for Count Brain aggregation."""
+    aid = int(atlas_id)
+    if include_layers:
+        return aid
+    if context.is_full_detail:
+        return ancestor_at_level(
+            aid,
+            catalog,
+            tier_id="areas",
+            structure_map=structure_map,
+        )
+    return resolve_selection_id(aid, context, catalog, structure_map)
+
+
+def count_rollup_log_label(
+    context: ParcellationContext,
+    *,
+    include_layers: bool,
+) -> str:
+    if include_layers:
+        return "literal_layers"
+    if context.is_full_detail:
+        return "areas"
+    if context.tier_id:
+        return f"tier:{context.tier_id}"
+    if context.st_level is not None:
+        return f"level:{context.st_level}"
+    return "areas"
+
+
 def resolve_output_targets(
     structure_map: dict,
     selected_region_ids: list[int],

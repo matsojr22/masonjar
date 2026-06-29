@@ -221,6 +221,7 @@ class AnnotationViewer(QMainWindow):
         search_completer = QCompleter(self)
         search_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         search_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        search_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.area_search_box.setCompleter(search_completer)
         self.area_search_box.textEdited.connect(self._on_area_search_box_edited)
         search_completer.activated.connect(self._on_area_search_completer_activated)
@@ -240,12 +241,14 @@ class AnnotationViewer(QMainWindow):
         area_completer = self.area_combo.completer()
         area_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         area_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        area_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.area_combo.lineEdit().textChanged.connect(self._on_area_search_changed)
         self.area_combo.activated.connect(self._on_area_activated)
         self.ccf_advanced_toggle = QCheckBox("CCFv3 depths", self)
         self.ccf_advanced_toggle.setChecked(False)
         self.ccf_advanced_toggle.setToolTip(CCF_ADVANCED_HELP)
         self.ccf_advanced_toggle.toggled.connect(self._on_ccf_advanced_toggled)
+        self._tier_change_notice_shown = False
 
         # --- Paint target strip (must exist before _init_paint_region_controls) ---
         self.paint_swatch = QLabel(self)
@@ -605,7 +608,7 @@ class AnnotationViewer(QMainWindow):
         completer = self.area_search_box.completer()
         if completer is None:
             return
-        regions = self._flatten_catalog_regions(query)
+        regions = self._current_regions(query)
         strings = [self._region_display_text(n) for n in regions[:500]]
         from qtpy.QtCore import QStringListModel
 
@@ -619,7 +622,8 @@ class AnnotationViewer(QMainWindow):
     def _on_area_search_completer_activated(self, text: str):
         if not self.catalog:
             return
-        for node in self._flatten_catalog_regions():
+        query = self.area_search_box.text()
+        for node in self._current_regions(query):
             if self._region_display_text(node) == text:
                 self._sync_area_combo_to_region(node["id"])
                 self.set_paint_region(node["id"])
@@ -627,6 +631,68 @@ class AnnotationViewer(QMainWindow):
                 self.area_search_box.setText(text)
                 self.area_search_box.blockSignals(False)
                 break
+
+    def _section_has_annotation_labels(self) -> bool:
+        if self.current_label is None:
+            return False
+        return bool(np.any(self.current_label != 0))
+
+    def _maybe_warn_tier_change_mixed_map(self):
+        if not self._section_has_annotation_labels():
+            return
+        msg = (
+            "Changing the content tier and painting more regions can create a "
+            "mixed-resolution annotation map. Downstream tools (especially Isolate "
+            "Regions) may behave unexpectedly unless Include cortical layers and "
+            "parcellation match your labels. Count Brain will roll up totals, but "
+            "intensity PKLs may need a re-run."
+        )
+        self.status_bar.showMessage(msg, 20000)
+        if not self._tier_change_notice_shown:
+            self._tier_change_notice_shown = True
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Icon.Information)
+            dialog.setWindowTitle("Mixed-resolution labels")
+            dialog.setText("Content tier changed after painting")
+            dialog.setInformativeText(msg)
+            dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+            dialog.exec()
+
+    def _update_paint_resolution_warning(self):
+        if not hasattr(self, "paint_resolution_warning"):
+            return
+        if self.current_label is None or not self.catalog:
+            self.paint_resolution_warning.clear()
+            self.paint_resolution_warning.setVisible(False)
+            return
+        from annotation_label_audit import audit_label_array
+        from annotation_relabel import get_slice_parcellation
+
+        entry = get_slice_parcellation(self.annotation_dir, self._current_slice_id())
+        result = audit_label_array(
+            self.current_label, self.catalog, self.structure_map, entry
+        )
+        messages = {
+            "mixed_st_levels": (
+                "Labels on this section mix multiple CCF levels — Isolate Regions "
+                "may need Include cortical layers and a re-run."
+            ),
+            "layer_on_coarse_parcellation": (
+                "Layer-level labels with coarse parcellation — enable Include "
+                "cortical layers or re-parcellate at layers tier."
+            ),
+            "parcellation_metadata_mismatch": (
+                "Painted labels do not match declared parcellation tier — re-run "
+                "Parcellation or paint at one tier."
+            ),
+        }
+        parts = [messages[c] for c in result.get("issues", []) if c in messages]
+        if parts:
+            self.paint_resolution_warning.setText(" ".join(parts))
+            self.paint_resolution_warning.setVisible(True)
+        else:
+            self.paint_resolution_warning.clear()
+            self.paint_resolution_warning.setVisible(False)
 
     def _init_paint_region_controls(self):
         """Populate hierarchy/area combos from the CCF catalog."""
@@ -746,24 +812,33 @@ class AnnotationViewer(QMainWindow):
         self._area_combo_updating = False
 
     def _on_level_changed(self, _index: int):
+        self._maybe_warn_tier_change_mixed_map()
         if self.ccf_advanced:
             self._rebuild_area_combo()
+        self._refresh_search_completer(self.area_search_box.text())
         self._update_paint_target_strip()
+        self._update_paint_resolution_warning()
 
     def _on_tier_changed(self, _index: int):
+        self._maybe_warn_tier_change_mixed_map()
         tier_id = self._current_tier_id()
         if tier_id:
             self.current_tier_id = tier_id
         if not self.ccf_advanced:
             self._rebuild_area_combo()
+        self._refresh_search_completer(self.area_search_box.text())
         self._update_paint_target_strip()
+        self._update_paint_resolution_warning()
 
     def _on_ccf_advanced_toggled(self, checked: bool):
+        self._maybe_warn_tier_change_mixed_map()
         self.ccf_advanced = bool(checked)
         self.tier_combo.setVisible(not self.ccf_advanced)
         self.level_combo.setVisible(self.ccf_advanced)
         self._rebuild_area_combo()
+        self._refresh_search_completer(self.area_search_box.text())
         self._update_paint_target_strip()
+        self._update_paint_resolution_warning()
 
     def _on_area_search_changed(self, text: str):
         if self._area_combo_updating or not self.catalog:
@@ -850,6 +925,11 @@ class AnnotationViewer(QMainWindow):
         region_layout.addLayout(area_row)
 
         region_layout.addWidget(self.ccf_advanced_toggle)
+        self.paint_resolution_warning = QLabel("", self)
+        self.paint_resolution_warning.setWordWrap(True)
+        self.paint_resolution_warning.setStyleSheet("color: #856404;")
+        self.paint_resolution_warning.setVisible(False)
+        region_layout.addWidget(self.paint_resolution_warning)
         region_group.setLayout(region_layout)
         ui_layout.addWidget(region_group)
 
@@ -1492,6 +1572,7 @@ class AnnotationViewer(QMainWindow):
 
         self._overlay_ready = True
         self.repaint_selected_only()
+        self._update_paint_resolution_warning()
 
     def paint_deltas(self, points):
         # Update the annotation pixmap with the new points
@@ -1571,6 +1652,45 @@ class AnnotationViewer(QMainWindow):
             pickle.dump(self.current_label, f)
         self.was_changed = False
         self._update_parcellation_labels()
+        self._refresh_annotation_label_audit_cache(show_intensity_notice=True)
+
+    def _refresh_annotation_label_audit_cache(self, show_intensity_notice: bool = False):
+        from annotation_label_audit import (
+            audit_align_leaf,
+            audit_label_array,
+            write_audit_cache,
+        )
+        from annotation_relabel import get_slice_parcellation
+
+        if not self.catalog:
+            return
+        try:
+            audit = audit_align_leaf(
+                self.annotation_dir, self.catalog, self.structure_map
+            )
+            write_audit_cache(self.annotation_dir, audit)
+        except OSError:
+            return
+        self._update_paint_resolution_warning()
+        if not show_intensity_notice:
+            return
+        entry = get_slice_parcellation(self.annotation_dir, self._current_slice_id())
+        slice_audit = audit_label_array(
+            self.current_label, self.catalog, self.structure_map, entry
+        )
+        if not slice_audit.get("issues"):
+            return
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Isolate Regions")
+        dialog.setText("Saved labels may affect Isolate Regions")
+        dialog.setInformativeText(
+            "This section has mixed or mismatched label resolution. Re-run Isolate "
+            "Regions after fixing annotations, or review Include cortical layers on "
+            "the setup page."
+        )
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dialog.exec()
 
     def prev_image(self):
         if self.current_index > 0:
@@ -1687,6 +1807,7 @@ class AnnotationViewer(QMainWindow):
 
             self.was_changed = True
             self._update_parcellation_labels()
+            self._update_paint_resolution_warning()
 
             # Convert the points to QPoint objects for any necessary GUI operations
             update_points = [QPoint(x, y) for x, y in new_points]

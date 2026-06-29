@@ -10,6 +10,7 @@ var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
 var branding = require("./branding");
 var parcelCtx = require("./parcellation_context");
+var labelAudit = require("./annotation_label_audit");
 var maxDatasetPicker = require("./max_dataset_picker");
 
 var SETUP_KEY = "masonjar.intensity.setup";
@@ -169,6 +170,50 @@ maxDatasetPicker.wireMaxDatasetPicker({
 	},
 });
 
+function updateLabelResolutionBanner(audit) {
+	var banner = document.getElementById("labelResolutionBanner");
+	if (!banner) return;
+	var annodirPath = annodir && annodir.value ? annodir.value : "";
+	if (!annodirPath) {
+		banner.classList.add("d-none");
+		return;
+	}
+	var bundleRoot = project.isActive() ? project.getBundleRoot() : "";
+	var stale = labelAudit.annotationsNewerThanIntensity(annodirPath, bundleRoot);
+	var html = labelAudit.formatIntensityAuditBanner(audit, null, {
+		staleIntensity: stale,
+	});
+	if (!html) {
+		banner.classList.add("d-none");
+		return;
+	}
+	banner.innerHTML = html;
+	banner.classList.remove("d-none");
+}
+
+function refreshLabelAuditBanners() {
+	var annodirPath = annodir && annodir.value ? annodir.value : "";
+	if (!annodirPath) {
+		updateLabelResolutionBanner(null);
+		return;
+	}
+	labelAudit.ensureAudit(annodirPath, "").then(function (payload) {
+		updateLabelResolutionBanner(payload && payload.audit ? payload.audit : null);
+		var includeLayersEl = document.getElementById("includeLayers");
+		if (
+			includeLayersEl &&
+			payload &&
+			payload.audit &&
+			labelAudit.auditSuggestsIncludeLayers(payload.audit)
+		) {
+			var pSummary = parcelCtx.summarizeParcellationForLeaf(annodirPath);
+			if (parcelCtx.includeLayersAllowed(pSummary)) {
+				includeLayersEl.checked = true;
+			}
+		}
+	});
+}
+
 function updateParcellationBanner() {
 	var banner = document.getElementById("parcellationBanner");
 	if (!banner) return;
@@ -204,7 +249,14 @@ function updateParcellationBanner() {
 }
 
 if (annodir) {
-	annodir.addEventListener("change", updateParcellationBanner);
-	annodir.addEventListener("input", updateParcellationBanner);
+	annodir.addEventListener("change", function () {
+		updateParcellationBanner();
+		refreshLabelAuditBanners();
+	});
+	annodir.addEventListener("input", function () {
+		updateParcellationBanner();
+		refreshLabelAuditBanners();
+	});
 }
 updateParcellationBanner();
+refreshLabelAuditBanners();

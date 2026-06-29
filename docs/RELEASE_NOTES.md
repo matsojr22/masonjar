@@ -6,6 +6,24 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v4.1.6
+
+**What's new**
+
+- Viewer/Editor region search is case-insensitive and limited to the active Hierarchy tier (or CCF level in advanced mode).
+- Count Brain rolls up mixed CCF label levels automatically so totals stay consistent when annotations combine areas and layers.
+- Viewer/Editor warns when changing content tier after painting, and Isolate Regions setup warns when labels mix CCF tiers or changed since your last run.
+
+**Fixes**
+
+- Viewer/Editor: Search and Area completers no longer hide matches due to case-sensitive filtering.
+
+**Commit subject**
+
+Viewer/Editor search, robust Count rollup, and Intensity mixed-tier warnings
+
+---
+
 ## v4.1.5
 
 **What's new**

@@ -1,8 +1,19 @@
 # Agent session handoff
 
-Last updated: 2026-06-22 (v4.1.5). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-22 (v4.1.6). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v4.1.6 — Adjust search, Count rollup, Intensity label warnings (2026-06-22)
+
+- **`py/adjust.py`**: case-insensitive Search/Area completers; search scoped to active tier/level via `_current_regions`; tier-change mixed-map warning; paint dock amber label; Save writes `annotation_label_audit.json`.
+- **`py/count.py`** + **`py/annotation_match.py`**: `resolve_count_label_id` parcellation-aware rollup; `LOG: count_rollup=…`.
+- **`py/annotation_label_audit.py`**: `audit_label_array`, `audit_align_leaf`, CLI for IPC.
+- **`src/main.ts` / `main.js`**: `runAnnotationLabelAudit` → `annotationLabelAuditResult`.
+- **`js/annotation_label_audit.js`**: cache read/stale probe; Intensity/batch banners; wizard confirm before Process.
+- Tests: `test_adjust_region_search.py`, `test_count_parcellation_rollup.py`, `test_annotation_label_audit.py`, `scripts/test-annotation-label-audit.js`.
+
+**Open follow-ups:** none critical from this release.
 
 ## v4.1.5 — Sharpen 16-bit dtype fix (2026-06-22)
 

@@ -1121,6 +1121,18 @@ function classifyPreflightCell(bundleRoot, stepId) {
 		if (!iPaths.annodir || !fs.existsSync(iPaths.annodir)) {
 			return { tone: "red", label: "no slices", reason: "Active slices leaf missing." };
 		}
+		var labelAudit = require("./annotation_label_audit");
+		var auditCache = labelAudit.readAuditCache(iPaths.annodir);
+		if (labelAudit.isAuditStale(iPaths.annodir)) {
+			auditCache = null;
+		}
+		if (auditCache && auditCache.summary && auditCache.summary.any_issues) {
+			return {
+				tone: "amber",
+				label: "label mix",
+				reason: labelAudit.summarizeAuditIssues(auditCache),
+			};
+		}
 		var pSummary = parcelCtx.summarizeParcellationForLeaf(iPaths.annodir);
 		if (pSummary.hasParcellation) {
 			var pLabel = parcelCtx.formatParcellationLabel({

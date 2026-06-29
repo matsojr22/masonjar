@@ -1,16 +1,10 @@
-"""Adjust paint-region search must read catalog nodes from the real key.
-
-load_catalog stores region nodes under "by_id"; the search/completer helper
-previously read "byId" and always returned an empty list, so users could not
-search for a paint target by acronym/name.
-"""
+"""Adjust paint-region search: tier-scoped, case-insensitive completer source."""
 
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -27,20 +21,90 @@ from structure_catalog import load_catalog  # noqa: E402
 _GRAPH_PATH = _REPO_ROOT / "csv" / "structure_graph.json"
 
 
-def test_flatten_catalog_regions_uses_by_id() -> None:
+class _FakeCombo:
+    def __init__(self, items):
+        self._items = list(items)
+        self._index = 0
+
+    def count(self):
+        return len(self._items)
+
+    def currentData(self):
+        if not self._items:
+            return None
+        return self._items[self._index][1]
+
+    def set_index_for_data(self, data):
+        for i, (_label, value) in enumerate(self._items):
+            if value == data:
+                self._index = i
+                return
+
+
+class _ViewerStub:
+    def __init__(self, catalog, *, tier_id="areas", ccf_advanced=False):
+        self.catalog = catalog
+        self.ccf_advanced = ccf_advanced
+        self.tier_combo = _FakeCombo(
+            [
+                ("Functional areas", "areas"),
+                ("Cortical layers", "layers"),
+                ("Major divisions", "major"),
+            ]
+        )
+        self.tier_combo.set_index_for_data(tier_id)
+        self.level_combo = _FakeCombo([("Level 6", 6), ("Level 11", 11)])
+
+    def _current_tier_id(self):
+        if self.tier_combo.count() == 0:
+            return None
+        data = self.tier_combo.currentData()
+        return str(data) if data is not None else None
+
+    def _current_catalog_level(self):
+        if self.level_combo.count() == 0:
+            return None
+        level = self.level_combo.currentData()
+        return int(level) if level is not None else None
+
+
+def _viewer_stub(catalog, *, tier_id="areas", ccf_advanced=False):
+    return _ViewerStub(catalog, tier_id=tier_id, ccf_advanced=ccf_advanced)
+
+
+def test_current_regions_tier_scoped_vis_query() -> None:
     import adjust  # noqa: E402
 
     catalog = load_catalog(_GRAPH_PATH)
-    fake_self = types.SimpleNamespace(catalog=catalog)
+    areas_self = _viewer_stub(catalog, tier_id="areas")
+    layers_self = _viewer_stub(catalog, tier_id="layers")
 
-    # Unbound call: the method only reads self.catalog.
-    all_regions = adjust.AnnotationViewer._flatten_catalog_regions(fake_self, "")
-    assert len(all_regions) == len(catalog["by_id"]) > 1000
+    areas_vis = adjust.AnnotationViewer._current_regions(areas_self, "VIS")
+    layers_vis = adjust.AnnotationViewer._current_regions(layers_self, "VIS")
+    assert 0 < len(areas_vis) < len(catalog["by_id"])
+    assert len(layers_vis) > 0
+    assert len(areas_vis) != len(layers_vis)
 
-    # A targeted query should narrow the list (search actually works now).
-    filtered = adjust.AnnotationViewer._flatten_catalog_regions(fake_self, "VIS")
-    assert 0 < len(filtered) < len(all_regions)
-    assert all(
-        "vis" in f"{n.get('acronym', '')} {n.get('name', '')}".lower()
-        for n in filtered
-    )
+    full_catalog = adjust.AnnotationViewer._flatten_catalog_regions(areas_self, "VIS")
+    assert len(full_catalog) >= len(areas_vis)
+
+
+def test_current_regions_case_insensitive_query() -> None:
+    import adjust  # noqa: E402
+
+    catalog = load_catalog(_GRAPH_PATH)
+    stub = _viewer_stub(catalog, tier_id="areas")
+    lower = adjust.AnnotationViewer._current_regions(stub, "vis")
+    upper = adjust.AnnotationViewer._current_regions(stub, "VIS")
+    assert [n["id"] for n in lower] == [n["id"] for n in upper]
+    assert len(lower) > 0
+
+
+def test_search_completer_uses_current_regions_not_full_catalog() -> None:
+    import adjust  # noqa: E402
+
+    catalog = load_catalog(_GRAPH_PATH)
+    stub = _viewer_stub(catalog, tier_id="areas")
+    scoped = adjust.AnnotationViewer._current_regions(stub, "")
+    full = adjust.AnnotationViewer._flatten_catalog_regions(stub, "")
+    assert 0 < len(scoped) < len(full)

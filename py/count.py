@@ -17,6 +17,12 @@ import cv2
 import pickle
 from find_neurons import DetectionResult
 from demons import resize_image_nearest_neighbor
+from annotation_match import (
+    count_rollup_log_label,
+    load_parcellation_context,
+    resolve_count_label_id,
+)
+from structure_catalog import load_catalog
 
 
 def iou(boxA, boxB):
@@ -198,6 +204,27 @@ if __name__ == "__main__":
         for k, v in regions.items():
             acronym_to_region[v["acronym"]] = k
 
+    structures_path = Path(args.structures.strip())
+    graph_path = structures_path.parent / "structure_graph.json"
+    catalog = load_catalog(graph_path) if graph_path.is_file() else None
+    count_context = load_parcellation_context(annotation_path)
+    rollup_logged = False
+
+    def _resolve_label(atlas_id, slice_context):
+        return resolve_count_label_id(
+            int(atlas_id),
+            slice_context,
+            catalog or {},
+            regions,
+            include_layers=args.layers,
+        )
+
+    def _region_info(resolved_id):
+        info = regions.get(resolved_id)
+        if info is None:
+            info = regions.get(np.uint32(resolved_id))
+        return info
+
     sums = {}
     colocalized = {}
     region_areas = {}
@@ -229,27 +256,25 @@ if __name__ == "__main__":
                 annotation, (target_width, target_height)
             )
 
+            slice_id = slice_stem_from_annotation_pkl(aName)
+            slice_context = load_parcellation_context(annotation_path, slice_id)
+            if not rollup_logged:
+                print(
+                    f"LOG: count_rollup={count_rollup_log_label(slice_context, include_layers=args.layers)}",
+                    flush=True,
+                )
+                rollup_logged = True
+
             unique_ids, counts = np.unique(annotation_rescaled, return_counts=True)
             for unique_id, count in zip(unique_ids, counts):
-                region_info = regions.get(unique_id)
+                if unique_id == 0:
+                    continue
+                resolved_id = _resolve_label(unique_id, slice_context)
+                region_info = _region_info(resolved_id)
                 if region_info is None:
-                    # Background (label 0) or ids absent from the structure map.
                     continue
                 name = region_info["acronym"]
-                id_path = region_info["id_path"].split("/")
-                if len(id_path) >= 2:
-                    parent_id = np.uint32(id_path[-2])
-                else:
-                    parent_id = unique_id
-
-                parent_info = regions.get(parent_id)
-                parent_name = parent_info["acronym"] if parent_info else name
-                region_areas[pName][name] = count
-
-                if not region_areas[pName].get(parent_name, False):
-                    region_areas[pName][parent_name] = count
-                else:
-                    region_areas[pName][parent_name] += count
+                region_areas[pName][name] = region_areas[pName].get(name, 0) + int(count)
 
         # Initialize counts based on args.layers
         sums[pName] = {}
@@ -293,28 +318,12 @@ if __name__ == "__main__":
                 yPos = min(max(yPos, 0), annotation_rescaled.shape[0] - 1)
                 xPos = min(max(xPos, 0), annotation_rescaled.shape[1] - 1)
                 atlas_id = annotation_rescaled[yPos, xPos]
-
-                region_info = regions.get(atlas_id)
+                resolved_id = _resolve_label(atlas_id, slice_context)
+                region_info = _region_info(resolved_id)
                 if region_info is None:
-                    # Detection fell on background / an unmapped label; skip it.
                     continue
                 acronym = region_info["acronym"]
-                if args.layers:
-                    # Count the region as is
-                    sums[pName][c][acronym] += 1
-                else:
-                    # Exclude layers
-                    area_name = region_info["name"]
-                    if "layer" in area_name.lower():
-                        id_path = region_info["id_path"].split("/")
-                        if len(id_path) >= 2:
-                            parent_id = np.uint32(id_path[-2])
-                            parent_acronym = regions[parent_id]["acronym"]
-                            sums[pName][c][parent_acronym] += 1
-                        else:
-                            sums[pName][c][acronym] += 1
-                    else:
-                        sums[pName][c][acronym] += 1
+                sums[pName][c][acronym] = sums[pName][c].get(acronym, 0) + 1
 
         # Compute colocalization
         colocalized[pName] = {}

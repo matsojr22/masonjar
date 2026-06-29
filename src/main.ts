@@ -2056,6 +2056,74 @@ function handlePreprocessPreviewStdout(
   return true;
 }
 
+function spawnJsonResultScript(
+  event: { sender: { send: (channel: string, payload: unknown) => void } },
+  scriptName: string,
+  args: string[],
+  resultChannel: string,
+  killChannel: string,
+) {
+  const options = {
+    mode: "text" as const,
+    pythonPath: path.join(envPythonPath, pyCommand),
+    scriptPath: pyScriptsPath,
+    args,
+    env: pythonShellEnv(),
+  };
+  const pyshell = new PythonShell(scriptName, options);
+  attachPythonShellKillCleanup(pyshell, killChannel);
+  let resultPayload: unknown = null;
+  pyshell.on("message", (message: string) => {
+    if (message.startsWith("RESULT:")) {
+      try {
+        resultPayload = JSON.parse(message.slice("RESULT:".length));
+      } catch (parseErr) {
+        console.warn("JSON result parse failed:", parseErr);
+      }
+      return;
+    }
+    if (message.startsWith("LOG:")) {
+      queueLogLineForUi(message.slice("LOG:".length));
+    } else {
+      console.log(message);
+    }
+  });
+  pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+    const pyFail = describePythonShellFailure(err, code, signal);
+    if (pyFail) {
+      reportPythonFailure(pyFail);
+      event.sender.send(resultChannel, { ok: false, error: pyFail });
+    } else if (resultPayload != null) {
+      event.sender.send(resultChannel, resultPayload);
+    } else {
+      event.sender.send(resultChannel, {
+        ok: false,
+        error: "Script finished without result payload",
+      });
+    }
+    ipcMain.removeAllListeners(killChannel);
+  });
+  ipcMain.once(killChannel, function () {
+    pyshell.kill();
+  });
+}
+
+ipcMain.on("runAnnotationLabelAudit", function (event: any, data: any[]) {
+  const annodir = String(data[0] || "").trim();
+  const structPath =
+    String(data[1] || "").trim() || path.join(homeDir, "nrrd", "structure_map.pkl");
+  const args: string[] = [];
+  appendFlagPathArg(args, "--annotations", annodir);
+  appendFlagPathArg(args, "--structures", structPath);
+  spawnJsonResultScript(
+    event,
+    "annotation_label_audit.py",
+    args,
+    "annotationLabelAuditResult",
+    "killAnnotationLabelAudit",
+  );
+});
+
 function spawnPreprocessPreview(
   event: { sender: { send: (channel: string, payload: unknown) => void } },
   scriptName: string,
