@@ -6,6 +6,25 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 ---
 
+## v5.0.0
+
+**What's new**
+
+- Sharpen and Top-hat wizards show a full-resolution filtered preview after you click **Preview filter**, so you can see fine processes and tune radius, amount, and equalize before running the batch.
+- After the first preview, pan and zoom on the filtered view and click **Preview filter** again to refine a smaller sub-region.
+
+**Fixes**
+
+- Preview no longer shows a washed-out low-res slice or a solid black overlay rectangle.
+- Progress text during preview uses plain ASCII (no garbled characters on Windows).
+- Preview PNG matches batch filter output; display min/max sliders apply to the filter view.
+
+**Commit subject**
+
+Sharpen and Top-hat preview show full-resolution filtered ROI for parameter tuning
+
+---
+
 ## v4.1.7
 
 **What's new**
@@ -17,6 +36,7 @@ Do not put agent instructions, file paths, test names, or IPC details here—use
 
 - Sharpen: fixed patchy contrast and banding on 16-bit max projections caused by forced 8-bit normalization and per-tile equalize bounds (v4.1.5–4.1.6 regression).
 - Large slices still use tiled processing for memory safety; each tile runs the same Bell Jar filter core.
+- Sharpen/Top-hat wizard preview no longer auto-shrinks the slice to fit the pane (restores 1:1 zoom on load for tissue ROI work).
 
 **Commit subject**
 

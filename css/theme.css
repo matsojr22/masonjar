@@ -234,11 +234,50 @@ body.tool-page #parent.h-100 {
 	cursor: grab;
 }
 
-.preprocess-preview-pane img {
+.preprocess-preview-transform {
+	transform-origin: 0 0;
+	position: relative;
+	display: inline-block;
+}
+
+.preprocess-preview-transform img {
 	max-width: none;
 	display: block;
 	user-select: none;
-	transform-origin: top left;
+}
+
+#preprocessPreviewOverlay {
+	position: absolute;
+	left: 0;
+	top: 0;
+	pointer-events: none;
+	display: none;
+}
+
+.preprocess-preview-loading {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.55);
+	z-index: 2;
+	color: #f5f5f5;
+}
+
+.preprocess-preview-loading-inner {
+	text-align: center;
+	min-width: 220px;
+	max-width: 90%;
+	padding: 1rem;
+}
+
+.preprocess-preview-pane.preprocess-preview-loading-active {
+	cursor: wait;
+}
+
+.preprocess-preview-pane.preprocess-preview-loading-active .preprocess-preview-transform {
+	opacity: 0.45;
 }
 
 #wizardSteps .nav-link.wizard-step-done {

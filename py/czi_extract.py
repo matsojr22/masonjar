@@ -79,18 +79,21 @@ def max_project_file(input_path: Path, output_path: Path, *, bit_depth: int = 8)
     if not parent.exists():
         emit_log(f"  mkdir {parent}")
     parent.mkdir(parents=True, exist_ok=True)
+    scale_max = None
+    if bit_depth < 16 and arr.dtype == np.uint16:
+        scale_max = _uint16_peak(arr)
     if arr.ndim <= 2:
         emit_log(f"  copy single plane -> {output_path.name}")
-        out = coerce_stack_depth(arr, bit_depth)
+        out = coerce_stack_depth(arr, bit_depth, scale_max=scale_max)
         write_pipeline_tiff(output_path, out, bit_depth)
         return
     if arr.ndim == 3 and arr.shape[0] == 1:
         emit_log(f"  copy single Z plane -> {output_path.name}")
-        out = coerce_stack_depth(arr[0], bit_depth)
+        out = coerce_stack_depth(arr[0], bit_depth, scale_max=scale_max)
         write_pipeline_tiff(output_path, out, bit_depth)
         return
     out = max_project_z(arr)
-    out = coerce_stack_depth(out, bit_depth)
+    out = coerce_stack_depth(out, bit_depth, scale_max=scale_max)
     write_pipeline_tiff(output_path, out, bit_depth)
 
 
@@ -106,7 +109,18 @@ def bit_depth_for_role(cfg: dict, role_key: str) -> int:
     return 16 if depth == 16 else 8
 
 
-def coerce_stack_depth(arr, bit_depth: int):
+def _uint16_peak(arr) -> int:
+    return max(1, int(np.max(arr)))
+
+
+def _uint16_to_uint8_stack_linear(arr, *, scale_max: int | None = None):
+    """Fiji-style 16→8: linear scale by stack/plane peak (not blind /257)."""
+    work = np.asarray(arr)
+    peak = max(1, int(scale_max if scale_max is not None else _uint16_peak(work)))
+    return np.clip(work.astype(np.float64) * 255.0 / peak, 0, 255).astype(np.uint8)
+
+
+def coerce_stack_depth(arr, bit_depth: int, *, scale_max: int | None = None):
     work = np.asarray(arr)
     if bit_depth >= 16:
         if work.dtype == np.uint16:
@@ -128,12 +142,17 @@ def coerce_stack_depth(arr, bit_depth: int):
             return np.clip(work * 255.0, 0, 255).astype(np.uint8)
         return np.clip(work, 0, 255).astype(np.uint8)
     if work.dtype == np.uint16:
-        return (work / 257).astype(np.uint8)
+        return _uint16_to_uint8_stack_linear(work, scale_max=scale_max)
     return np.clip(work, 0, 255).astype(np.uint8)
 
 
 def write_pipeline_tiff(path: Path, arr, bit_depth: int) -> None:
-    out = coerce_stack_depth(arr, bit_depth)
+    work = np.asarray(arr)
+    scale_max = None
+    if bit_depth < 16 and work.dtype == np.uint16:
+        scale_max = _uint16_peak(work)
+        emit_log(f"  LOG: uint16_to_uint8 stack linear scale peak={scale_max}")
+    out = coerce_stack_depth(arr, bit_depth, scale_max=scale_max)
     tiff.imwrite(str(path), out, photometric="minisblack")
 
 

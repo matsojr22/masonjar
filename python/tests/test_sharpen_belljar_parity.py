@@ -59,16 +59,26 @@ def test_sharpen_belljar_core_matches_golden_uint16(equalize: bool) -> None:
     np.testing.assert_array_equal(golden, mason)
 
 
-def test_tiled_matches_full_frame_on_medium_image(monkeypatch) -> None:
+def test_tiled_matches_full_frame_no_equalize(monkeypatch) -> None:
     monkeypatch.setattr(sharpen, "TILED_SHARPEN_PIXEL_THRESHOLD", 1000)
     monkeypatch.setattr(sharpen, "TILED_SHARPEN_TILE", 64)
     monkeypatch.setattr(sharpen, "TILED_SHARPEN_PAD", 8)
     rng = np.random.default_rng(99)
     img = rng.integers(10, 240, (48, 48), dtype=np.uint8)
-    # equalize=False: tiled Bell Jar core should match full-frame core (within pad seams)
     full = sharpen.sharpen_image_belljar(img, radius=2.0, amount=1.5, equalize=False)
     tiled = sharpen.sharpen_image(img, radius=2.0, amount=1.5, equalize=False)
     np.testing.assert_allclose(full, tiled, rtol=0, atol=1)
+
+
+def test_tiled_equalize_matches_full_frame(monkeypatch) -> None:
+    monkeypatch.setattr(sharpen, "TILED_SHARPEN_PIXEL_THRESHOLD", 1000)
+    monkeypatch.setattr(sharpen, "TILED_SHARPEN_TILE", 64)
+    monkeypatch.setattr(sharpen, "TILED_SHARPEN_PAD", 8)
+    rng = np.random.default_rng(11)
+    img = rng.integers(1000, 40000, (48, 48), dtype=np.uint16)
+    full = sharpen.sharpen_image_belljar(img, radius=2.0, amount=1.5, equalize=True)
+    tiled = sharpen.sharpen_image(img, radius=2.0, amount=1.5, equalize=True)
+    np.testing.assert_allclose(full, tiled, rtol=0, atol=2)
 
 
 def test_uint16_output_preserves_dtype() -> None:

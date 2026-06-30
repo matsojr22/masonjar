@@ -104,8 +104,40 @@
             <button type="button" class="btn btn-primary" id="step1Next">Next — Process</button>
           </div>
           <div class="col-md-8">
+            <div
+              id="preprocessPreviewZoomWarning"
+              class="alert alert-warning d-none text-start mb-2"
+              role="alert"
+            ></div>
+            <div
+              id="preprocessPreviewEqualizeNotice"
+              class="alert alert-info d-none text-start mb-2"
+              role="status"
+            >
+              Preview skips equalize on very large slices; the batch run equalizes the whole slice.
+            </div>
             <div id="preprocessPreviewViewport" class="preprocess-preview-pane border rounded">
-              <img id="preprocessPreviewImg" alt="slice preview" draggable="false" />
+              <div id="preprocessPreviewTransform" class="preprocess-preview-transform">
+                <img id="preprocessPreviewImg" alt="slice preview" draggable="false" />
+                <canvas id="preprocessPreviewOverlay" aria-hidden="true"></canvas>
+              </div>
+              <div
+                id="preprocessPreviewLoading"
+                class="preprocess-preview-loading d-none"
+                aria-live="polite"
+              >
+                <div class="preprocess-preview-loading-inner">
+                  <i class="fas fa-spinner fa-spin fa-2x"></i>
+                  <div class="progress mt-3" style="height: 8px">
+                    <div
+                      id="preprocessPreviewProgress"
+                      class="progress-bar progress-bar-striped progress-bar-animated"
+                      style="width: 0%"
+                    ></div>
+                  </div>
+                  <p id="preprocessPreviewProgressText" class="small mb-0 mt-2">0%</p>
+                </div>
+              </div>
             </div>
             <p id="preprocessPreviewStatus" class="small text-muted mt-2">
               Pan/zoom the image, adjust display levels, then click Preview filter.

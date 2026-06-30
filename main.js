@@ -1850,6 +1850,18 @@ function spawnPreprocessPreview(event, scriptName, args, resultChannel, killChan
     const pyshell = new PythonShell(scriptName, options);
     attachPythonShellKillCleanup(pyshell, killChannel);
     pyshell.on("message", (message) => {
+        if (message.startsWith("PROGRESS:")) {
+            const body = message.slice("PROGRESS:".length);
+            const colon = body.indexOf(":");
+            if (colon >= 0) {
+                const pct = Number(body.slice(0, colon));
+                const text = body.slice(colon + 1) || "Preview…";
+                if (!Number.isNaN(pct)) {
+                    event.sender.send("updateLoad", [pct, text]);
+                }
+            }
+            return;
+        }
         if (!handlePreprocessPreviewStdout(event, message, resultChannel)) {
             console.log(message);
         }

@@ -1,8 +1,18 @@
 # Agent session handoff
 
-Last updated: 2026-06-22 (v4.1.7). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-30 (v5.0.0). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
+
+## v5.0.0 — Sharpen / Top-hat preview (2026-06-30)
+
+- **`js/preprocess_wizard.js`**: native-resolution filter-only preview after **Preview filter**; `resolvePreviewRequest` for refine-from-filter-view; `pathToFileURL`; pan/zoom on `#preprocessPreviewTransform`; cursor-anchored zoom; full-slice equalize preview path coordination with Python.
+- **`py/sharpen.py` / `py/top_hat.py`**: raw preview PNG (no percentile stretch); ASCII progress messages; full-slice equalize then crop for sharpen preview on large slices.
+- **`py/grayscale_load.py`**: ROI read helpers for preview paths.
+- **`pages/sharpen_wizard.html` / `pages/tophat_wizard.html` / `css/theme.css`**: preview loading overlay, zoom warning, equalize skip notice.
+- Evidence: [`PREVIEW_FILTER_EVIDENCE.md`](PREVIEW_FILTER_EVIDENCE.md) — Bell Jar batch parity for white top-hat craters; display fix validated on `test_masonjar` / `test_s001`.
+
+**Open follow-ups:** none critical from this release.
 
 ## v4.1.7 — Sharpen Bell Jar parity restore (2026-06-22)
 

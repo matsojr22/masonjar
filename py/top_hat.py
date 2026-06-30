@@ -13,7 +13,12 @@ import cv2
 import numpy as np
 import tifffile as tf
 
-from grayscale_load import load_grayscale_uint8, to_uint8_grayscale  # noqa: F401
+from grayscale_load import (  # noqa: F401
+    load_grayscale_uint8,
+    load_grayscale_uint8_roi,
+    read_image_size,
+    to_uint8_grayscale,
+)
 
 
 def adjust_gamma(image, gamma=1.25):
@@ -48,20 +53,19 @@ def emit_preview_json(payload: dict) -> None:
     print("PREVIEW_JSON:" + json.dumps(payload), flush=True)
 
 
-def stretch_preview_for_display(roi: np.ndarray) -> np.ndarray:
-    """Percentile stretch for wizard preview PNG only (not batch output)."""
+def emit_preview_progress(pct: int, message: str) -> None:
+    print(f"PROGRESS:{int(pct)}:{message}", flush=True)
+
+
+def preview_display_tophat(roi: np.ndarray) -> np.ndarray:
+    """Wizard PNG: no percentile stretch (batch output is unstretched). Mild scale if nearly flat."""
     if roi.size == 0:
         return roi.astype(np.uint8)
-    out = roi.astype(np.float64)
-    lo = float(np.percentile(out, 2))
-    hi = float(np.percentile(out, 98))
-    if hi <= lo:
-        lo = float(out.min())
-        hi = float(out.max())
-    if hi <= lo:
-        return np.zeros(out.shape, dtype=np.uint8)
-    stretched = np.clip((out - lo) / (hi - lo) * 255.0, 0, 255)
-    return stretched.astype(np.uint8)
+    out = roi.astype(np.uint8)
+    mx = int(out.max())
+    if mx < 16:
+        return np.clip(out.astype(np.float64) / max(1, mx) * 255.0, 0, 255).astype(np.uint8)
+    return out
 
 
 def run_preview(args) -> int:
@@ -69,20 +73,30 @@ def run_preview(args) -> int:
     if not path.is_file():
         emit_preview_json({"ok": False, "error": "image not found"})
         return 1
-    img = load_grayscale_uint8(path)
     x, y, w, h = int(args.x), int(args.y), int(args.w), int(args.h)
-    w = max(8, min(w, img.shape[1]))
-    h = max(8, min(h, img.shape[0]))
-    x = max(0, min(x, img.shape[1] - w))
-    y = max(0, min(y, img.shape[0] - h))
     radius = int(args.filter or args.radius or 10)
     gamma = float(args.correction or args.gamma or 1.25)
-    roi = process_roi(img, x, y, w, h, radius, gamma)
-    roi = stretch_preview_for_display(roi)
+    pad = max(1, int(radius))
+    try:
+        img_h, img_w = read_image_size(path)
+    except Exception as exc:
+        emit_preview_json({"ok": False, "error": str(exc)})
+        return 1
+    w = max(8, min(w, img_w))
+    h = max(8, min(h, img_h))
+    x = max(0, min(x, img_w - w))
+    y = max(0, min(y, img_h - h))
+    emit_preview_progress(5, "Reading ROI...")
+    crop, _, _, x0, y0 = load_grayscale_uint8_roi(path, x, y, w, h, pad=pad)
+    emit_preview_progress(40, "Applying filter...")
+    roi = process_roi(crop, x - x0, y - y0, w, h, radius, gamma)
+    roi = preview_display_tophat(roi)
+    emit_preview_progress(85, "Writing preview...")
     out_dir = Path(args.preview_dir.strip()) if args.preview_dir else path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "_tophat_preview.png"
     cv2.imwrite(str(out_path), roi)
+    emit_preview_progress(100, "Done")
     emit_preview_json(
         {
             "ok": True,

@@ -2,6 +2,8 @@
 
 var fs = require("fs");
 var path = require("path");
+var url = require("url");
+var childProcess = require("child_process");
 var ipc = require("electron").ipcRenderer;
 var branding = require("./branding");
 var project = require("./project");
@@ -9,6 +11,8 @@ var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
 var maxDatasets = require("./max_datasets");
 var cziImport = require("./czi_import");
+var fileIndex = require("./file_index");
+var homeDir = require("./home_dir");
 
 var IDLE_PREVIEW_MS = 5000;
 var DEFAULT_VIEW_W = 512;
@@ -17,6 +21,33 @@ var TIFF_SLICE_RE = /\.(tif|tiff)$/i;
 
 /** When false, param/pan/wheel/load never auto-schedule filter preview (manual button only). */
 var AUTO_PREVIEW_ON_INTERACTION = false;
+
+var PREVIEW_TARGET_SECONDS = 10;
+/** Target full-res pixels for one preview ROI (~4 MP ≈ 2k×2k at 10 s on NAS). */
+var PREVIEW_PIXEL_BUDGET = 4_000_000;
+var PREVIEW_ZOOM_WARNING =
+	"Filters cannot be previewed on this much tissue. Please zoom in to try again.";
+var PREVIEW_READY_HINT =
+	"Pan/zoom the image, adjust display levels, then click Preview filter.";
+
+function fileUrlForPath(absPath) {
+	if (!absPath) {
+		return "";
+	}
+	try {
+		return url.pathToFileURL(path.resolve(absPath)).href;
+	} catch (_err) {
+		return "file://" + String(absPath).replace(/\\/g, "/");
+	}
+}
+
+/** Viewport ROI at preview click time; filter PNG is scaled to fill this rect. */
+function resolveFilterDisplayRoi(state) {
+	if (state.lastRoi && state.lastRoi.w > 0 && state.lastRoi.h > 0) {
+		return state.lastRoi;
+	}
+	return state.lastFilterRoi;
+}
 
 function parsePreviewJsonLine(line) {
 	var idx = String(line).indexOf("PREVIEW_JSON:");
@@ -135,9 +166,7 @@ function centerPanForFit(imgW, imgH, viewW, viewH, scale) {
 	};
 }
 
-function fitViewportToImage(state) {
-	var imgW = state.baseNaturalW || DEFAULT_VIEW_W;
-	var imgH = state.baseNaturalH || DEFAULT_VIEW_H;
+function fitViewportToDimensions(state, imgW, imgH) {
 	var viewW = state.viewW || DEFAULT_VIEW_W;
 	var viewH = state.viewH || DEFAULT_VIEW_H;
 	state.scale = fitScaleToViewport(imgW, imgH, viewW, viewH);
@@ -146,21 +175,153 @@ function fitViewportToImage(state) {
 	state.panY = pan.panY;
 }
 
+function fitViewportToImage(state) {
+	fitViewportToDimensions(
+		state,
+		state.baseNaturalW || DEFAULT_VIEW_W,
+		state.baseNaturalH || DEFAULT_VIEW_H,
+	);
+}
+
+function computePreviewZoomPolicy(state) {
+	var previewW = state.baseNaturalW || 0;
+	var previewH = state.baseNaturalH || 0;
+	var fullW = state.fullNaturalW || 0;
+	var fullH = state.fullNaturalH || 0;
+	var viewW = state.viewW || DEFAULT_VIEW_W;
+	var viewH = state.viewH || DEFAULT_VIEW_H;
+	var budget = PREVIEW_PIXEL_BUDGET;
+
+	state.maxFullResPreviewPixels = budget;
+
+	if (!previewW || !previewH || !fullW || !fullH) {
+		state.previewScaleX = 1;
+		state.previewScaleY = 1;
+		state.minPreviewScale = 1;
+		state.previewZoomHint = "";
+		return;
+	}
+
+	var scaleX = fullW / previewW;
+	var scaleY = fullH / previewH;
+	state.previewScaleX = scaleX;
+	state.previewScaleY = scaleY;
+
+	var product = viewW * viewH * scaleX * scaleY;
+	var minScale = Math.sqrt(product / budget);
+	minScale = Math.max(0.1, Math.min(8, minScale));
+	state.minPreviewScale = minScale;
+
+	var currentScale = state.scale || 1;
+	if (currentScale < minScale - 1e-6) {
+		var zoomIn = minScale / currentScale;
+		state.previewZoomHint =
+			PREVIEW_ZOOM_WARNING + " (zoom in ~" + zoomIn.toFixed(1) + "×)";
+	} else {
+		state.previewZoomHint = "";
+	}
+}
+
+function isPreviewZoomEligible(state) {
+	if (!state.fullNaturalW || !state.fullNaturalH) {
+		return false;
+	}
+	if (!state.minPreviewScale) {
+		return true;
+	}
+	return (state.scale || 1) >= state.minPreviewScale - 1e-6;
+}
+
+function capFullResRoi(roi, budget) {
+	var pixels = roi.w * roi.h;
+	if (!budget || pixels <= budget) {
+		return roi;
+	}
+	var scale = Math.sqrt(budget / pixels);
+	var nw = Math.max(8, Math.floor(roi.w * scale));
+	var nh = Math.max(8, Math.floor(roi.h * scale));
+	if (nw > roi.w) {
+		nw = roi.w;
+	}
+	if (nh > roi.h) {
+		nh = roi.h;
+	}
+	return {
+		x: roi.x + Math.floor((roi.w - nw) / 2),
+		y: roi.y + Math.floor((roi.h - nh) / 2),
+		w: nw,
+		h: nh,
+	};
+}
+
 /**
  * Resolve filter IPC target: WYSIWYG on displayed image (preview PNG) or scaled full TIFF.
  * @returns {{ ready: boolean, filterAbs?: string, roi?: object, reason?: string }}
  */
 function resolvePreviewFilterRequest(state, roi, sourceSliceAbs) {
-	var baseAbs = state.baseAbs || sourceSliceAbs;
 	var imgW = state.baseNaturalW;
 	var imgH = state.baseNaturalH;
-	var usingDisplayPreview = baseAbs && baseAbs !== sourceSliceAbs;
 
-	if (usingDisplayPreview) {
+	if (!state.fullNaturalW || !state.fullNaturalH) {
+		return { ready: false, reason: "waiting_for_dimensions" };
+	}
+
+	if (state.minPreviewScale && (state.scale || 1) < state.minPreviewScale - 1e-6) {
+		return { ready: false, reason: "zoom_too_far" };
+	}
+
+	var scaled = scaleRoiForFullRes(
+		roi,
+		imgW,
+		imgH,
+		state.fullNaturalW,
+		state.fullNaturalH,
+	);
+	scaled = capFullResRoi(
+		scaled,
+		state.maxFullResPreviewPixels || PREVIEW_PIXEL_BUDGET,
+	);
+
+	return {
+		ready: true,
+		filterAbs: sourceSliceAbs,
+		roi: scaled,
+		previewRoi: previewRoiFromFullRes(scaled, state),
+	};
+}
+
+/**
+ * Resolve preview IPC from base low-res view or 1:1 filter-native view (after first preview).
+ * @param {object|null} filterBitmapRef - loaded filter image when state.showingFiltered
+ */
+function resolvePreviewRequest(state, filterBitmapRef, sourceSliceAbs) {
+	var budget = state.maxFullResPreviewPixels || PREVIEW_PIXEL_BUDGET;
+
+	if (
+		state.showingFiltered &&
+		filterBitmapRef &&
+		state.lastFullResFilterRoi &&
+		filterBitmapRef.width > 0 &&
+		filterBitmapRef.height > 0
+	) {
+		var fw = filterBitmapRef.width;
+		var fh = filterBitmapRef.height;
+		var localRoi = viewportRoi(state, fw, fh);
+		state.lastRoi = localRoi;
+		var scaled = capFullResRoi(
+			{
+				x: state.lastFullResFilterRoi.x + localRoi.x,
+				y: state.lastFullResFilterRoi.y + localRoi.y,
+				w: localRoi.w,
+				h: localRoi.h,
+			},
+			budget,
+		);
 		return {
 			ready: true,
-			filterAbs: baseAbs,
-			roi: roi,
+			filterAbs: sourceSliceAbs,
+			roi: scaled,
+			previewRoi: { x: 0, y: 0, w: scaled.w, h: scaled.h },
 		};
 	}
 
@@ -168,11 +329,44 @@ function resolvePreviewFilterRequest(state, roi, sourceSliceAbs) {
 		return { ready: false, reason: "waiting_for_dimensions" };
 	}
 
+	if (state.minPreviewScale && (state.scale || 1) < state.minPreviewScale - 1e-6) {
+		return { ready: false, reason: "zoom_too_far" };
+	}
+
+	var imgW = state.baseNaturalW || DEFAULT_VIEW_W;
+	var imgH = state.baseNaturalH || DEFAULT_VIEW_H;
+	var roi = viewportRoi(state, imgW, imgH);
+	state.lastRoi = roi;
+	return resolvePreviewFilterRequest(state, roi, sourceSliceAbs);
+}
+
+function previewRoiFromFullRes(fullRoi, state) {
+	var fullW = state.fullNaturalW || 0;
+	var fullH = state.fullNaturalH || 0;
+	var previewW = state.baseNaturalW || 0;
+	var previewH = state.baseNaturalH || 0;
+	if (!fullW || !fullH || !previewW || !previewH) {
+		return fullRoi;
+	}
+	var sx = previewW / fullW;
+	var sy = previewH / fullH;
 	return {
-		ready: true,
-		filterAbs: sourceSliceAbs,
-		roi: scaleRoiForFullRes(roi, imgW, imgH, state.fullNaturalW, state.fullNaturalH),
+		x: Math.round(fullRoi.x * sx),
+		y: Math.round(fullRoi.y * sy),
+		w: Math.max(1, Math.round(fullRoi.w * sx)),
+		h: Math.max(1, Math.round(fullRoi.h * sy)),
 	};
+}
+
+/** Keep the image point under (mx, my) fixed while changing scale (viewport coords). */
+function applyCursorAnchoredZoom(state, mx, my, delta) {
+	var scale = state.scale || 1;
+	var imgX = (mx - (state.panX || 0)) / scale;
+	var imgY = (my - (state.panY || 0)) / scale;
+	var newScale = Math.min(8, Math.max(0.1, scale * delta));
+	state.panX = mx - imgX * newScale;
+	state.panY = my - imgY * newScale;
+	state.scale = newScale;
 }
 
 function autoStretchImageDataIfFlat(imgData) {
@@ -226,6 +420,45 @@ function applyDisplayWindow(imgData, minVal, maxVal) {
 	return imgData;
 }
 
+/** Replace ROI in base RGBA buffer with filter patch, then apply display min/max.
+ *  filterImgData must already match roi.w × roi.h (scale full-res filter before calling). */
+function bakeFilterIntoBaseImageData(
+	baseImgData,
+	filterImgData,
+	roi,
+	displayMin,
+	displayMax,
+) {
+	var out = {
+		data: new Uint8ClampedArray(baseImgData.data),
+		width: baseImgData.width,
+		height: baseImgData.height,
+	};
+	var bx = Math.max(0, Math.floor(roi.x));
+	var by = Math.max(0, Math.floor(roi.y));
+	var bw = Math.min(Math.floor(roi.w), filterImgData.width);
+	var bh = Math.min(Math.floor(roi.h), filterImgData.height);
+	if (bx + bw > out.width) {
+		bw = out.width - bx;
+	}
+	if (by + bh > out.height) {
+		bh = out.height - by;
+	}
+	for (var dy = 0; dy < bh; dy++) {
+		for (var dx = 0; dx < bw; dx++) {
+			var fIdx = (dy * filterImgData.width + dx) * 4;
+			var bIdx = ((by + dy) * out.width + (bx + dx)) * 4;
+			var gray = filterImgData.data[fIdx];
+			out.data[bIdx] = gray;
+			out.data[bIdx + 1] = gray;
+			out.data[bIdx + 2] = gray;
+			out.data[bIdx + 3] = 255;
+		}
+	}
+	applyDisplayWindow(out, displayMin, displayMax);
+	return out;
+}
+
 function viewportRoi(state, imgW, imgH) {
 	var scale = state.scale || 1;
 	var panX = state.panX || 0;
@@ -249,6 +482,99 @@ function viewportRoi(state, imgW, imgH) {
 
 function shouldSchedulePreviewOnInteraction() {
 	return AUTO_PREVIEW_ON_INTERACTION;
+}
+
+function resolveEnvPython() {
+	var home = homeDir.masonHomePath();
+	if (process.platform === "win32") {
+		return path.join(home, "benv", "Scripts", "python.exe");
+	}
+	return path.join(home, "benv", "bin", "python3");
+}
+
+function lookupImageDimensionsFromIndex(absPath, bundleRoot) {
+	if (!absPath || !bundleRoot) {
+		return null;
+	}
+	var index = fileIndex.readFileIndex(
+		bundleRoot,
+		path.join(bundleRoot, branding.META_DIR),
+	);
+	if (!index || !index.files) {
+		return null;
+	}
+	var target = path.normalize(absPath).toLowerCase();
+	for (var i = 0; i < index.files.length; i++) {
+		var row = index.files[i];
+		if (!row.relPath) {
+			continue;
+		}
+		var rowAbs = path.normalize(path.join(bundleRoot, row.relPath)).toLowerCase();
+		if (rowAbs !== target) {
+			continue;
+		}
+		var meta = row.metadata || {};
+		if (meta.width && meta.height) {
+			return { width: meta.width, height: meta.height };
+		}
+	}
+	return null;
+}
+
+function probeImageDimensionsPy(absPath, cb) {
+	var py = resolveEnvPython();
+	var script = path.join(__dirname, "..", "py", "index_metadata.py");
+	if (!fs.existsSync(py) || !fs.existsSync(script)) {
+		cb(0, 0);
+		return;
+	}
+	var chunks = [];
+	var proc;
+	try {
+		proc = childProcess.spawn(py, [script, absPath], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+	} catch (_err) {
+		cb(0, 0);
+		return;
+	}
+	proc.stdout.on("data", function (d) {
+		chunks.push(d);
+	});
+	proc.on("close", function () {
+		try {
+			var parsed = JSON.parse(Buffer.concat(chunks).toString("utf8") || "[]");
+			var meta = (parsed[0] && parsed[0].metadata) || {};
+			cb(meta.width || 0, meta.height || 0);
+		} catch (_e) {
+			cb(0, 0);
+		}
+	});
+}
+
+function loadFullResDimensions(absPath, cb) {
+	if (!absPath) {
+		cb(0, 0);
+		return;
+	}
+	var root = project.isActive() ? project.getBundleRoot() : "";
+	var fromIndex = lookupImageDimensionsFromIndex(absPath, root);
+	if (fromIndex) {
+		cb(fromIndex.width, fromIndex.height);
+		return;
+	}
+	if (isProcessableTiffName(absPath)) {
+		probeImageDimensionsPy(absPath, cb);
+		return;
+	}
+	var fullImg = new Image();
+	fullImg.onload = function () {
+		cb(fullImg.naturalWidth, fullImg.naturalHeight);
+	};
+	fullImg.onerror = function () {
+		cb(0, 0);
+	};
+	fullImg.src = fileUrlForPath(absPath) + "?t=" + Date.now();
 }
 
 /**
@@ -281,6 +607,8 @@ function wirePreprocessWizard(opts) {
 		showingFiltered: false,
 		filteredBitmap: null,
 		lastRoi: null,
+		lastFilterRoi: null,
+		lastFullResFilterRoi: null,
 		scale: 1,
 		panX: 0,
 		panY: 0,
@@ -302,8 +630,15 @@ function wirePreprocessWizard(opts) {
 	var branchRow = document.getElementById("signalBranchRow");
 	var sourceRow = document.getElementById("sourceDatasetRow");
 	var viewport = document.getElementById("preprocessPreviewViewport");
+	var previewTransform = document.getElementById("preprocessPreviewTransform");
 	var previewImg = document.getElementById("preprocessPreviewImg");
+	var previewOverlay = document.getElementById("preprocessPreviewOverlay");
 	var previewStatus = document.getElementById("preprocessPreviewStatus");
+	var previewZoomWarning = document.getElementById("preprocessPreviewZoomWarning");
+	var previewEqualizeNotice = document.getElementById("preprocessPreviewEqualizeNotice");
+	var previewLoadingEl = document.getElementById("preprocessPreviewLoading");
+	var previewProgressEl = document.getElementById("preprocessPreviewProgress");
+	var previewProgressTextEl = document.getElementById("preprocessPreviewProgressText");
 	var previewFilterBtn = document.getElementById("previewFilterBtn");
 	var displayMinInput = document.getElementById("displayMin");
 	var displayMaxInput = document.getElementById("displayMax");
@@ -321,6 +656,49 @@ function wirePreprocessWizard(opts) {
 	var baseBitmap = null;
 	var filteredBitmap = null;
 	var pendingPreviewAfterDims = false;
+	var lastPreviewProgressPct = 0;
+
+	function updatePreviewZoomWarning() {
+		computePreviewZoomPolicy(state);
+		var eligible = isPreviewZoomEligible(state) || state.showingFiltered;
+		if (previewZoomWarning) {
+			previewZoomWarning.classList.toggle("d-none", eligible);
+			if (!eligible) {
+				previewZoomWarning.textContent =
+					state.previewZoomHint || PREVIEW_ZOOM_WARNING;
+			}
+		}
+		if (previewFilterBtn) {
+			previewFilterBtn.disabled =
+				!eligible || state.previewBusy || state.running;
+		}
+		if (previewStatus && !state.previewBusy) {
+			if (!eligible) {
+				previewStatus.textContent =
+					state.previewZoomHint || PREVIEW_ZOOM_WARNING;
+			} else if (!state.showingFiltered) {
+				previewStatus.textContent = PREVIEW_READY_HINT;
+			}
+		}
+	}
+
+	function showPreviewLoading(on) {
+		if (previewLoadingEl) {
+			previewLoadingEl.classList.toggle("d-none", !on);
+		}
+		if (viewport) {
+			viewport.classList.toggle("preprocess-preview-loading-active", on);
+		}
+		if (on) {
+			lastPreviewProgressPct = 0;
+			if (previewProgressEl) {
+				previewProgressEl.style.width = "0%";
+			}
+			if (previewProgressTextEl) {
+				previewProgressTextEl.textContent = "0%";
+			}
+		}
+	}
 
 	pipelineRun.ensureRunModeUi("runModePanel", stepId);
 
@@ -391,64 +769,83 @@ function wirePreprocessWizard(opts) {
 	}
 
 	function renderPreviewComposite() {
-		if (!previewImg || !baseBitmap) {
+		if (!previewImg) {
+			applyPanZoomCss();
 			return;
 		}
 		readDisplayWindow();
+		if (
+			state.showingFiltered &&
+			filteredBitmap &&
+			filteredBitmap.width > 0 &&
+			filteredBitmap.height > 0
+		) {
+			var fw = filteredBitmap.width;
+			var fh = filteredBitmap.height;
+			var fCanvas = document.createElement("canvas");
+			fCanvas.width = fw;
+			fCanvas.height = fh;
+			var fCtx = fCanvas.getContext("2d");
+			fCtx.imageSmoothingEnabled = false;
+			fCtx.drawImage(filteredBitmap, 0, 0);
+			var fData = fCtx.getImageData(0, 0, fw, fh);
+			applyDisplayWindow(fData, state.displayMin, state.displayMax);
+			fCtx.putImageData(fData, 0, 0);
+			previewImg.src = fCanvas.toDataURL("image/png");
+			if (previewOverlay) {
+				previewOverlay.style.display = "none";
+			}
+			applyPanZoomCss();
+			return;
+		}
+		if (!baseBitmap) {
+			applyPanZoomCss();
+			return;
+		}
+		var w = baseBitmap.width;
+		var h = baseBitmap.height;
 		var canvas = document.createElement("canvas");
-		canvas.width = baseBitmap.width;
-		canvas.height = baseBitmap.height;
+		canvas.width = w;
+		canvas.height = h;
 		var ctx = canvas.getContext("2d");
 		ctx.drawImage(baseBitmap, 0, 0);
-		var imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+		var imgData = ctx.getImageData(0, 0, w, h);
 		applyDisplayWindow(imgData, state.displayMin, state.displayMax);
 		ctx.putImageData(imgData, 0, 0);
-		if (state.showingFiltered && filteredBitmap && state.lastRoi) {
-			var patchCanvas = document.createElement("canvas");
-			patchCanvas.width = filteredBitmap.width;
-			patchCanvas.height = filteredBitmap.height;
-			var patchCtx = patchCanvas.getContext("2d");
-			patchCtx.drawImage(filteredBitmap, 0, 0);
-			var patchData = patchCtx.getImageData(
-				0,
-				0,
-				patchCanvas.width,
-				patchCanvas.height,
-			);
-			patchData = autoStretchImageDataIfFlat(patchData);
-			applyDisplayWindow(patchData, state.displayMin, state.displayMax);
-			patchCtx.putImageData(patchData, 0, 0);
-			ctx.drawImage(
-				patchCanvas,
-				state.lastRoi.x,
-				state.lastRoi.y,
-				state.lastRoi.w,
-				state.lastRoi.h,
-			);
-		}
 		previewImg.src = canvas.toDataURL("image/png");
+		if (previewOverlay) {
+			previewOverlay.style.display = "none";
+		}
+		applyPanZoomCss();
+	}
+
+	function updateEqualizeNotice(data) {
+		if (!previewEqualizeNotice) {
+			return;
+		}
+		if (data && data.equalizeSkipped) {
+			previewEqualizeNotice.classList.remove("d-none");
+		} else {
+			previewEqualizeNotice.classList.add("d-none");
+		}
 	}
 
 	function clearFilteredOverlay() {
 		state.showingFiltered = false;
 		state.filteredBitmap = null;
-		state.lastRoi = null;
+		state.lastFilterRoi = null;
+		state.lastFullResFilterRoi = null;
 		filteredBitmap = null;
-	}
-
-	function loadFullResDimensions(absPath, cb) {
-		if (!absPath) {
-			cb(0, 0);
-			return;
+		if (previewOverlay) {
+			var ctx = previewOverlay.getContext("2d");
+			ctx.clearRect(0, 0, previewOverlay.width, previewOverlay.height);
+			previewOverlay.style.display = "none";
 		}
-		var fullImg = new Image();
-		fullImg.onload = function () {
-			cb(fullImg.naturalWidth, fullImg.naturalHeight);
-		};
-		fullImg.onerror = function () {
-			cb(0, 0);
-		};
-		fullImg.src = "file://" + absPath.replace(/\\/g, "/") + "?t=" + Date.now();
+		updateEqualizeNotice(null);
+		if (baseBitmap) {
+			fitViewportToImage(state);
+			renderPreviewComposite();
+		}
 	}
 
 	function loadBaseSliceImage() {
@@ -466,17 +863,23 @@ function wirePreprocessWizard(opts) {
 		state.scale = 1;
 		state.panX = 0;
 		state.panY = 0;
-		applyPanZoomCss();
 		if (previewStatus) {
-			previewStatus.textContent =
-				"Pan/zoom the image, adjust display levels, then click Preview filter.";
+			previewStatus.textContent = PREVIEW_READY_HINT;
 		}
 		loadFullResDimensions(state.currentSlice.abs, function (fw, fh) {
 			state.fullNaturalW = fw;
 			state.fullNaturalH = fh;
-			if (pendingPreviewAfterDims && fw > 0 && fh > 0) {
-				pendingPreviewAfterDims = false;
-				requestPreview();
+			computePreviewZoomPolicy(state);
+			updatePreviewZoomWarning();
+			if (pendingPreviewAfterDims) {
+				if (fw > 0 && fh > 0) {
+					pendingPreviewAfterDims = false;
+					requestPreview();
+				} else if (previewStatus) {
+					pendingPreviewAfterDims = false;
+					previewStatus.textContent =
+						"Could not read full-resolution image dimensions.";
+				}
 			}
 		});
 		var img = new Image();
@@ -484,8 +887,9 @@ function wirePreprocessWizard(opts) {
 			baseBitmap = img;
 			state.baseNaturalW = img.naturalWidth;
 			state.baseNaturalH = img.naturalHeight;
-			fitViewportToImage(state);
 			applyPanZoomCss();
+			computePreviewZoomPolicy(state);
+			updatePreviewZoomWarning();
 			renderPreviewComposite();
 		};
 		img.onerror = function () {
@@ -493,7 +897,7 @@ function wirePreprocessWizard(opts) {
 				previewStatus.textContent = "Could not load slice image.";
 			}
 		};
-		img.src = "file://" + state.baseAbs.replace(/\\/g, "/") + "?t=" + Date.now();
+		img.src = fileUrlForPath(state.baseAbs) + "?t=" + Date.now();
 	}
 
 	function cancelIdlePreview() {
@@ -626,10 +1030,10 @@ function wirePreprocessWizard(opts) {
 	}
 
 	function applyPanZoomCss() {
-		if (!previewImg) {
+		if (!previewTransform) {
 			return;
 		}
-		previewImg.style.transform =
+		previewTransform.style.transform =
 			"translate(" +
 			state.panX +
 			"px," +
@@ -644,8 +1048,9 @@ function wirePreprocessWizard(opts) {
 			return;
 		}
 		clearFilteredOverlay();
-		renderPreviewComposite();
-		if (previewStatus) {
+		if (!isPreviewZoomEligible(state)) {
+			updatePreviewZoomWarning();
+		} else if (previewStatus) {
 			previewStatus.textContent =
 				"Pan/zoom cleared filter preview — click Preview filter to refresh.";
 		}
@@ -653,6 +1058,11 @@ function wirePreprocessWizard(opts) {
 
 	function sendPreviewIpc(resolved, previewPayload) {
 		state.previewBusy = true;
+		updateEqualizeNotice(null);
+		showPreviewLoading(true);
+		if (previewFilterBtn) {
+			previewFilterBtn.disabled = true;
+		}
 		if (previewStatus) {
 			previewStatus.textContent = "Updating preview…";
 		}
@@ -672,16 +1082,16 @@ function wirePreprocessWizard(opts) {
 			return;
 		}
 		var params = opts.getToolParams();
-		var imgW = state.baseNaturalW || previewImg.naturalWidth || DEFAULT_VIEW_W;
-		var imgH = state.baseNaturalH || previewImg.naturalHeight || DEFAULT_VIEW_H;
-		var roi = viewportRoi(state, imgW, imgH);
-		state.lastRoi = roi;
-		var resolved = resolvePreviewFilterRequest(
+		var resolved = resolvePreviewRequest(
 			state,
-			roi,
+			filteredBitmap,
 			state.currentSlice.abs,
 		);
 		if (!resolved.ready) {
+			if (resolved.reason === "zoom_too_far") {
+				updatePreviewZoomWarning();
+				return;
+			}
 			pendingPreviewAfterDims = true;
 			if (previewStatus) {
 				previewStatus.textContent = "Loading full image dimensions…";
@@ -689,6 +1099,8 @@ function wirePreprocessWizard(opts) {
 			return;
 		}
 		pendingPreviewAfterDims = false;
+		state.lastFilterRoi = resolved.previewRoi || null;
+		state.lastFullResFilterRoi = resolved.roi || null;
 		var metaDir = bundleRoot()
 			? path.join(bundleRoot(), branding.META_DIR)
 			: path.dirname(state.currentSlice.abs);
@@ -719,9 +1131,13 @@ function wirePreprocessWizard(opts) {
 			function (ev) {
 				ev.preventDefault();
 				clearFilterOnViewChange();
+				var rect = viewport.getBoundingClientRect();
+				var mx = ev.clientX - rect.left;
+				var my = ev.clientY - rect.top;
 				var delta = ev.deltaY > 0 ? 0.9 : 1.1;
-				state.scale = Math.min(8, Math.max(0.1, state.scale * delta));
+				applyCursorAnchoredZoom(state, mx, my, delta);
 				applyPanZoomCss();
+				updatePreviewZoomWarning();
 			},
 			{ passive: false },
 		);
@@ -747,6 +1163,7 @@ function wirePreprocessWizard(opts) {
 		});
 		window.addEventListener("mouseup", function () {
 			if (dragging) {
+				updatePreviewZoomWarning();
 				scheduleIdlePreview();
 			}
 			dragging = false;
@@ -986,6 +1403,7 @@ function wirePreprocessWizard(opts) {
 			: "sharpenPreviewResult");
 	ipc.on(previewResultChannel, function (_ev, payload) {
 		state.previewBusy = false;
+		showPreviewLoading(false);
 		var data = payload;
 		if (typeof payload === "string") {
 			data = parsePreviewJsonLine(payload);
@@ -994,27 +1412,40 @@ function wirePreprocessWizard(opts) {
 			if (previewStatus) {
 				previewStatus.textContent = (data && data.error) || "Preview failed";
 			}
+			updatePreviewZoomWarning();
 			return;
 		}
 		if (data.previewPath) {
+			updateEqualizeNotice(data);
 			var filt = new Image();
 			filt.onload = function () {
 				filteredBitmap = filt;
 				state.filteredBitmap = filt;
 				state.showingFiltered = true;
+				fitViewportToDimensions(state, filt.naturalWidth, filt.naturalHeight);
 				renderPreviewComposite();
+				if (previewStatus) {
+					previewStatus.textContent =
+						"Filtered ROI (" +
+						data.width +
+						"x" +
+						data.height +
+						" px) - pan/zoom to refine, then Preview filter again";
+				}
+				updatePreviewZoomWarning();
 			};
 			filt.onerror = function () {
+				state.showingFiltered = false;
+				filteredBitmap = null;
 				if (previewStatus) {
 					previewStatus.textContent = "Could not load filtered preview.";
 				}
+				updatePreviewZoomWarning();
 			};
-			filt.src = "file://" + data.previewPath.replace(/\\/g, "/") + "?t=" + Date.now();
+			filt.src = fileUrlForPath(data.previewPath) + "?t=" + Date.now();
+			return;
 		}
-		if (previewStatus) {
-			previewStatus.textContent =
-				"Filtered preview (" + data.width + "×" + data.height + " ROI)";
-		}
+		updatePreviewZoomWarning();
 	});
 
 	ipc.on(opts.resultIpc, function (_ev, result) {
@@ -1022,6 +1453,21 @@ function wirePreprocessWizard(opts) {
 	});
 
 	ipc.on("updateLoad", function (_ev, response) {
+		if (state.step === 1 && state.previewBusy) {
+			var previewPct = Number(response[0]) || 0;
+			if (previewPct >= lastPreviewProgressPct) {
+				lastPreviewProgressPct = previewPct;
+				if (previewProgressEl) {
+					previewProgressEl.style.width = String(previewPct) + "%";
+				}
+				var previewMsg = response[1] || "Preview...";
+				if (previewProgressTextEl) {
+					previewProgressTextEl.textContent =
+						String(previewPct) + "% - " + previewMsg;
+				}
+			}
+			return;
+		}
 		if (state.step !== 2) {
 			return;
 		}
@@ -1085,6 +1531,9 @@ module.exports = {
 	parsePreviewJsonLine: parsePreviewJsonLine,
 	listSliceImageFiles: listSliceImageFiles,
 	applyDisplayWindow: applyDisplayWindow,
+	fileUrlForPath: fileUrlForPath,
+	resolveFilterDisplayRoi: resolveFilterDisplayRoi,
+	bakeFilterIntoBaseImageData: bakeFilterIntoBaseImageData,
 	shouldSchedulePreviewOnInteraction: shouldSchedulePreviewOnInteraction,
 	findSignalPreviewAbs: findSignalPreviewAbs,
 	findLowResPreviewAbs: findLowResPreviewAbs,
@@ -1092,7 +1541,16 @@ module.exports = {
 	fitScaleToViewport: fitScaleToViewport,
 	centerPanForFit: centerPanForFit,
 	fitViewportToImage: fitViewportToImage,
+	fitViewportToDimensions: fitViewportToDimensions,
 	resolvePreviewFilterRequest: resolvePreviewFilterRequest,
+	resolvePreviewRequest: resolvePreviewRequest,
+	computePreviewZoomPolicy: computePreviewZoomPolicy,
+	isPreviewZoomEligible: isPreviewZoomEligible,
+	capFullResRoi: capFullResRoi,
+	previewRoiFromFullRes: previewRoiFromFullRes,
+	applyCursorAnchoredZoom: applyCursorAnchoredZoom,
+	PREVIEW_PIXEL_BUDGET: PREVIEW_PIXEL_BUDGET,
+	PREVIEW_ZOOM_WARNING: PREVIEW_ZOOM_WARNING,
 	isProcessableTiffName: isProcessableTiffName,
 	autoStretchImageDataIfFlat: autoStretchImageDataIfFlat,
 };
