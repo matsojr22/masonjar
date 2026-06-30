@@ -11,7 +11,6 @@ module.exports = {
 			".env",
 			"README.md",
 			"LICENSE",
-			"AGENTS.md",
 			"^python/", // top-level python/ package only — not node_modules/python-shell
 			"vendor",
 			".cursor",

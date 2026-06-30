@@ -2,7 +2,7 @@
 
 Copy for GitHub releases and suggested git commits. **Newest version at the top.**
 
-Do not put agent instructions, file paths, test names, or IPC details here—use [`AGENT_HANDOFF.md`](AGENT_HANDOFF.md) for that.
+Do not put file paths, test names, or IPC implementation details here—keep release notes readable for lab users.
 
 ---
 

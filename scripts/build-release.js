@@ -352,8 +352,6 @@ function writeManifest(version, targets, artifacts) {
 		"4. Publish: `node scripts/publish-release.js` (Windows zip) or `--all-platforms` for macOS DMGs too.",
 		"5. Artifacts: `masonjar-win32-x64-" + version + ".zip`, `masonjar-" + version + "-x64.dmg`, `masonjar-" + version + "-arm64.dmg`",
 		"",
-		"_Do not use AGENT_HANDOFF.md for GitHub release text — publish reads RELEASE_NOTES.md only._",
-		"",
 		"## Targets built",
 		"",
 	];

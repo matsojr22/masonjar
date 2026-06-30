@@ -1,13 +1,6 @@
 # Commit and release messages (human-facing)
 
-Mason Jar has two audiences. **Do not mix them.**
-
-| Audience | Where to write | Never use for |
-|----------|----------------|---------------|
-| Lab users (PIs, students, you) | [`RELEASE_NOTES.md`](RELEASE_NOTES.md), git commit messages | Agent session notes |
-| Coding agents | [`AGENT_HANDOFF.md`](AGENT_HANDOFF.md) | GitHub “What’s new”, commit subjects |
-
-[`scripts/publish-release.js`](../scripts/publish-release.js) reads **only** `RELEASE_NOTES.md`. It does **not** read `AGENT_HANDOFF.md`.
+[`scripts/publish-release.js`](../scripts/publish-release.js) reads **only** [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
 
 ---
 
@@ -84,13 +77,10 @@ Newest version at the **top** of the file.
 
 ---
 
-## Release checklist (agents)
+## Release checklist
 
 1. Bump `version` in `package.json`.
 2. Add **`docs/RELEASE_NOTES.md`** section for that version (human copy).
-3. Update **`docs/AGENT_HANDOFF.md`** (technical; agents only).
-4. `node scripts/release-message.js` → commit with human subject/body.
-5. `node scripts/build-release.js`
-6. `git tag vX.Y.Z` → `node scripts/publish-release.js`
-
-See also [`AGENTS.md`](../AGENTS.md) — Release builds.
+3. `node scripts/release-message.js` → commit with human subject/body.
+4. `node scripts/build-release.js`
+5. `git tag vX.Y.Z` → `node scripts/publish-release.js`

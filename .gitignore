@@ -140,3 +140,15 @@ CLAUDE.md
 
 # Internal plans
 python/ESTIMATOR_IMPROVEMENTS.md
+
+# --- Local-only (maintainer machine; do not commit) ---
+AGENTS.md
+docs/AGENT_HANDOFF.md
+docs/PREVIEW_FILTER_EVIDENCE.md
+docs/SHARPEN_BELLJAR_DIFF.md
+docs/plan.md
+scripts/sharpen-debug-probe.py
+scripts/sharpen-phase1-trace.py
+scripts/compare-*.py
+scripts/reextract-czi-slice.py
+scripts/out/
