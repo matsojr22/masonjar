@@ -19,7 +19,7 @@ Secondary reference (modern package, not Electron): `belljar-main/python/src/bel
 | 7 | White top-hat | `white_tophat(..., disk(15))` | Same | Same |
 | 8 | Output dtype | `astype(original_dtype)` after equalize block | Always uint8 | Same as Bell Jar |
 | 9 | Writer | `cv2.imwrite` | `tiff.imwrite` uint8 | `tiff.imwrite` (native dtype) |
-| 10 | Preview | None | PNG load + `stretch_preview_for_display` | Same (display-only stretch) |
+| 10 | Preview | None | Native-res filter ROI PNG; raw uint8 (no stretch); wizard filter-only view | Wizard only (v5.0.0+) |
 | 11 | Large images | `ProcessPoolExecutor(4), full RAM | Tiled uint8 + bounds hack | Tiled Bell Jar core per crop (4096 + 32 pad) |
 
 ## Identical filter parameters

@@ -53,24 +53,17 @@ Decompose (equalize full → crop):
 
 ---
 
-## User decisions (Phase 2 approved)
+## Phase 2 implementation (shipped v5.0.0)
 
-- Preview shows **full pipeline** (unsharp + white top-hat), same as batch.
-- Fix **display only**: replace-region composite + display min/max on full frame.
-- **No** percentile stretch on filter PNG.
-- **No** batch kernel changes (`white_tophat(disk(15))` stays).
-
----
-
-## Phase 2 implementation
+Final UX (after display iteration): **native-resolution filter-only view** after Preview filter — not composited onto low-res slice PNG (avoids blur and contrast loss). Display min/max applies to filter image; pan/zoom and re-preview refine sub-regions.
 
 | Change | File |
 |--------|------|
-| Bake filter ROI into base image; apply display window to composite | `js/preprocess_wizard.js` |
-| Raw preview PNG (no stretch branch) | `py/sharpen.py` |
-| Unit test for composite bake | `scripts/test-preprocess-wizard.js` |
+| Filter-native preview + refine-from-filter-view | `js/preprocess_wizard.js` |
+| Raw preview PNG (no stretch branch) | `py/sharpen.py`, `py/top_hat.py` |
+| Tests | `scripts/test-preprocess-wizard.js`, `python/tests/test_sharpen_preview_equalize.py` |
 
----
+**Status:** Closed. Released 2026-06-30 as Mason Jar v5.0.0.
 
 ## Artifacts (`scripts/out/preview-evidence/`)
 

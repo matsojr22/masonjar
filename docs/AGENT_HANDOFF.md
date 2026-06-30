@@ -1,16 +1,34 @@
 # Agent session handoff
 
-Last updated: 2026-06-30 (v5.0.0). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
+Last updated: 2026-06-30 (v5.0.0 shipped). Use this file to resume work; long-term architecture stays in [`../AGENTS.md`](../AGENTS.md).
 
 **GitHub releases and git commits** use human copy in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — not this file. See [`COMMIT_AND_RELEASE.md`](COMMIT_AND_RELEASE.md).
 
+## Session close (2026-06-30)
+
+**Shipped:** [Mason Jar v5.0.0](https://github.com/matsojr22/masonjar/releases/tag/v5.0.0) — Windows zip published (stable). Commit `948162d` on `main`, tag `v5.0.0`.
+
+**What this session fixed:** Sharpen / Top-hat wizard **Preview filter** was unusable for ~15 h of iteration (overlay black rectangle → washed low-res composite → native-res filter-only view). Evidence-first workflow in [`PREVIEW_FILTER_EVIDENCE.md`](PREVIEW_FILTER_EVIDENCE.md). User validated on `test_masonjar` / `test_s001`.
+
+**Not in repo (local diagnostics only, safe to delete or gitignore):**
+
+- `scripts/compare-czi-ground-truth.py`
+- `scripts/compare-sharpen-outputs.py`
+- `scripts/reextract-czi-slice.py`
+- `scripts/sharpen-phase1-trace.py`
+- `scripts/out/preview-evidence/` (PNG artifacts from Phase 1)
+
+**Open follow-ups:** none critical. Optional: re-run Sharpen batch on bundles corrupted under v4.1.3–4.1.6 (see v4.1.7 handoff).
+
+---
+
 ## v5.0.0 — Sharpen / Top-hat preview (2026-06-30)
 
-- **`js/preprocess_wizard.js`**: native-resolution filter-only preview after **Preview filter**; `resolvePreviewRequest` for refine-from-filter-view; `pathToFileURL`; pan/zoom on `#preprocessPreviewTransform`; cursor-anchored zoom; full-slice equalize preview path coordination with Python.
-- **`py/sharpen.py` / `py/top_hat.py`**: raw preview PNG (no percentile stretch); ASCII progress messages; full-slice equalize then crop for sharpen preview on large slices.
-- **`py/grayscale_load.py`**: ROI read helpers for preview paths.
-- **`pages/sharpen_wizard.html` / `pages/tophat_wizard.html` / `css/theme.css`**: preview loading overlay, zoom warning, equalize skip notice.
-- Evidence: [`PREVIEW_FILTER_EVIDENCE.md`](PREVIEW_FILTER_EVIDENCE.md) — Bell Jar batch parity for white top-hat craters; display fix validated on `test_masonjar` / `test_s001`.
+- **`js/preprocess_wizard.js`**: after **Preview filter**, shows **native-resolution filter-only** image (matches batch ROI pixels); pan/zoom + re-preview refines sub-regions via `resolvePreviewRequest` / `lastFullResFilterRoi`; low-res `_previews` PNG for initial slice navigation only; `pathToFileURL`; `#preprocessPreviewTransform` CSS pan/zoom; cursor-anchored wheel zoom; zoom-in gate before first preview on huge TIFFs.
+- **`py/sharpen.py` / `py/top_hat.py`**: raw preview PNG (no percentile stretch); ASCII `PROGRESS:` messages; sharpen preview = full-slice equalize then crop when slice fits budget.
+- **`py/grayscale_load.py`**: ROI read helpers for preview.
+- **`pages/sharpen_wizard.html` / `pages/tophat_wizard.html` / `css/theme.css`**: loading overlay, zoom warning, equalize-skip notice.
+- Evidence: [`PREVIEW_FILTER_EVIDENCE.md`](PREVIEW_FILTER_EVIDENCE.md) — H7 white top-hat soma craters are **batch + Bell Jar** behavior, not preview bugs.
 
 **Open follow-ups:** none critical from this release.
 
