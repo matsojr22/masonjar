@@ -10,11 +10,14 @@ var cziImport = require("./czi_import");
 var importHandoff = require("./import_handoff");
 var orientGeometry = require("./orient_geometry");
 var geometryState = require("./geometry_state");
+var geometryHistory = require("./geometry_history");
 var branding = require("./branding");
+var reextractPicker = require("./czi_reextract_picker");
 
 var ipc = require("electron").ipcRenderer;
 
 var wizardState = {
+	flow: "full",
 	step: 1,
 	parentDir: "",
 	bundleRoot: "",
@@ -24,8 +27,12 @@ var wizardState = {
 	importResult: null,
 	repairMode: false,
 	repairTargets: [],
+	reextractedSliceIds: [],
+	reextractPreviewCacheBuster: null,
 	orientDisplayChannel: cziImport.ORIENT_DISPLAY_DAPI,
 };
+
+var reextractState = reextractPicker.createPickerState();
 
 var extractRunning = false;
 var geometryRunning = false;
@@ -75,6 +82,57 @@ function updateBundlePathPreview() {
 	wizardState.projectFilename = resolved.projectFilename;
 }
 
+function isReextractFlow() {
+	return wizardState.flow === "reextract";
+}
+
+function reextractPanelIdForStep(step) {
+	if (step === 1) {
+		return "stepRe1";
+	}
+	if (step === 2) {
+		return "stepRe2";
+	}
+	if (step === 3) {
+		return "stepRe3";
+	}
+	return "step" + step;
+}
+
+function fullImportPanelIdForStep(step) {
+	return "step" + step;
+}
+
+function updateReextractUiVisibility(active) {
+	var title = qs("cziWizardTitle");
+	var intro = qs("cziWizardIntro");
+	if (title) {
+		title.textContent = active ? "Re-import sections from CZI" : "Import from Zeiss CZI";
+	}
+	if (intro) {
+		intro.classList.toggle("d-none", active);
+	}
+	updateOrientStepChrome();
+	var pills = document.querySelectorAll("#wizardSteps .nav-link");
+	var reextractLabels = ["1. Sections", "2. Channels", "3. Confirm", "4. Extract", "5. Orient", "6. Finish"];
+	var fullLabels = [
+		"1. Location",
+		"2. Scan",
+		"3. Channels / Renaming",
+		"4. Extract",
+		"5. Orient",
+		"6. Finish",
+	];
+	for (var i = 0; i < pills.length; i++) {
+		var stepNum = Number(pills[i].getAttribute("data-step"));
+		if (active && stepNum >= 1 && stepNum <= 6) {
+			pills[i].textContent = reextractLabels[stepNum - 1];
+		} else if (!active && stepNum >= 1 && stepNum <= 6) {
+			pills[i].textContent = fullLabels[stepNum - 1];
+		}
+	}
+}
+
 function setStep(step) {
 	wizardState.step = step;
 	var panels = document.querySelectorAll(".wizard-panel");
@@ -82,7 +140,8 @@ function setStep(step) {
 		panels[i].classList.add("d-none");
 		panels[i].setAttribute("hidden", "");
 	}
-	var active = qs("step" + step);
+	var activeId = isReextractFlow() && step <= 3 ? reextractPanelIdForStep(step) : fullImportPanelIdForStep(step);
+	var active = qs(activeId);
 	if (active) {
 		active.classList.remove("d-none");
 		active.removeAttribute("hidden");
@@ -108,8 +167,10 @@ function setStep(step) {
 	}
 	window.scrollTo(0, 0);
 	updateWizardCancelVisibility();
+	updateOrientStepChrome();
 	if (step === 5) {
 		populateOrientDisplayChannelSelect();
+		updateOrientApplySummary();
 		updateOrientPreviewBanner();
 		renderOrientationGrid();
 	}
@@ -1278,7 +1339,31 @@ function ensureGeometryMap() {
 	);
 }
 
+function updateOrientStepChrome() {
+	var devInfo = qs("orientStepDevInfo");
+	var reextractBanner = qs("orientReextractBanner");
+	var showReextractOrient =
+		isReextractFlow() &&
+		wizardState.reextractedSliceIds &&
+		wizardState.reextractedSliceIds.length > 0;
+	if (devInfo) {
+		devInfo.classList.toggle("d-none", isReextractFlow());
+	}
+	if (reextractBanner) {
+		reextractBanner.classList.toggle("d-none", !showReextractOrient);
+	}
+}
+
+function clearReextractOrientState() {
+	wizardState.reextractedSliceIds = [];
+	wizardState.reextractPreviewCacheBuster = null;
+	updateOrientStepChrome();
+}
+
 function previewUrlCacheBuster() {
+	if (wizardState.reextractPreviewCacheBuster) {
+		return String(wizardState.reextractPreviewCacheBuster);
+	}
 	var appliedAt =
 		wizardState.cziImport && wizardState.cziImport.geometry_applied_at;
 	if (appliedAt) {
@@ -1307,6 +1392,11 @@ function fileUrlForPath(filePath, cacheBuster) {
 function updateOrientApplySummary() {
 	var el = qs("orientApplySummary");
 	if (!el) {
+		return;
+	}
+	if (wizardState.reextractedSliceIds && wizardState.reextractedSliceIds.length) {
+		el.textContent = "";
+		el.classList.add("d-none");
 		return;
 	}
 	var appliedAt =
@@ -1427,7 +1517,7 @@ function updateOrientPreviewBanner() {
 async function runOrientPreviewRepair() {
 	var health = updateOrientPreviewBanner();
 	cziImport.ensureOrientDapiPreviewsFromPipeline(wizardState.bundleRoot);
-	wizardState.repairMode = true;
+	wizardState.repairMode = "previews";
 	wizardState.repairTargets = cziImport.buildRepairTargetsFromAudit(
 		health.audit,
 		wizardState.cziImport,
@@ -1485,9 +1575,11 @@ function renderOrientationGrid() {
 			tile.appendChild(viewport);
 			var hint = document.createElement("p");
 			hint.className = "czi-orient-preview-hint";
-			hint.textContent = orientGeometry.orientPreviewHintText(
+			hint.textContent = orientGeometry.reimportTileHintText(
+				sliceId,
+				wizardState.reextractedSliceIds,
+				geom,
 				wizardState.cziImport.geometry_applied_at,
-				countNonIdentityGeometry(),
 			);
 			tile.appendChild(hint);
 		} else {
@@ -1548,28 +1640,44 @@ function finalizeGeometryAfterApply(payload) {
 		omitConfigKeys: wizardState.repairMode ? null : ["repair_mode", "repair_targets"],
 	});
 	persistCziSettings();
+	if (isReextractFlow()) {
+		clearReextractOrientState();
+	}
 	updateOrientApplySummary();
 	renderOrientationGrid();
 }
 
 function writeImportConfig() {
 	var axonSel = qs("axonBitDepth");
-	if (axonSel) {
+	if (axonSel && !isReextractFlow()) {
 		if (!wizardState.cziImport.bit_depth_by_role) {
 			wizardState.cziImport.bit_depth_by_role = {};
 		}
 		wizardState.cziImport.bit_depth_by_role.signal_axons = Number(axonSel.value) || 8;
 	}
 	var extra = {};
-	if (wizardState.repairMode) {
+	var isRepair = wizardState.repairMode === "previews" || wizardState.repairMode === "reextract";
+	if (wizardState.repairMode === "previews") {
 		extra.repair_mode = "previews";
 		extra.repair_targets = wizardState.repairTargets || [];
+	} else if (wizardState.repairMode === "reextract") {
+		var proj = project.getProject();
+		var reextractPayload = cziImport.buildReextractConfig(
+			wizardState.cziImport,
+			wizardState.repairTargets || [],
+			proj,
+		);
+		extra.repair_mode = "reextract";
+		extra.repair_targets = reextractPayload.repair_targets;
+		if (reextractPayload.max_runs) {
+			extra.max_runs = reextractPayload.max_runs;
+		}
 	}
 	var cfgPath = geometryState.writeCziImportConfig(
 		wizardState.bundleRoot,
 		wizardState.cziImport,
 		extra,
-		wizardState.repairMode ? {} : { omitKeys: ["repair_mode", "repair_targets"] },
+		isRepair ? {} : { omitKeys: ["repair_mode", "repair_targets"] },
 	);
 	return cfgPath;
 }
@@ -1990,7 +2098,7 @@ async function tryResumeCziImportAfterStep1() {
 		return true;
 	}
 	if (audit.needsPreviewRepair) {
-		wizardState.repairMode = true;
+		wizardState.repairMode = "previews";
 		wizardState.repairTargets = cziImport.buildRepairTargetsFromAudit(audit, saved);
 		verboseExtractLog(
 			"Repairing " + wizardState.repairTargets.length + " preview(s) from existing z-stacks…",
@@ -2031,6 +2139,10 @@ async function runExtract(options) {
 	if (!options.repairOnly) {
 		wizardState.repairMode = false;
 		wizardState.repairTargets = [];
+	} else if (options.mode === "reextract") {
+		wizardState.repairMode = "reextract";
+	} else {
+		wizardState.repairMode = "previews";
 	}
 	setStep(4);
 	var cancelBtn = qs("cancelExtract");
@@ -2043,10 +2155,14 @@ async function runExtract(options) {
 	}
 	setExtractNavDisabled(true);
 	updateWizardCancelVisibility();
+	var startLabel = "Starting CZI extraction…";
+	if (wizardState.repairMode === "previews") {
+		startLabel = "Starting preview repair…";
+	} else if (wizardState.repairMode === "reextract") {
+		startLabel = "Starting CZI re-import…";
+	}
 	setExtractActivity("Preparing bundle and config…", 2);
-	verboseExtractLog(
-		wizardState.repairMode ? "Starting preview repair…" : "Starting CZI extraction…",
-	);
+	verboseExtractLog(startLabel);
 
 	await ensureBundleCreated();
 	writeImportConfig();
@@ -2117,6 +2233,39 @@ async function runExtract(options) {
 			}
 			wizardState.cziImport.preview_format_version =
 				payload.preview_format_version || cziImport.PREVIEW_FORMAT_VERSION;
+			var wasReextract = wizardState.flow === "reextract";
+			var reextractTargets = wasReextract
+				? (wizardState.repairTargets || []).slice()
+				: [];
+			if (wasReextract && reextractTargets.length) {
+				var sliceIdSet = {};
+				for (var rt = 0; rt < reextractTargets.length; rt++) {
+					var sid = reextractTargets[rt].slice_id;
+					if (sid) {
+						sliceIdSet[sid] = true;
+					}
+				}
+				wizardState.reextractedSliceIds = Object.keys(sliceIdSet);
+				var reconcileResult = geometryHistory.reconcileGeometryAfterReextract(
+					wizardState.bundleRoot,
+					wizardState.cziImport,
+					wizardState.reextractedSliceIds,
+				);
+				wizardState.reextractPreviewCacheBuster = Date.now();
+				if (reconcileResult.restored.length) {
+					verboseExtractLog(
+						"Restored pending geometry for " +
+							reconcileResult.restored.length +
+							" re-imported section(s) from history.",
+					);
+				}
+				if (reconcileResult.missing.length) {
+					verboseExtractLog(
+						"No geometry history for re-imported section(s): " +
+							reconcileResult.missing.join(", "),
+					);
+				}
+			}
 			wizardState.repairMode = false;
 			wizardState.repairTargets = [];
 			persistCziSettings();
@@ -2344,8 +2493,11 @@ async function finishWizard(geometryPayload) {
 			"Preview format v" + wizardState.cziImport.preview_format_version + " (PNG low-res previews)",
 		);
 	}
-	if (wizardState.repairMode || (wizardState.repairTargets && wizardState.repairTargets.length)) {
+	if (wizardState.repairMode === "previews" || (wizardState.repairTargets && wizardState.repairTargets.length && wizardState.flow !== "reextract")) {
 		verboseFinishLog("Note: preview repair was used earlier in this wizard session.");
+	}
+	if (wizardState.flow === "reextract") {
+		verboseFinishLog("Note: selective CZI re-import was used in this session.");
 	}
 	var maxKeys = Object.keys(maxRuns);
 	if (maxKeys.length) {
@@ -2633,6 +2785,139 @@ function bindWizardNavigationGuards() {
 	});
 }
 
+function bindReextractSteps() {
+	var showBlank = qs("reextractShowBlankOnly");
+	if (showBlank) {
+		showBlank.addEventListener("change", function () {
+			reextractPicker.renderSliceList(reextractState, qs);
+		});
+	}
+	var selectAll = qs("reextractSelectAllSlices");
+	if (selectAll) {
+		selectAll.addEventListener("click", function () {
+			for (var i = 0; i < reextractState.sliceIds.length; i++) {
+				var sid = reextractState.sliceIds[i];
+				if (showBlank && showBlank.checked && !reextractState.blankSliceIds[sid]) {
+					continue;
+				}
+				reextractState.selectedSliceIds[sid] = true;
+			}
+			reextractPicker.renderSliceList(reextractState, qs);
+		});
+	}
+	var clearAll = qs("reextractClearAllSlices");
+	if (clearAll) {
+		clearAll.addEventListener("click", function () {
+			reextractState.selectedSliceIds = {};
+			reextractPicker.renderSliceList(reextractState, qs);
+		});
+	}
+	var step1Next = qs("reextractStep1Next");
+	if (step1Next) {
+		step1Next.addEventListener("click", function () {
+			if (!reextractPicker.selectedSliceIdList(reextractState).length) {
+				alert("Select at least one section.");
+				return;
+			}
+			reextractPicker.renderChannelList(reextractState, qs);
+			setStep(2);
+		});
+	}
+	var step2Back = qs("reextractStep2Back");
+	if (step2Back) {
+		step2Back.addEventListener("click", function () {
+			setStep(1);
+		});
+	}
+	var step2Next = qs("reextractStep2Next");
+	if (step2Next) {
+		step2Next.addEventListener("click", function () {
+			if (!reextractPicker.selectedRoleKeyList(reextractState).length) {
+				var val = qs("reextractChannelValidation");
+				if (val) {
+					val.textContent = "Select at least one channel.";
+					val.classList.remove("d-none");
+				}
+				return;
+			}
+			var valHide = qs("reextractChannelValidation");
+			if (valHide) {
+				valHide.classList.add("d-none");
+			}
+			reextractPicker.renderConfirmStep(reextractState, qs);
+			setStep(3);
+		});
+	}
+	var step3Back = qs("reextractStep3Back");
+	if (step3Back) {
+		step3Back.addEventListener("click", function () {
+			setStep(2);
+		});
+	}
+	var confirmBox = qs("reextractConfirmOverwrite");
+	if (confirmBox) {
+		confirmBox.addEventListener("change", function () {
+			reextractPicker.renderConfirmStep(reextractState, qs);
+		});
+	}
+	var step3Run = qs("reextractStep3Run");
+	if (step3Run) {
+		step3Run.addEventListener("click", function () {
+			var info = reextractPicker.renderConfirmStep(reextractState, qs);
+			if (!info.validation.ok) {
+				alert("Source CZI file(s) missing on disk.");
+				return;
+			}
+			wizardState.repairTargets = reextractPicker.buildTargets(reextractState);
+			runExtract({ repairOnly: true, mode: "reextract" })
+				.then(function () {
+					setStep(5);
+				})
+				.catch(function (err) {
+					console.error("[CziWizard] reextract", err);
+					alert(String(err.message || err));
+				});
+		});
+	}
+}
+
+async function startReextractFlow(params) {
+	project.tryRestoreActiveProject();
+	if (!project.isActive()) {
+		alert("Open a CZI-imported project before re-importing sections.");
+		window.location.replace("./menu.html");
+		return false;
+	}
+	wizardState.flow = "reextract";
+	wizardState.bundleRoot = project.getBundleRoot();
+	project.openProject(wizardState.bundleRoot);
+	var proj = project.getProject() || project.readProjectJson(wizardState.bundleRoot);
+	var saved = proj && proj.settings && proj.settings.czi_import;
+	if (!saved || !saved.files || !saved.files.length) {
+		alert(
+			"This project has no CZI import settings. Use Import from Zeiss CZI for new projects.",
+		);
+		window.location.replace("./workspace_menu.html");
+		return false;
+	}
+	hydrateWizardFromSavedCziImport(saved);
+	cziImport.ensureOrientDapiPreviewsFromPipeline(wizardState.bundleRoot);
+	updateReextractUiVisibility(true);
+	var preselected = reextractPicker.parsePreselectedSlices(
+		params ? params.toString() : window.location.search,
+	);
+	reextractPicker.initPicker(reextractState, wizardState.bundleRoot, saved, proj, preselected);
+	bindReextractSteps();
+	setStep(1);
+	try {
+		await reextractPicker.scanBlankPreviewsAsync(reextractState, qs);
+	} catch (err) {
+		console.error("[CziWizard] reextract blank scan", err);
+		reextractPicker.renderSliceList(reextractState, qs);
+	}
+	return true;
+}
+
 pageInit.onReady(function () {
 	pageInit.installGlobalErrorHandler();
 	bindStep1();
@@ -2644,5 +2929,10 @@ pageInit.onReady(function () {
 	bindAxonBitDepth();
 	bindWizardStepPills();
 	bindWizardNavigationGuards();
-	setStep(1);
+	var params = new URLSearchParams(window.location.search);
+	if (params.get("flow") === "reextract") {
+		startReextractFlow(params);
+	} else {
+		setStep(1);
+	}
 });

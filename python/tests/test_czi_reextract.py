@@ -90,3 +90,25 @@ def test_refresh_max_slices_in_run_overwrites_active_leaf(bundle_with_max_run: P
     assert n == 1
     after = np.asarray(tiff.imread(str(out_path)))
     assert int(after.max()) > 0
+
+
+def test_reextract_cfg_preserves_axon_bit_depth() -> None:
+    import czi_extract as ce
+
+    from czi_common import ROLE_SIGNAL_AXONS
+
+    cfg = {"bit_depth_by_role": {"signal_axons": 16}}
+    assert ce.bit_depth_for_role(cfg, ROLE_SIGNAL_AXONS) == 16
+
+
+def test_reextract_uint16_max_uses_linear_coerce() -> None:
+    import czi_extract as ce
+
+    ce.np = np
+    peak = 9727
+    stack = np.zeros((3, 8, 8), dtype=np.uint16)
+    stack[:, 2:6, 2:6] = peak
+    out = ce.coerce_stack_depth(stack, ce.bit_depth_for_role({"bit_depth_by_role": {"signal_axons": 8}}, "signal_axons"))
+    assert out.dtype == np.uint8
+    assert int(out.max()) == 255
+    assert int(out[1, 3, 3]) > 200

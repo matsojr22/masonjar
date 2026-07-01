@@ -249,6 +249,23 @@ function orientPreviewHintText(geometryAppliedAt, pendingCount) {
 	return "Showing on-disk previews.";
 }
 
+function reimportTileHintText(sliceId, reextractedSliceIds, geom, geometryAppliedAt) {
+	var reimported =
+		reextractedSliceIds &&
+		reextractedSliceIds.indexOf(sliceId) >= 0;
+	if (!reimported) {
+		var pending = geometryHasPending(geom) ? 1 : 0;
+		return orientPreviewHintText(geometryAppliedAt, pending);
+	}
+	if (geometryHasPending(geom)) {
+		return (
+			"Re-imported from CZI — preview shows your saved rotation. " +
+			"Confirm geometry to update files."
+		);
+	}
+	return "Re-imported from CZI — use rotate/flip, then Confirm geometry.";
+}
+
 function orientPostApplySummaryText(geometryAppliedAt, filesTotal) {
 	if (!geometryAppliedAt) {
 		return "";
@@ -288,5 +305,6 @@ module.exports = {
 	updateTileGeometryDom: updateTileGeometryDom,
 	wireOrientationGridClicks: wireOrientationGridClicks,
 	orientPreviewHintText: orientPreviewHintText,
+	reimportTileHintText: reimportTileHintText,
 	orientPostApplySummaryText: orientPostApplySummaryText,
 };

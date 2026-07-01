@@ -6,6 +6,27 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v5.0.1
+
+**What's new**
+
+**Re-import sections from CZI** is back in the workspace and preprocess menus. It uses the same import wizard as a full CZI import, so extract, bit depth, max projection, and Orient all follow one familiar path.
+
+**Fixes**
+
+- Re-import preserves saved bit depth and max-projection settings, including 16-bit axon scaling from v5.0.0.
+- After re-import, Orient (step 5) restores your saved rotation preview from geometry history, clears stale “already applied” messaging, and asks you to **Confirm geometry** to write files again.
+
+**Commit subject**
+
+Fix CZI re-import and Orient after re-read from CZI
+
+**Commit body**
+
+Re-import sections from CZI again runs through the main CZI import wizard instead of a separate broken page. After re-read, Orient restores saved rotation from geometry history and clears misleading “already applied” banners so you can confirm geometry and re-bake files.
+
+---
+
 ## v5.0.0
 
 **What's new**

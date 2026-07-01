@@ -264,7 +264,7 @@ function updateOrientPreviewBanner() {
 					return encodeURIComponent(b.slice_id);
 				})
 				.join(",");
-			reimportLink.href = "./czi_reimport_wizard.html?slices=" + sliceParam;
+			reimportLink.href = "./czi_wizard.html?flow=reextract&slices=" + sliceParam;
 		}
 	}
 	if (rebuildLink) {

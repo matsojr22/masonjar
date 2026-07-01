@@ -48,12 +48,33 @@
       .czi-channel-table td {
         vertical-align: middle;
       }
+      .reextract-slice-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 0.75rem;
+        text-align: left;
+      }
+      .reextract-slice-card {
+        border: 1px solid var(--mj-border, #ccc);
+        border-radius: 0.375rem;
+        padding: 0.5rem;
+        background: var(--mj-surface, #fff);
+      }
+      .reextract-slice-card img {
+        width: 100%;
+        max-height: 90px;
+        object-fit: contain;
+        background: #111;
+      }
+      .reextract-slice-card.blank-dapi {
+        border-color: var(--bs-warning, #ffc107);
+      }
     </style>
   </head>
   <body class="wizard-page">
     <div id="parent" class="container py-4 workspace-block text-start">
-      <h1>Import from Zeiss CZI</h1>
-      <p class="text-muted">
+      <h1 id="cziWizardTitle">Import from Zeiss CZI</h1>
+      <p id="cziWizardIntro" class="text-muted">
         Probe <code>.czi</code> files, assign channels, extract z-stacks and previews, max-project
         signal channels, then confirm slice orientation before opening the pipeline.
       </p>
@@ -86,6 +107,70 @@
           <input type="text" class="form-control" id="bundlePath" readonly />
         </div>
         <button type="button" class="btn btn-primary" id="step1Next">Next</button>
+      </section>
+
+      <section id="stepRe1" class="wizard-panel d-none" hidden>
+        <p class="text-muted small">
+          Select sections to re-read from source <code>.czi</code> files. Only kept channels from
+          your original import are available on the next step.
+        </p>
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+          <div class="form-check mb-0">
+            <input class="form-check-input" type="checkbox" id="reextractShowBlankOnly" />
+            <label class="form-check-label" for="reextractShowBlankOnly">Show blank DAPI only</label>
+          </div>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="reextractSelectAllSlices">
+            Select all
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="reextractClearAllSlices">
+            Clear all
+          </button>
+        </div>
+        <p id="reextractSliceScanStatus" class="small text-muted mb-2"></p>
+        <div id="reextractSliceList" class="reextract-slice-grid mb-3"></div>
+        <button type="button" class="btn btn-primary" id="reextractStep1Next">Next</button>
+      </section>
+
+      <section id="stepRe2" class="wizard-panel d-none" hidden>
+        <p class="text-muted small">
+          Choose channels to re-extract for the selected sections. Source paths must still exist on
+          disk.
+        </p>
+        <div id="reextractChannelList" class="mb-3"></div>
+        <p id="reextractChannelValidation" class="small text-danger d-none"></p>
+        <button type="button" class="btn btn-outline-secondary me-2" id="reextractStep2Back">
+          Back
+        </button>
+        <button type="button" class="btn btn-primary" id="reextractStep2Next">Next</button>
+      </section>
+
+      <section id="stepRe3" class="wizard-panel d-none" hidden>
+        <div id="reextractConfirmWarnings" class="alert alert-warning small d-none"></div>
+        <div class="table-responsive mb-3">
+          <table class="table table-sm table-bordered" id="reextractConfirmTable">
+            <thead>
+              <tr>
+                <th>Section</th>
+                <th>Channel</th>
+                <th>Source CZI</th>
+                <th>Outputs</th>
+              </tr>
+            </thead>
+            <tbody id="reextractConfirmTableBody"></tbody>
+          </table>
+        </div>
+        <div class="form-check mb-3">
+          <input class="form-check-input" type="checkbox" id="reextractConfirmOverwrite" />
+          <label class="form-check-label" for="reextractConfirmOverwrite">
+            Overwrite selected files on disk
+          </label>
+        </div>
+        <button type="button" class="btn btn-outline-secondary me-2" id="reextractStep3Back">
+          Back
+        </button>
+        <button type="button" class="btn btn-primary" id="reextractStep3Run" disabled>
+          Run re-import
+        </button>
       </section>
 
       <section id="step2" class="wizard-panel d-none">
@@ -345,10 +430,14 @@
       </section>
 
       <section id="step5" class="wizard-panel d-none">
-        <div class="alert alert-info small py-2 mb-3">
+        <div id="orientStepDevInfo" class="alert alert-info small py-2 mb-3">
           The grid shows <strong>_previews</strong> PNGs (DAPI: <code>{sliceId}_dapi.png</code>).
           Geometry applies to <code>00_dapi</code>, all <code>_previews</code>, z-stacks, and max
           projections — once per slice, not per channel.
+        </div>
+        <div id="orientReextractBanner" class="alert alert-warning small py-2 mb-3 d-none">
+          Some sections were re-read from CZI. Check orientation below and click
+          <strong>Confirm geometry</strong>.
         </div>
         <div id="orientPreviewBanner" class="alert alert-warning d-none small py-2 mb-3"></div>
         <div id="orientGeometryBanner" class="alert alert-danger d-none small py-2 mb-3"></div>

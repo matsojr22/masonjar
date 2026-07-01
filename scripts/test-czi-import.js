@@ -5,6 +5,7 @@ var fs = require("fs");
 var os = require("os");
 var path = require("path");
 var url = require("url");
+var { execFileSync } = require("child_process");
 var cziImport = require("../js/czi_import");
 
 function testDefaultSliceId() {
@@ -937,6 +938,75 @@ function testComputeMeanLumaFromImageData() {
 	assert.ok(mean > 100);
 }
 
+function testBuildReextractConfigPreservesBitDepth() {
+	var cfg = {
+		files: [
+			{
+				basename: "A.czi",
+				path: "/scan/A.czi",
+				scenes: [{ index: 0, sliceId: "M467_s006" }],
+			},
+		],
+		channels: [{ file: "A.czi", index: 0, role: cziImport.ROLE_DAPI, keep: true }],
+		bit_depth_by_role: { signal_axons: 16 },
+		preview_scale: 0.05,
+		primary_signal_role: cziImport.ROLE_SIGNAL_SOMATA,
+	};
+	var payload = cziImport.buildReextractConfig(cfg, [], null);
+	assert.strictEqual(payload.repair_mode, "reextract");
+	assert.strictEqual(payload.bit_depth_by_role.signal_axons, 16);
+	assert.strictEqual(payload.preview_scale, 0.05);
+}
+
+function testCziWizardModulesParse() {
+	var repoRoot = path.join(__dirname, "..");
+	var node = process.execPath;
+	var files = ["js/czi_wizard.js", "js/czi_reextract_picker.js", "js/geometry_history.js"];
+	for (var i = 0; i < files.length; i++) {
+		execFileSync(node, ["--check", path.join(repoRoot, files[i])], { stdio: "pipe" });
+	}
+}
+
+function testGeometryHistoryParseAndReconcile() {
+	var geometryHistory = require("../js/geometry_history");
+	var branding = require("../js/branding");
+
+	var jsonl =
+		'{"kind":"file","slice_id":"M528_s001","ops":["rot90"]}\n' +
+		'{"kind":"file","slice_id":"M528_s001","ops":["rot90","flipX"]}\n' +
+		'{"kind":"file","slice_id":"M528_s002","ops":[]}\n' +
+		'{"kind":"batch","slice_id":"M528_s003"}\n';
+
+	var entries = geometryHistory.parseGeometryHistoryJsonl(jsonl);
+	assert.strictEqual(entries.length, 4);
+
+	var lastOps = geometryHistory.lastOpsBySliceId(entries, ["M528_s001", "M528_s002", "M528_s003"]);
+	assert.deepStrictEqual(lastOps["M528_s001"], ["rot90", "flipX"]);
+	assert.strictEqual(lastOps["M528_s002"], undefined);
+	assert.strictEqual(lastOps["M528_s003"], undefined);
+
+	var bundle = fs.mkdtempSync(path.join(os.tmpdir(), "geom-reconcile-"));
+	var metaDir = path.join(bundle, branding.META_DIR);
+	fs.mkdirSync(metaDir, { recursive: true });
+	fs.writeFileSync(path.join(metaDir, geometryHistory.HISTORY_FILENAME), jsonl, "utf8");
+
+	var cziImport = {
+		geometry: { M528_s001: { ops: [] }, M528_s099: { ops: ["flipY"] } },
+		geometry_applied_at: "2026-01-01T00:00:00Z",
+		geometry_applied_files_total: 42,
+	};
+	var result = geometryHistory.reconcileGeometryAfterReextract(bundle, cziImport, [
+		"M528_s001",
+		"M528_s004",
+	]);
+	assert.deepStrictEqual(result.restored, ["M528_s001"]);
+	assert.deepStrictEqual(result.missing, ["M528_s004"]);
+	assert.deepStrictEqual(cziImport.geometry["M528_s001"].ops, ["rot90", "flipX"]);
+	assert.deepStrictEqual(cziImport.geometry["M528_s099"].ops, ["flipY"]);
+	assert.strictEqual(cziImport.geometry_applied_at, undefined);
+	assert.strictEqual(cziImport.geometry_applied_files_total, undefined);
+}
+
 testLowResTiffAudit();
 testResolveOrientPreviewPath();
 testListOrientDisplayChannels();
@@ -946,4 +1016,7 @@ testPathToFileURLSpaces();
 testBuildRepairTargetsForSelection();
 testFindBlankPreviews();
 testComputeMeanLumaFromImageData();
+testBuildReextractConfigPreservesBitDepth();
+testGeometryHistoryParseAndReconcile();
+testCziWizardModulesParse();
 console.log("test-czi-import.js: OK");
