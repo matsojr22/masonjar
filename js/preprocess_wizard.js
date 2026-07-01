@@ -1315,13 +1315,19 @@ function wirePreprocessWizard(opts) {
 				(result && result.message) ||
 				"Processing failed. Check the Application log for details.";
 			appendLog("[Wizard] Failed: " + msg);
-			if (processMessage) {
-				processMessage.textContent = msg;
-			}
-			alert(msg);
-			return;
+		if (processMessage) {
+			processMessage.textContent = msg;
 		}
-		if (processProgress) {
+		alert(msg);
+		return;
+	}
+	if (result && result.message) {
+		appendLog("[Wizard] " + result.message);
+		if (processMessage) {
+			processMessage.textContent = result.message;
+		}
+	}
+	if (processProgress) {
 			processProgress.style.width = "100%";
 		}
 		if (setActiveCheckbox && setActiveCheckbox.checked && state.lastRunRel) {

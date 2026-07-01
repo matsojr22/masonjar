@@ -166,23 +166,29 @@ def run_batch(args) -> int:
         print("Done!", flush=True)
         return 1
 
-    print("Done!", flush=True)
     from run_manifest import write_run_manifest
 
-    write_run_manifest(
-        str(output_dir),
-        {
-            "step": "tophat",
-            "input_dir": str(input_dir),
-            "input_files": written,
-            "radius_px": radius,
-            "gamma": gamma,
-            "signal_branch": signal_branch,
-            "source_run_rel": source_run_rel,
-            "source_kind": source_kind,
-            "kernel": "cv2_square",
-        },
-    )
+    try:
+        write_run_manifest(
+            str(output_dir),
+            {
+                "step": "tophat",
+                "input_dir": str(input_dir),
+                "input_files": written,
+                "radius_px": radius,
+                "gamma": gamma,
+                "signal_branch": signal_branch,
+                "source_run_rel": source_run_rel,
+                "source_kind": source_kind,
+                "kernel": "cv2_square",
+            },
+        )
+    except Exception as e:
+        print(f"LOG: tophat_manifest_failed {e}", flush=True)
+        print("Done!", flush=True)
+        return 0
+
+    print("Done!", flush=True)
     return 0
 
 

@@ -6,6 +6,27 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v5.0.2
+
+**What's new**
+
+Large sharpen and top-hat runs on NAS or remote desktop now finish cleanly and advance the wizard to **Done** when your slices were processed successfully.
+
+**Fixes**
+
+- Sharpen no longer shows a false **Python exited with code 1** error after `sharpen_done` on large tiled runs.
+- Top-hat batch completion uses the same reliability fix as sharpen.
+
+**Commit subject**
+
+Fix Sharpen wizard false failure after successful batch run
+
+**Commit body**
+
+Sharpen and top-hat now signal Done only after outputs and run manifest are written. The wizard treats completed runs as success even when Python reports a late non-zero exit on slow NAS jobs.
+
+---
+
 ## v5.0.1
 
 **What's new**

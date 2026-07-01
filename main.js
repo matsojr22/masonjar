@@ -1910,6 +1910,7 @@ ipcMain.on("runTophatPreview", function (event, data) {
     spawnPreprocessPreview(event, "top_hat.py", args, "tophatPreviewResult", "killTophatPreview");
 });
 function spawnPreprocessBatch(event, scriptName, args, resultChannel, killChannel, jobId, launchMessage) {
+    const { evaluatePreprocessBatchResult } = require(path.join(appDir, "js", "preprocess_batch_completion"));
     const partial = {
         mode: "text",
         pythonPath: path.join(envPythonPath, pyCommand),
@@ -1921,7 +1922,7 @@ function spawnPreprocessBatch(event, scriptName, args, resultChannel, killChanne
     const releaseJob = attachIoFairshareRelease(pyshell, release);
     attachPythonShellKillCleanup(pyshell, killChannel);
     let total = 0;
-    let current = 0;
+    let completedCount = 0;
     let runFailed = false;
     let failMessage = "";
     let resultSent = false;
@@ -1932,6 +1933,27 @@ function spawnPreprocessBatch(event, scriptName, args, resultChannel, killChanne
         resultSent = true;
         event.sender.send(resultChannel, { ok, code, message });
         ipcMain.removeAllListeners(killChannel);
+    };
+    const finishBatch = (exitCode, pyFail) => {
+        if (resultSent) {
+            return;
+        }
+        releaseJob();
+        const verdict = evaluatePreprocessBatchResult({
+            runFailed,
+            exitCode,
+            pyFail: pyFail || "",
+            total,
+            completedCount,
+            failMessage,
+        });
+        if (!verdict.ok && pyFail) {
+            reportPythonFailure(pyFail);
+        }
+        else if (verdict.warnOnly && verdict.message) {
+            console.log("[preprocess] " + verdict.message);
+        }
+        sendResult(verdict.ok, exitCode, verdict.message);
     };
     event.sender.send("updateLoad", [0, launchMessage]);
     pyshell.on("message", (message) => {
@@ -1949,30 +1971,25 @@ function spawnPreprocessBatch(event, scriptName, args, resultChannel, killChanne
         }
         else if (message === "Done!") {
             pyshell.end((err, code, signal) => {
-                releaseJob();
                 const pyFail = describePythonShellFailure(err, code, signal);
-                if (pyFail) {
-                    reportPythonFailure(pyFail);
-                }
                 const exitCode = typeof code === "number" ? code : Number(code) || 0;
-                const ok = !runFailed && exitCode === 0 && !pyFail;
-                sendResult(ok, exitCode, failMessage || pyFail || "");
+                finishBatch(exitCode, pyFail);
             });
         }
         else if (message.startsWith("LOG: sharpen_done ") ||
             message.startsWith("LOG: tophat_done ")) {
+            completedCount++;
             if (total > 0) {
-                current++;
                 event.sender.send("updateLoad", [
-                    Math.round((current / total) * 100),
+                    Math.round((completedCount / total) * 100),
                     message,
                 ]);
             }
         }
         else if (message.startsWith("LOG:")) {
             const pct = total > 0
-                ? Math.min(99, Math.round((current / total) * 100))
-                : Math.min(99, current);
+                ? Math.min(99, Math.round((completedCount / total) * 100))
+                : Math.min(99, completedCount);
             event.sender.send("updateLoad", [pct, message]);
         }
     });
@@ -1980,13 +1997,9 @@ function spawnPreprocessBatch(event, scriptName, args, resultChannel, killChanne
         if (resultSent) {
             return;
         }
-        releaseJob();
         const exitCode = typeof code === "number" ? code : Number(code) || 1;
         const pyFail = exitCode !== 0 ? `Python exited with code ${exitCode}` : "";
-        if (pyFail) {
-            reportPythonFailure(pyFail);
-        }
-        sendResult(false, exitCode, failMessage || pyFail || "Process ended without Done!");
+        finishBatch(exitCode, pyFail || null);
     });
     ipcMain.once(killChannel, function () {
         pyshell.kill();

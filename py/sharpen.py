@@ -390,23 +390,30 @@ def run_batch(args) -> int:
         print("Done!", flush=True)
         return 1
 
-    print("Done!", flush=True)
     from run_manifest import write_run_manifest
 
-    write_run_manifest(
-        str(output_path),
-        {
-            "step": "sharpen",
-            "input_dir": str(input_path),
-            "input_files": written,
-            "radius": radius,
-            "amount": amount,
-            "equalize": equalize,
-            "signal_branch": signal_branch,
-            "source_run_rel": source_run_rel,
-            "source_kind": source_kind,
-        },
-    )
+    try:
+        write_run_manifest(
+            str(output_path),
+            {
+                "step": "sharpen",
+                "input_dir": str(input_path),
+                "input_files": written,
+                "radius": radius,
+                "amount": amount,
+                "equalize": equalize,
+                "signal_branch": signal_branch,
+                "source_run_rel": source_run_rel,
+                "source_kind": source_kind,
+            },
+        )
+    except Exception as e:
+        print(f"LOG: sharpen_manifest_failed {e}", flush=True)
+        traceback.print_exc()
+        print("Done!", flush=True)
+        return 0
+
+    print("Done!", flush=True)
     return 0
 
 

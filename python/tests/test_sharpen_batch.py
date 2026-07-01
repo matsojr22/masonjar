@@ -125,6 +125,39 @@ def test_batch_partial_success_when_one_file_unreadable(tmp_path: Path, capsys) 
     assert manifest["input_files"] == ["good.tif"]
 
 
+def test_batch_done_is_last_line(tmp_path: Path, capsys) -> None:
+    in_dir = tmp_path / "in"
+    out_dir = tmp_path / "out"
+    in_dir.mkdir()
+    _write_uint8_tiff(in_dir / "s001.tif")
+
+    rc = sharpen.run_batch(_batch_args(in_dir, out_dir))
+    assert rc == 0
+    captured = capsys.readouterr()
+    out_lines = [line.strip() for line in captured.out.splitlines() if line.strip()]
+    assert out_lines[-1] == "Done!"
+    assert (out_dir / "run_manifest.json").is_file()
+
+
+def test_batch_manifest_failure_still_exits_zero(tmp_path: Path, monkeypatch, capsys) -> None:
+    in_dir = tmp_path / "in"
+    out_dir = tmp_path / "out"
+    in_dir.mkdir()
+    _write_uint8_tiff(in_dir / "s001.tif")
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("manifest write failed")
+
+    monkeypatch.setattr("run_manifest.write_run_manifest", _boom)
+
+    rc = sharpen.run_batch(_batch_args(in_dir, out_dir))
+    assert rc == 0
+    assert (out_dir / "s001.tif").is_file()
+    captured = capsys.readouterr()
+    assert "LOG: sharpen_manifest_failed" in captured.out
+    assert captured.out.strip().endswith("Done!")
+
+
 def test_batch_all_fail_exits_one(tmp_path: Path, capsys) -> None:
     in_dir = tmp_path / "in"
     out_dir = tmp_path / "out"
