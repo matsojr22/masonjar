@@ -33,7 +33,11 @@ run.addEventListener("click", function () {
 			sourceRunRel: sourceRel,
 		});
 		var useFlat = flatOutput && flatOutput.checked;
-		var finalOut = pipelineRuns.resolveRunLeaf(outdir.value, "collate", slug, useFlat);
+		var finalOut = pipelineRuns.resolveStepOutputPath("collate", {
+			slug: slug,
+			flat: useFlat,
+			legacyOutBase: outdir.value,
+		});
 		try {
 			fs.mkdirSync(finalOut, { recursive: true });
 		} catch (mkdirErr) {

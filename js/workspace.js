@@ -197,13 +197,13 @@ function scanBrainRoot(root) {
 	return workspace;
 }
 
-function resolveLogicalPath(logicalKey) {
+function resolveLogicalPath(logicalKey, options) {
 	if (!logicalKey) {
 		return "";
 	}
 	var proj = getProjectModule();
 	if (proj && proj.isActive()) {
-		var fromProject = proj.resolveLogicalPath(logicalKey);
+		var fromProject = proj.resolveLogicalPath(logicalKey, options);
 		if (fromProject) {
 			return fromProject;
 		}
@@ -220,6 +220,10 @@ function resolveLogicalPath(logicalKey) {
 	return (workspace.paths && workspace.paths[logicalKey]) || "";
 }
 
+function presetFieldPurpose(fieldName) {
+	return fieldName === "outdir" ? "output" : "input";
+}
+
 function getPreset(toolId) {
 	var fieldMap = TOOL_PRESETS[toolId];
 	if (!fieldMap) {
@@ -230,7 +234,8 @@ function getPreset(toolId) {
 	for (var i = 0; i < keys.length; i++) {
 		var field = keys[i];
 		var logicalKey = fieldMap[field];
-		var resolved = resolveLogicalPath(logicalKey);
+		var purpose = presetFieldPurpose(field);
+		var resolved = resolveLogicalPath(logicalKey, { purpose: purpose });
 		if (resolved) {
 			preset[field] = resolved;
 		}

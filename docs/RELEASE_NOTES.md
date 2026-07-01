@@ -6,6 +6,28 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v5.0.3
+
+**What's new**
+
+Pipeline tools no longer create nested run folders when you re-run a step with **Overwrite all** or change parameters (Detect, Align, Max, Count, and others).
+
+**Fixes**
+
+- Detect outputs stay at `05_predictions/somata/{run}` instead of nesting `somata/old/somata/new`.
+- **Overwrite all** reuses the active run folder so you can replace results in place.
+- Max dataset picker, Count run pickers, and **Completed tasks** still discover runs the same way.
+
+**Commit subject**
+
+Fix nested run folders when re-running pipeline steps
+
+**Commit body**
+
+Output paths now resolve from the role base folder instead of the active run leaf, so branch and slug are not appended twice. Overwrite mode reuses the current run folder. Dataset pickers and run discovery are unchanged.
+
+---
+
 ## v5.0.2
 
 **What's new**

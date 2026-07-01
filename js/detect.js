@@ -2,7 +2,6 @@
 
 var fs = require("fs");
 var path = require("path");
-var crypto = require("crypto");
 var ipc = require("electron").ipcRenderer;
 var workspace = require("./workspace");
 var project = require("./project");
@@ -71,74 +70,13 @@ function listInputSliceStems(indirPath) {
 	return stems;
 }
 
-function decToken(num) {
-	return String(num).replace(/\./g, "p");
-}
-
-function sanitizeSlugPart(s) {
-	return String(s || "")
-		.replace(/[/\\:*?"<>|]+/g, "_")
-		.replace(/\s+/g, "_")
-		.replace(/_+/g, "_")
-		.replace(/^_|_$/g, "")
-		.slice(0, 80);
-}
-
 function modelBranchForSlug(detectionMethod, modelPath) {
 	var m = (modelPath || "").trim();
 	if (m) {
 		var base = path.basename(m).replace(/\.pt$/i, "");
-		return sanitizeSlugPart(base) || "custom";
+		return pipelineRuns.sanitizeSlugPart(base) || "custom";
 	}
 	return detectionMethod === "nuclei" ? "nuclei" : "somata";
-}
-
-function sliceSpanToken(sortedStems) {
-	var seen = {};
-	var uniq = [];
-	for (var i = 0; i < sortedStems.length; i++) {
-		var s = sortedStems[i];
-		if (!seen[s]) {
-			seen[s] = true;
-			uniq.push(s);
-		}
-	}
-	uniq.sort();
-	if (!uniq.length) {
-		return "noslices";
-	}
-	if (uniq.length === 1) {
-		return sanitizeSlugPart(uniq[0]);
-	}
-	var first = uniq[0];
-	var last = uniq[uniq.length - 1];
-	if (uniq.length === 2) {
-		return sanitizeSlugPart(first + "-" + last);
-	}
-	var h = crypto.createHash("sha1").update(uniq.join("|")).digest("hex").slice(0, 4);
-	return sanitizeSlugPart(first + "-" + last) + "_h" + h;
-}
-
-function buildDetectRunSlug(options) {
-	var c = options.confidence;
-	var t = options.tile;
-	var a = options.area;
-	var e = options.eccentricity;
-	var params =
-		"c" +
-		decToken(c) +
-		"_t" +
-		String(Math.round(t)) +
-		"_a" +
-		String(Math.round(a)) +
-		"_e" +
-		decToken(e);
-	var span = sliceSpanToken(options.sortedStems || []);
-	var subset = "";
-	if (options.subsetCount && options.subsetCount > 0) {
-		subset = "_subset_" + String(options.subsetCount);
-	}
-	return sanitizeSlugPart(span + "_" + params + subset);
 }
 
 var datasetPicker = null;
@@ -230,7 +168,7 @@ run.addEventListener("click", function () {
 
 		var sortedStems = listInputSliceStems(indir.value);
 		var branch = modelBranchForSlug(detectionMethod, m);
-		var slug = buildDetectRunSlug({
+		var slug = pipelineRuns.buildDetectRunSlug({
 			confidence: Number(c),
 			tile: Number(t),
 			area: Number(a),
@@ -238,9 +176,14 @@ run.addEventListener("click", function () {
 			sortedStems: sortedStems,
 			subsetCount: plan.toProcess ? plan.toProcess.length : 0,
 		});
-		var outBase = outdir.value;
 		var useFlat = flatOutput && flatOutput.checked;
-		var finalOut = useFlat ? outBase : path.join(outBase, branch, slug);
+		var finalOut = pipelineRuns.resolveStepOutputPath("detect", {
+			slug: slug,
+			flat: useFlat,
+			runMode: mode,
+			branchOverride: branch,
+			legacyOutBase: outdir.value,
+		});
 		try {
 			fs.mkdirSync(finalOut, { recursive: true });
 		} catch (err) {
@@ -249,10 +192,7 @@ run.addEventListener("click", function () {
 		}
 
 		if (project.isActive() && !useFlat) {
-			lastDetectionRunRel = path
-				.relative(outBase, finalOut)
-				.split(path.sep)
-				.join("/");
+			lastDetectionRunRel = pipelineRuns.relFromRoleBase("detect", finalOut);
 		} else {
 			lastDetectionRunRel = "";
 		}
@@ -263,11 +203,9 @@ run.addEventListener("click", function () {
 		back.innerHTML = "Cancel";
 		run.innerHTML = "<i class='fas fa-spinner fa-spin'></i>";
 		var msg = plan.summary || "";
-		if (!useFlat) {
+		if (!useFlat && lastDetectionRunRel) {
 			msg =
-				(msg ? msg + " " : "") +
-				"Run folder: " +
-				path.relative(outBase, finalOut).split(path.sep).join("/");
+				(msg ? msg + " " : "") + "Run folder: " + lastDetectionRunRel;
 		}
 		loadmessage.innerHTML = msg || "Initializing...";
 

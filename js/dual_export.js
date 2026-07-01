@@ -31,7 +31,11 @@ run.addEventListener("click", function () {
 			sortedStems: sortedStems,
 		});
 		var useFlat = flatOutput && flatOutput.checked;
-		var finalOut = pipelineRuns.resolveRunLeaf(outdir.value, "dual", slug, useFlat);
+		var finalOut = pipelineRuns.resolveStepOutputPath("dual", {
+			slug: slug,
+			flat: useFlat,
+			legacyOutBase: outdir.value,
+		});
 		try {
 			fs.mkdirSync(finalOut, { recursive: true });
 		} catch (mkdirErr) {

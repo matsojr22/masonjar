@@ -34,7 +34,13 @@ run.addEventListener("click", function () {
 			subsetCount: plan.toProcess.length,
 		});
 		var useFlat = flatOutput && flatOutput.checked;
-		var finalOut = pipelineRuns.resolveRunLeaf(outdir.value, "max", slug, useFlat);
+		var finalOut = pipelineRuns.resolveStepOutputPath("max", {
+			slug: slug,
+			flat: useFlat,
+			runMode: mode,
+			indirAbs: indir.value,
+			legacyOutBase: outdir.value,
+		});
 		try {
 			fs.mkdirSync(finalOut, { recursive: true });
 		} catch (mkdirErr) {

@@ -263,6 +263,168 @@ function testCollectRunDeleteTargetsDoubled() {
 	helpers.rmDir(bundle);
 }
 
+function testDedupeModelBranchRunRel() {
+	assert.strictEqual(
+		pipelineRuns.dedupeModelBranchRunRel("somata/a/somata/b"),
+		"somata/b",
+	);
+	assert.strictEqual(
+		pipelineRuns.dedupeModelBranchRunRel("somata/run_only"),
+		"somata/run_only",
+	);
+	var runs = pipelineRuns.migrateActiveRuns({
+		active_runs: {
+			predictions: "somata/old/somata/new",
+		},
+	});
+	assert.strictEqual(runs.predictions, "somata/new");
+}
+
+function testResolveLogicalPathOutputVsInput() {
+	var bundle = helpers.tmpDir("mj-logical-");
+	var roles = {
+		dapi: "data/counting/00_dapi",
+		slices: "data/counting/01_slices",
+		predictions: "data/counting/05_predictions",
+	};
+	var predRun = path.join(bundle, roles.predictions, "somata", "run_a");
+	fs.mkdirSync(predRun, { recursive: true });
+	fs.writeFileSync(path.join(predRun, "Predictions_M528_s001.pkl"), "x");
+	project.setActiveProject(bundle, {
+		name: "test",
+		roles: roles,
+		processing: {
+			active_runs: Object.assign(pipelineRuns.defaultActiveRuns(), {
+				predictions: "somata/run_a",
+			}),
+		},
+	});
+	assert.strictEqual(
+		project.resolveLogicalPathForOutput("predictions"),
+		path.join(bundle, roles.predictions),
+	);
+	assert.strictEqual(
+		project.resolveLogicalPathForInput("predictions"),
+		predRun,
+	);
+	project.clearActiveProject();
+	helpers.rmDir(bundle);
+}
+
+function testResolveStepOutputPathDetectNoNest() {
+	var bundle = helpers.tmpDir("mj-detect-out-");
+	var roles = {
+		predictions: "data/counting/05_predictions",
+	};
+	var existing = path.join(bundle, roles.predictions, "somata", "run_old");
+	fs.mkdirSync(existing, { recursive: true });
+	fs.writeFileSync(path.join(existing, "Predictions_M528_s001.pkl"), "x");
+	project.setActiveProject(bundle, {
+		name: "test",
+		roles: roles,
+		processing: {
+			active_runs: Object.assign(pipelineRuns.defaultActiveRuns(), {
+				predictions: "somata/run_old",
+			}),
+		},
+	});
+	var predBase = path.join(bundle, roles.predictions);
+	var finalOut = pipelineRuns.resolveStepOutputPath("detect", {
+		slug: "run_new",
+		branchOverride: "somata",
+		runMode: "merge",
+	});
+	assert.strictEqual(finalOut, path.join(predBase, "somata", "run_new"));
+	assert.ok(finalOut.indexOf("run_old" + path.sep + "somata") < 0);
+	project.clearActiveProject();
+	helpers.rmDir(bundle);
+}
+
+function testResolveStepOutputPathDetectOverwrite() {
+	var bundle = helpers.tmpDir("mj-detect-ow-");
+	var roles = { predictions: "data/counting/05_predictions" };
+	var existing = path.join(bundle, roles.predictions, "somata", "run_old");
+	fs.mkdirSync(existing, { recursive: true });
+	fs.writeFileSync(path.join(existing, "Predictions_M528_s001.pkl"), "x");
+	project.setActiveProject(bundle, {
+		name: "test",
+		roles: roles,
+		processing: {
+			active_runs: Object.assign(pipelineRuns.defaultActiveRuns(), {
+				predictions: "somata/run_old",
+			}),
+			run_modes: { detect: "overwrite" },
+		},
+	});
+	var finalOut = pipelineRuns.resolveStepOutputPath("detect", {
+		slug: "run_new",
+		branchOverride: "somata",
+		runMode: "overwrite",
+	});
+	assert.strictEqual(finalOut, existing);
+	project.clearActiveProject();
+	helpers.rmDir(bundle);
+}
+
+function testResolveStepOutputPathMaxCziSibling() {
+	var bundle = helpers.tmpDir("mj-max-out-");
+	var roles = {
+		max: "data/counting/03_max",
+		original_scans: "data/original_scans",
+	};
+	var existing = path.join(bundle, roles.max, "somata", "max", "run_old");
+	fs.mkdirSync(existing, { recursive: true });
+	fs.writeFileSync(path.join(existing, "M528_s001.tif"), "x");
+	fs.mkdirSync(path.join(bundle, roles.original_scans, "somata"), {
+		recursive: true,
+	});
+	project.setActiveProject(bundle, {
+		name: "test",
+		roles: roles,
+		processing: {
+			active_runs: Object.assign(pipelineRuns.defaultActiveRuns(), {
+				max: "somata/max/run_old",
+			}),
+		},
+	});
+	var indir = path.join(bundle, roles.original_scans, "somata");
+	var finalOut = pipelineRuns.resolveStepOutputPath("max", {
+		slug: "run_new",
+		runMode: "merge",
+		indirAbs: indir,
+	});
+	assert.strictEqual(
+		finalOut,
+		path.join(bundle, roles.max, "somata", "max", "run_new"),
+	);
+	var rel = pipelineRuns.relFromRoleBase("max", finalOut);
+	assert.strictEqual(rel, "somata/max/run_new");
+	var choices = pipelineRuns.listRunChoicesForRole("max");
+	assert.ok(
+		choices.some(function (c) {
+			return c.rel === "somata/max/run_new" || c.rel === "somata/max/run_old";
+		}),
+	);
+	project.clearActiveProject();
+	helpers.rmDir(bundle);
+}
+
+function testDiscoverDetectRelParity() {
+	var bundle = helpers.tmpDir("mj-disc-detect-");
+	var roles = { predictions: "data/counting/05_predictions" };
+	var runDir = path.join(bundle, roles.predictions, "somata", "M528_c0p5");
+	fs.mkdirSync(runDir, { recursive: true });
+	fs.writeFileSync(path.join(runDir, "Predictions_M528_s001.pkl"), "x");
+	var base = path.join(bundle, roles.predictions);
+	var runs = pipelineRuns.discoverOutputRuns(base, "detect", 2);
+	assert.ok(
+		runs.some(function (r) {
+			return r.rel === "somata/M528_c0p5";
+		}),
+	);
+	helpers.rmDir(bundle);
+}
+
 function testRemoveRunForRoleClearsActive() {
 	var bundle = helpers.tmpDir("mj-rm-");
 	var roles = {
@@ -303,6 +465,12 @@ var tests = [
 	testReconcileFlatLegacyMax,
 	testMigrateActivePredictionRun,
 	testDedupeBranchRunRel,
+	testDedupeModelBranchRunRel,
+	testResolveLogicalPathOutputVsInput,
+	testResolveStepOutputPathDetectNoNest,
+	testResolveStepOutputPathDetectOverwrite,
+	testResolveStepOutputPathMaxCziSibling,
+	testDiscoverDetectRelParity,
 	testActiveRunScoping,
 	testCollectRunDeleteTargetsDoubled,
 	testRemoveRunForRoleClearsActive,

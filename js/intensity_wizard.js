@@ -507,13 +507,16 @@ function startProcess() {
 		includeLayers: includeLayers,
 		subsetCount: setup.subsetCount || 0,
 	});
-	var outBase = setup.outBase || setup.outdir;
-	var finalOut = pipelineRuns.resolveRunLeaf(
-		outBase,
-		"intensity",
-		slug,
-		!!setup.flatOutput,
-	);
+	var outBase =
+		project.isActive() && pipelineRuns.resolveRoleBaseAbs("pkls")
+			? pipelineRuns.resolveRoleBaseAbs("pkls")
+			: setup.outdir;
+	var finalOut = pipelineRuns.resolveStepOutputPath("intensity", {
+		slug: slug,
+		flat: !!setup.flatOutput,
+		runMode: setup.runMode || "merge",
+		legacyOutBase: setup.outdir || outBase,
+	});
 	try {
 		fs.mkdirSync(finalOut, { recursive: true });
 	} catch (err) {

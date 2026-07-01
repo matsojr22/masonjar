@@ -101,7 +101,12 @@ run.addEventListener("click", function () {
 			subsetCount: plan.toProcess.length,
 		});
 		var useFlat = flatOutput && flatOutput.checked;
-		var finalOut = pipelineRuns.resolveRunLeaf(outdir.value, "align", slug, useFlat);
+		var finalOut = pipelineRuns.resolveStepOutputPath("align", {
+			slug: slug,
+			flat: useFlat,
+			runMode: mode,
+			legacyOutBase: outdir.value,
+		});
 		try {
 			fs.mkdirSync(finalOut, { recursive: true });
 		} catch (mkdirErr) {

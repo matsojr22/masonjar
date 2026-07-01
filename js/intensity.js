@@ -106,21 +106,17 @@ configureBtn.addEventListener("click", function () {
 			return;
 		}
 		var sortedStems = pipelineRuns.listImageSliceStems(indir.value);
-		var outBase =
-			project.isActive() && pipelineRuns.resolveRoleBaseAbs("pkls")
-				? pipelineRuns.resolveRoleBaseAbs("pkls")
-				: outdir.value;
 		var dapiPath =
 			usedapi && usedapi.checked && dapidir && dapidir.value ? dapidir.value : "";
 		var payload = {
 			indir: indir.value,
 			annodir: annodir.value,
 			outdir: outdir.value,
-			outBase: outBase,
 			dapiPath: dapiPath,
 			whole: alignmentMethod,
 			useDapi: usedapi && usedapi.checked,
 			flatOutput: flatOutput && flatOutput.checked,
+			runMode: mode,
 			sliceListPath: plan.sliceListPath || "",
 			subsetCount: plan.toProcess.length,
 			sortedStems: sortedStems,

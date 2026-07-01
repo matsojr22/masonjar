@@ -212,7 +212,8 @@ function resolveRolePath(role) {
 	return path.join(state.bundleRoot, rel);
 }
 
-function resolveLogicalPath(logicalKey) {
+function resolveLogicalPath(logicalKey, options) {
+	options = options || {};
 	if (!logicalKey) {
 		return "";
 	}
@@ -227,6 +228,9 @@ function resolveLogicalPath(logicalKey) {
 	var role = LOGICAL_TO_ROLE[logicalKey];
 	if (role && state.active) {
 		if (pipelineRuns.isOutputRole(role)) {
+			if (options.purpose === "output") {
+				return resolveRolePath(role) || "";
+			}
 			var leaf = pipelineRuns.resolveActiveRunLeafAbs(role);
 			if (leaf) {
 				return leaf;
@@ -238,6 +242,14 @@ function resolveLogicalPath(logicalKey) {
 		}
 	}
 	return "";
+}
+
+function resolveLogicalPathForOutput(logicalKey) {
+	return resolveLogicalPath(logicalKey, { purpose: "output" });
+}
+
+function resolveLogicalPathForInput(logicalKey) {
+	return resolveLogicalPath(logicalKey, { purpose: "input" });
 }
 
 function readProjectJson(bundleRoot) {
@@ -293,11 +305,7 @@ function syncWorkspaceFromProject(workspace) {
 	var roleKeys = ["dapi", "slices", "max", "predictions", "quantification", "pkls", "dual"];
 	for (var i = 0; i < roleKeys.length; i++) {
 		var k = roleKeys[i];
-		if (pipelineRuns.isOutputRole(k)) {
-			ws.paths[k] = pipelineRuns.resolveActiveRunLeafAbs(k) || resolveRolePath(k) || "";
-		} else {
-			ws.paths[k] = resolveRolePath(k) || "";
-		}
+		ws.paths[k] = resolveRolePath(k) || "";
 	}
 	workspace.saveWorkspace();
 }
@@ -1437,6 +1445,8 @@ module.exports = {
 	getStatusMessage: getStatusMessage,
 	resolveRolePath: resolveRolePath,
 	resolveLogicalPath: resolveLogicalPath,
+	resolveLogicalPathForOutput: resolveLogicalPathForOutput,
+	resolveLogicalPathForInput: resolveLogicalPathForInput,
 	createProject: createProject,
 	openProject: openProject,
 	clearActiveProject: clearActiveProject,

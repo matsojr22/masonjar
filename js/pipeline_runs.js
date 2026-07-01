@@ -388,6 +388,96 @@ function dedupeBranchRunRel(rel, branch) {
 	return rel;
 }
 
+/** Collapse nested model-branch folders (Detect: ``somata/a/somata/b`` → ``somata/b``). */
+function dedupeModelBranchRunRel(rel) {
+	rel = normalizeRelPath(rel);
+	if (!rel) {
+		return rel;
+	}
+	var parts = rel.split("/");
+	if (parts.length < 3) {
+		return rel;
+	}
+	var branch = parts[0];
+	var lastIdx = 0;
+	for (var i = 1; i < parts.length; i++) {
+		if (parts[i] === branch) {
+			lastIdx = i;
+		}
+	}
+	if (lastIdx > 0) {
+		return parts.slice(lastIdx).join("/");
+	}
+	return rel;
+}
+
+var MAX_KIND_DIRS = ["max", "sharpen", "tophat"];
+
+function inferSignalBranchForMaxFamily(activeRel, indirAbs) {
+	activeRel = normalizeRelPath(activeRel || "");
+	if (activeRel) {
+		var parts = activeRel.split("/");
+		if (parts.length >= 2 && MAX_KIND_DIRS.indexOf(parts[1]) >= 0) {
+			return parts[0];
+		}
+		if (
+			parts.length >= 1 &&
+			MAX_KIND_DIRS.indexOf(parts[0]) < 0 &&
+			parts[0]
+		) {
+			return parts[0];
+		}
+	}
+	if (indirAbs) {
+		var origBase = resolveRoleBaseAbs("original_scans");
+		if (origBase) {
+			var normIndir = path.resolve(indirAbs);
+			var normOrig = path.resolve(origBase);
+			if (
+				normIndir === normOrig ||
+				normIndir.indexOf(normOrig + path.sep) === 0
+			) {
+				var relPart = path
+					.relative(normOrig, normIndir)
+					.split(path.sep)
+					.filter(Boolean)[0];
+				if (relPart) {
+					return relPart;
+				}
+			}
+		}
+	}
+	return "";
+}
+
+function activeRunCompatibleForWrite(stepId, activeRel, branchOverride, signalBranch) {
+	activeRel = normalizeRelPath(activeRel || "");
+	if (!activeRel) {
+		return false;
+	}
+	if (stepId === "detect") {
+		activeRel = dedupeModelBranchRunRel(activeRel);
+		return (
+			!!branchOverride &&
+			(activeRel === branchOverride ||
+				activeRel.indexOf(branchOverride + "/") === 0)
+		);
+	}
+	if (stepId === "max" && signalBranch) {
+		activeRel = dedupeModelBranchRunRel(activeRel);
+		return activeRel.indexOf(signalBranch + "/") === 0;
+	}
+	var branch =
+		branchOverride != null
+			? branchOverride
+			: RUN_STEP_CONFIG[stepId] && RUN_STEP_CONFIG[stepId].branch;
+	if (branch) {
+		activeRel = dedupeBranchRunRel(activeRel, branch);
+		return activeRel === branch || activeRel.indexOf(branch + "/") === 0;
+	}
+	return true;
+}
+
 function getActiveRunsMap() {
 	if (!projectModule().isActive()) {
 		return {};
@@ -418,7 +508,9 @@ function migrateActiveRuns(processing) {
 	for (var i = 0; i < OUTPUT_ROLES.length; i++) {
 		var role = OUTPUT_ROLES[i];
 		var branch = branchForOutputRole(role);
-		if (branch && runs[role]) {
+		if (role === "predictions" && runs[role]) {
+			runs[role] = dedupeModelBranchRunRel(runs[role]);
+		} else if (branch && runs[role]) {
 			runs[role] = dedupeBranchRunRel(runs[role], branch);
 		}
 	}
@@ -431,6 +523,9 @@ function getActiveRunRelForRole(role) {
 	}
 	var runs = getActiveRunsMap();
 	var rel = normalizeRelPath(runs[role] || "");
+	if (role === "predictions") {
+		return dedupeModelBranchRunRel(rel);
+	}
 	var branch = branchForOutputRole(role);
 	if (branch) {
 		rel = dedupeBranchRunRel(rel, branch);
@@ -469,9 +564,13 @@ function setActiveRunRelForRole(role, rel) {
 		proj.processing.active_runs = migrateActiveRuns(proj.processing);
 	}
 	rel = normalizeRelPath(rel);
-	var branch = branchForOutputRole(role);
-	if (branch) {
-		rel = dedupeBranchRunRel(rel, branch);
+	if (role === "predictions") {
+		rel = dedupeModelBranchRunRel(rel);
+	} else {
+		var branch = branchForOutputRole(role);
+		if (branch) {
+			rel = dedupeBranchRunRel(rel, branch);
+		}
 	}
 	proj.processing.active_runs[role] = rel;
 	if (role === "predictions") {
@@ -1120,15 +1219,83 @@ function removeRunForRole(role, rel, options) {
 
 function computeFinalOutputPath(stepId, context) {
 	context = context || {};
+	return resolveStepOutputPath(stepId, context);
+}
+
+/**
+ * Resolve the absolute output folder for a pipeline step run.
+ * Project mode always writes from the role base (never the active-run leaf).
+ * @param {string} stepId
+ * @param {object} [options]
+ * @param {string} [options.slug]
+ * @param {boolean} [options.flat]
+ * @param {string} [options.runMode] overwrite|merge|skip
+ * @param {string} [options.branchOverride] detect model branch
+ * @param {string} [options.signalBranch] max-family signal branch (somata, …)
+ * @param {string} [options.indirAbs] infer signal branch from original_scans path
+ * @param {string} [options.legacyOutBase] non-project DOM outdir fallback
+ */
+function resolveStepOutputPath(stepId, options) {
+	options = options || {};
 	var cfg = RUN_STEP_CONFIG[stepId];
-	if (!cfg) {
+	if (!cfg || !cfg.outputRole) {
 		return "";
 	}
-	var outBase = context.outBase || resolveRoleBaseAbs(cfg.outputRole);
-	var flat = !!context.flat;
-	var branch = context.branch != null ? context.branch : cfg.branch;
-	var slug = context.slug || buildRunSlug(stepId, context);
-	return resolveRunLeaf(outBase, branch, slug, flat);
+	var slug = options.slug || "";
+	var flat = !!options.flat;
+	var runMode = options.runMode || "merge";
+	var branchOverride =
+		options.branchOverride != null ? options.branchOverride : cfg.branch;
+
+	if (!projectModule().isActive()) {
+		var legacyBase = options.legacyOutBase || options.outBase || "";
+		if (!legacyBase) {
+			return "";
+		}
+		return resolveRunLeaf(legacyBase, branchOverride, slug, flat);
+	}
+
+	if (flat) {
+		return resolveRoleBaseAbs(cfg.outputRole);
+	}
+
+	var writeBase = resolveRoleBaseAbs(cfg.outputRole);
+	var signalBranch = options.signalBranch || "";
+	if (stepId === "max") {
+		signalBranch =
+			signalBranch ||
+			inferSignalBranchForMaxFamily(
+				getActiveRunRelForRole("max"),
+				options.indirAbs,
+			);
+		if (signalBranch) {
+			var maxDatasets = require("./max_datasets");
+			writeBase = maxDatasets.branchRootAbs(
+				projectModule().getBundleRoot(),
+				signalBranch,
+			);
+		}
+	}
+
+	if (runMode === "overwrite") {
+		var activeRel = getActiveRunRel(stepId);
+		if (
+			activeRel &&
+			activeRunCompatibleForWrite(
+				stepId,
+				activeRel,
+				branchOverride,
+				signalBranch,
+			)
+		) {
+			var activeLeaf = resolveActiveRunLeafAbs(cfg.outputRole);
+			if (activeLeaf && fs.existsSync(activeLeaf)) {
+				return activeLeaf;
+			}
+		}
+	}
+
+	return resolveRunLeaf(writeBase, branchOverride, slug, false);
 }
 
 function relFromRoleBase(stepId, finalOutAbs) {
@@ -1155,7 +1322,10 @@ module.exports = {
 	buildDetectRunSlug: buildDetectRunSlug,
 	buildRunSlug: buildRunSlug,
 	resolveRunLeaf: resolveRunLeaf,
+	resolveStepOutputPath: resolveStepOutputPath,
 	dedupeBranchRunRel: dedupeBranchRunRel,
+	dedupeModelBranchRunRel: dedupeModelBranchRunRel,
+	inferSignalBranchForMaxFamily: inferSignalBranchForMaxFamily,
 	discoveryMaxDepth: discoveryMaxDepth,
 	discoverOutputRuns: discoverOutputRuns,
 	defaultActiveRuns: defaultActiveRuns,
