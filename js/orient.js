@@ -30,6 +30,44 @@ function qs(id) {
 	return document.getElementById(id);
 }
 
+function reextractGeometryScope() {
+	return (
+		orientState.cziImport &&
+		orientState.cziImport.reextract_geometry_scope
+	);
+}
+
+function isReextractPartialOrient() {
+	return !!reextractGeometryScope();
+}
+
+function orientGridSliceIds() {
+	var scope = reextractGeometryScope();
+	if (isReextractPartialOrient() && scope) {
+		var scoped = cziImport.sliceIdsInReextractScope(scope);
+		if (scoped.length) {
+			return scoped;
+		}
+	}
+	return ensureSlicePlan();
+}
+
+function shouldApplyCssPreviewForTile(sliceId, geom) {
+	if (orientGeometry.isIdentityGeometry(geom)) {
+		return false;
+	}
+	var scope = reextractGeometryScope();
+	if (!isReextractPartialOrient() || !scope) {
+		return true;
+	}
+	return cziImport.isDisplayChannelInReextractScope(
+		sliceId,
+		orientState.displayChannel,
+		scope,
+		orientState.cziImport,
+	);
+}
+
 function previewUrlCacheBuster() {
 	var appliedAt =
 		orientState.cziImport && orientState.cziImport.geometry_applied_at;
@@ -182,22 +220,48 @@ function populateOrientDisplayChannelSelect() {
 	if (!select) {
 		return;
 	}
-	var channels = cziImport.listOrientDisplayChannels(
-		orientState.bundleRoot,
-		orientState.cziImport,
-	);
+	var scope = reextractGeometryScope();
+	var channels;
+	if (isReextractPartialOrient() && scope) {
+		channels = cziImport.listOrientDisplayChannelsForReextract(
+			orientState.bundleRoot,
+			orientState.cziImport,
+			scope,
+		);
+	} else {
+		channels = cziImport.listOrientDisplayChannels(
+			orientState.bundleRoot,
+			orientState.cziImport,
+		).map(function (ch) {
+			return { key: ch.key, label: ch.label, enabled: true };
+		});
+	}
 	select.innerHTML = "";
 	for (var i = 0; i < channels.length; i++) {
 		var opt = document.createElement("option");
 		opt.value = channels[i].key;
 		opt.textContent = channels[i].label;
+		if (channels[i].enabled === false) {
+			opt.disabled = true;
+		}
 		select.appendChild(opt);
 	}
-	var hasCurrent = channels.some(function (ch) {
-		return ch.key === orientState.displayChannel;
+	var hasEnabledCurrent = channels.some(function (ch) {
+		return ch.key === orientState.displayChannel && ch.enabled !== false;
 	});
-	if (!hasCurrent) {
-		orientState.displayChannel = cziImport.ORIENT_DISPLAY_DAPI;
+	if (!hasEnabledCurrent) {
+		var firstEnabled = null;
+		for (var j = 0; j < channels.length; j++) {
+			if (channels[j].enabled !== false) {
+				firstEnabled = channels[j].key;
+				break;
+			}
+		}
+		if (firstEnabled) {
+			orientState.displayChannel = firstEnabled;
+		} else {
+			orientState.displayChannel = cziImport.ORIENT_DISPLAY_DAPI;
+		}
 	}
 	select.value = orientState.displayChannel;
 }
@@ -231,14 +295,18 @@ function updateOrientPreviewBanner() {
 			banner.classList.add("d-none");
 		}
 	}
-	var ids = ensureSlicePlan();
+	var ids = orientGridSliceIds();
 	var geoState = getGeometryApplyState(ids);
 	var geoMsg = geometryState.geometryStateBannerText(geoState, health);
 	if (geomBanner) {
 		if (geoMsg && !msg) {
 			geomBanner.textContent = geoMsg;
 			geomBanner.classList.remove("d-none");
-		} else if (geoMsg && geoState.policyState === "interrupted") {
+		} else if (
+			geoMsg &&
+			(geoState.policyState === "interrupted" ||
+				geoState.policyState === "reextract_partial")
+		) {
 			geomBanner.textContent = geoMsg;
 			geomBanner.classList.remove("d-none");
 		} else {
@@ -277,14 +345,20 @@ function updateOrientPreviewBanner() {
 		finalizeBtn.classList.toggle("d-none", !geoState.canFinalizeOnly);
 	}
 	var pending = orientGeometry.countNonIdentityGeometry(orientState.cziImport.geometry, ids);
+	var pendingForApply = geoState.partialReextractApply
+		? geoState.pendingInScope
+		: pending;
 	if (applyBtn && !geometryRunning) {
-		applyBtn.disabled = !geoState.allowApply || !health.canApply || pending === 0;
+		applyBtn.disabled = !geoState.allowApply || !health.canApply || pendingForApply === 0;
 	}
 	if (status && !geometryRunning) {
 		if (!health.canApply) {
 			/* repair banner carries the message */
-		} else if (geoState.policyState === "interrupted") {
+		} else if (geoState.policyState === "interrupted" && !geoState.partialReextractApply) {
 			status.textContent = "Apply is disabled — use Check Orientation Consistency to audit and repair.";
+		} else if (geoState.policyState === "reextract_partial") {
+			status.textContent =
+				"Preview shows how each re-imported channel will look after Apply geometry.";
 		} else if (pending > 0 && !orientState.cziImport.geometry_applied_at) {
 			status.textContent =
 				"CSS preview — adjust slices, then Apply geometry. If a prior apply crashed, use Check Orientation Consistency first.";
@@ -373,7 +447,7 @@ function renderOrientationGrid() {
 	if (!grid) {
 		return;
 	}
-	var ids = ensureSlicePlan();
+	var ids = orientGridSliceIds();
 	grid.innerHTML = "";
 	for (var i = 0; i < ids.length; i++) {
 		var sliceId = ids[i];
@@ -389,7 +463,7 @@ function renderOrientationGrid() {
 		if (imgSrc) {
 			var viewport = document.createElement("div");
 			viewport.className = "czi-orient-tile-viewport";
-			if (!orientGeometry.isIdentityGeometry(geom)) {
+			if (shouldApplyCssPreviewForTile(sliceId, geom)) {
 				viewport.style.transform = orientGeometry.geometryCssTransform(geom);
 				viewport.style.transformOrigin = "center center";
 			}
@@ -442,6 +516,11 @@ function renderOrientationGrid() {
 		function () {
 			updateOrientPreviewBanner();
 		},
+		isReextractPartialOrient()
+			? function (sliceId, geom) {
+					return shouldApplyCssPreviewForTile(sliceId, geom);
+				}
+			: null,
 	);
 }
 
@@ -478,7 +557,7 @@ function runApplyGeometry() {
 		return Promise.reject(new Error("No pending geometry changes to apply."));
 	}
 	var geoState = getGeometryApplyState(ids);
-	if (geoState.policyState === "interrupted") {
+	if (geoState.policyState === "interrupted" && !geoState.partialReextractApply) {
 		return Promise.reject(
 			new Error("Geometry apply is blocked — use Check Orientation Consistency to audit and repair."),
 		);

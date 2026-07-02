@@ -2210,6 +2210,127 @@ function buildReextractGeometryScope(repairTargets) {
 	return scope;
 }
 
+function displayChannelKeyForRoleKey(roleKey) {
+	if (!roleKey) {
+		return "";
+	}
+	if (roleKey === ROLE_DAPI) {
+		return ORIENT_DISPLAY_DAPI;
+	}
+	var branch = branchForRole(roleKey);
+	if (branch) {
+		return branch;
+	}
+	if (roleKey.indexOf("other:") === 0) {
+		return roleKey.slice(6);
+	}
+	return roleKey;
+}
+
+function roleKeysMatchingDisplayChannel(displayKey, cziImport) {
+	if (!displayKey || displayKey === ORIENT_DISPLAY_DAPI) {
+		return [ROLE_DAPI];
+	}
+	var out = [];
+	var roleKeys = Object.keys(ROLE_TO_BRANCH);
+	for (var i = 0; i < roleKeys.length; i++) {
+		if (ROLE_TO_BRANCH[roleKeys[i]] === displayKey) {
+			out.push(roleKeys[i]);
+		}
+	}
+	var ch = findKeptChannelForDisplayKey(cziImport || {}, displayKey);
+	if (ch) {
+		var rk = roleKeyForChannel(ch);
+		if (out.indexOf(rk) < 0) {
+			out.push(rk);
+		}
+	}
+	if (out.indexOf(displayKey) < 0) {
+		out.push(displayKey);
+	}
+	var otherKey = "other:" + displayKey;
+	if (out.indexOf(otherKey) < 0) {
+		out.push(otherKey);
+	}
+	return out;
+}
+
+function unionDisplayChannelKeysFromScope(scope) {
+	var seen = {};
+	var out = [];
+	var sliceIds = Object.keys(scope || {});
+	for (var i = 0; i < sliceIds.length; i++) {
+		var roles = scope[sliceIds[i]] || [];
+		for (var r = 0; r < roles.length; r++) {
+			var dk = displayChannelKeyForRoleKey(roles[r]);
+			if (dk && !seen[dk]) {
+				seen[dk] = true;
+				out.push(dk);
+			}
+		}
+	}
+	return out;
+}
+
+function sliceIdsInReextractScope(scope) {
+	var out = [];
+	var keys = Object.keys(scope || {});
+	for (var i = 0; i < keys.length; i++) {
+		if (scope[keys[i]] && scope[keys[i]].length) {
+			out.push(keys[i]);
+		}
+	}
+	return out;
+}
+
+function isDisplayChannelInReextractScope(sliceId, displayKey, scope, cziImport) {
+	if (!scope || !sliceId || !displayKey) {
+		return false;
+	}
+	var roles = scope[sliceId];
+	if (!roles || !roles.length) {
+		return false;
+	}
+	var candidates = roleKeysMatchingDisplayChannel(displayKey, cziImport);
+	for (var i = 0; i < roles.length; i++) {
+		if (candidates.indexOf(roles[i]) >= 0) {
+			return true;
+		}
+		if (displayChannelKeyForRoleKey(roles[i]) === displayKey) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function listOrientDisplayChannelsForReextract(bundleRoot, cziImport, scope) {
+	var all = listOrientDisplayChannels(bundleRoot, cziImport);
+	var enabledSet = {};
+	var enabledKeys = unionDisplayChannelKeysFromScope(scope);
+	for (var i = 0; i < enabledKeys.length; i++) {
+		enabledSet[enabledKeys[i]] = true;
+	}
+	var out = [];
+	for (var c = 0; c < all.length; c++) {
+		out.push({
+			key: all[c].key,
+			label: all[c].label,
+			enabled: !!enabledSet[all[c].key],
+		});
+	}
+	return out;
+}
+
+function firstEnabledReextractDisplayChannel(bundleRoot, cziImport, scope) {
+	var list = listOrientDisplayChannelsForReextract(bundleRoot, cziImport, scope);
+	for (var i = 0; i < list.length; i++) {
+		if (list[i].enabled) {
+			return list[i].key;
+		}
+	}
+	return null;
+}
+
 function buildReextractConfig(cziImport, targets, project) {
 	var payload = JSON.parse(JSON.stringify(cziImport || {}));
 	payload.repair_mode = "reextract";
@@ -2346,6 +2467,12 @@ module.exports = {
 	collectSliceIdsFromImport: collectSliceIdsFromImport,
 	buildRepairTargetsForSelection: buildRepairTargetsForSelection,
 	buildReextractGeometryScope: buildReextractGeometryScope,
+	displayChannelKeyForRoleKey: displayChannelKeyForRoleKey,
+	unionDisplayChannelKeysFromScope: unionDisplayChannelKeysFromScope,
+	sliceIdsInReextractScope: sliceIdsInReextractScope,
+	isDisplayChannelInReextractScope: isDisplayChannelInReextractScope,
+	listOrientDisplayChannelsForReextract: listOrientDisplayChannelsForReextract,
+	firstEnabledReextractDisplayChannel: firstEnabledReextractDisplayChannel,
 	listReimportOutputPaths: listReimportOutputPaths,
 	validateReimportSources: validateReimportSources,
 	findBlankPreviews: findBlankPreviews,

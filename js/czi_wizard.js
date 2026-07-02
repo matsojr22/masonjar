@@ -86,6 +86,51 @@ function isReextractFlow() {
 	return wizardState.flow === "reextract";
 }
 
+function reextractGeometryScope() {
+	return (
+		wizardState.cziImport &&
+		wizardState.cziImport.reextract_geometry_scope
+	);
+}
+
+function isReextractPartialOrient() {
+	return isReextractFlow() && !!reextractGeometryScope();
+}
+
+function orientGridSliceIds() {
+	var scope = reextractGeometryScope();
+	if (isReextractPartialOrient() && scope) {
+		var scoped = cziImport.sliceIdsInReextractScope(scope);
+		if (scoped.length) {
+			return scoped;
+		}
+	}
+	if (
+		isReextractFlow() &&
+		wizardState.reextractedSliceIds &&
+		wizardState.reextractedSliceIds.length
+	) {
+		return wizardState.reextractedSliceIds.slice();
+	}
+	return cziImport.collectSliceIds(wizardState.cziImport);
+}
+
+function shouldApplyCssPreviewForTile(sliceId, geom) {
+	if (orientGeometry.isIdentityGeometry(geom)) {
+		return false;
+	}
+	var scope = reextractGeometryScope();
+	if (!isReextractPartialOrient() || !scope) {
+		return true;
+	}
+	return cziImport.isDisplayChannelInReextractScope(
+		sliceId,
+		wizardState.orientDisplayChannel,
+		scope,
+		wizardState.cziImport,
+	);
+}
+
 function reextractPanelIdForStep(step) {
 	if (step === 1) {
 		return "stepRe1";
@@ -1343,6 +1388,7 @@ function ensureGeometryMap() {
 function updateOrientStepChrome() {
 	var devInfo = qs("orientStepDevInfo");
 	var reextractBanner = qs("orientReextractBanner");
+	var applyAllBtn = qs("orientApplyAll");
 	var showReextractOrient =
 		isReextractFlow() &&
 		wizardState.reextractedSliceIds &&
@@ -1352,6 +1398,9 @@ function updateOrientStepChrome() {
 	}
 	if (reextractBanner) {
 		reextractBanner.classList.toggle("d-none", !showReextractOrient);
+	}
+	if (applyAllBtn) {
+		applyAllBtn.disabled = isReextractPartialOrient();
 	}
 }
 
@@ -1449,22 +1498,50 @@ function populateOrientDisplayChannelSelect() {
 	if (!select) {
 		return;
 	}
-	var channels = cziImport.listOrientDisplayChannels(
-		wizardState.bundleRoot,
-		wizardState.cziImport,
-	);
+	var scope = reextractGeometryScope();
+	var channels;
+	if (isReextractPartialOrient() && scope) {
+		channels = cziImport.listOrientDisplayChannelsForReextract(
+			wizardState.bundleRoot,
+			wizardState.cziImport,
+			scope,
+		);
+	} else {
+		channels = cziImport.listOrientDisplayChannels(
+			wizardState.bundleRoot,
+			wizardState.cziImport,
+		).map(function (ch) {
+			return { key: ch.key, label: ch.label, enabled: true };
+		});
+	}
 	select.innerHTML = "";
 	for (var i = 0; i < channels.length; i++) {
 		var opt = document.createElement("option");
 		opt.value = channels[i].key;
 		opt.textContent = channels[i].label;
+		if (channels[i].enabled === false) {
+			opt.disabled = true;
+		}
 		select.appendChild(opt);
 	}
-	var hasCurrent = channels.some(function (ch) {
-		return ch.key === wizardState.orientDisplayChannel;
+	var hasEnabledCurrent = channels.some(function (ch) {
+		return ch.key === wizardState.orientDisplayChannel && ch.enabled !== false;
 	});
-	if (!hasCurrent) {
-		wizardState.orientDisplayChannel = cziImport.ORIENT_DISPLAY_DAPI;
+	if (!hasEnabledCurrent) {
+		var firstEnabled = null;
+		for (var j = 0; j < channels.length; j++) {
+			if (channels[j].enabled !== false) {
+				firstEnabled = channels[j].key;
+				break;
+			}
+		}
+		if (firstEnabled) {
+			wizardState.orientDisplayChannel = firstEnabled;
+		} else if (isReextractPartialOrient()) {
+			wizardState.orientDisplayChannel = cziImport.ORIENT_DISPLAY_DAPI;
+		} else {
+			wizardState.orientDisplayChannel = cziImport.ORIENT_DISPLAY_DAPI;
+		}
 	}
 	select.value = wizardState.orientDisplayChannel;
 }
@@ -1479,12 +1556,15 @@ function updateOrientPreviewBanner() {
 	var repairBtn = qs("orientRepairPreviews");
 	var step5Next = qs("step5Next");
 	var pending = countNonIdentityGeometry();
-	var sliceIds = cziImport.collectSliceIds(wizardState.cziImport);
+	var sliceIds = orientGridSliceIds();
 	var geoState = geometryState.assessGeometryApplyState(
 		wizardState.bundleRoot,
 		wizardState.cziImport,
 		{ sliceIds: sliceIds, previewHealth: health },
 	);
+	var pendingForApply = geoState.partialReextractApply
+		? geoState.pendingInScope
+		: pending;
 	var msg = cziImport.orientPreviewBannerText(health);
 	if (banner) {
 		if (msg) {
@@ -1516,7 +1596,7 @@ function updateOrientPreviewBanner() {
 	}
 	if (step5Next && !geometryRunning) {
 		step5Next.disabled =
-			!health.canApply || !geoState.allowApply || pending === 0;
+			!health.canApply || !geoState.allowApply || pendingForApply === 0;
 	}
 	var step5Hint = qs("step5ApplyHint");
 	if (step5Hint && !geometryRunning) {
@@ -1527,8 +1607,8 @@ function updateOrientPreviewBanner() {
 				'Geometry apply is blocked. Open <a href="./geometry_repair_wizard.html">Check Orientation Consistency</a> to audit and repair.';
 		} else if (geoState.policyState === "reextract_partial") {
 			step5Hint.textContent =
-				"Confirm geometry applies saved rotation to re-imported channels only. Skipped channels (e.g. DAPI) stay unchanged.";
-		} else if (pending === 0) {
+				"Preview shows how each re-imported channel will look after Confirm geometry. Skipped channels are greyed out in the menu.";
+		} else if (pendingForApply === 0) {
 			step5Hint.textContent = wizardState.cziImport.geometry_applied_at
 				? "No pending changes. Review on-disk previews or adjust a slice before confirming again."
 				: "No pending geometry changes.";
@@ -1566,7 +1646,7 @@ function renderOrientationGrid() {
 		return;
 	}
 	grid.innerHTML = "";
-	var ids = cziImport.collectSliceIds(wizardState.cziImport);
+	var ids = orientGridSliceIds();
 	for (var i = 0; i < ids.length; i++) {
 		var sliceId = ids[i];
 		var geom = wizardState.cziImport.geometry[sliceId];
@@ -1581,7 +1661,7 @@ function renderOrientationGrid() {
 		if (imgSrc) {
 			var viewport = document.createElement("div");
 			viewport.className = "czi-orient-tile-viewport";
-			if (!orientGeometry.isIdentityGeometry(geom)) {
+			if (shouldApplyCssPreviewForTile(sliceId, geom)) {
 				viewport.style.transform = geometryCssTransform(geom);
 				viewport.style.transformOrigin = "center center";
 			}
@@ -1645,6 +1725,11 @@ function renderOrientationGrid() {
 		function () {
 			updateOrientPreviewBanner();
 		},
+		isReextractPartialOrient()
+			? function (sliceId, geom) {
+					return shouldApplyCssPreviewForTile(sliceId, geom);
+				}
+			: null,
 	);
 }
 

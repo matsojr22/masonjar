@@ -6,6 +6,28 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v5.0.5
+
+**What's new**
+
+After **Re-import sections from CZI** with only some channels selected, Orient step 5 now shows **only the re-imported sections and channels** you need to review.
+
+**Fixes**
+
+- Skipped channels (e.g. DAPI) are greyed out in the display channel menu and no longer load a misleading rotated preview.
+- The first re-imported signal channel is selected automatically instead of DAPI.
+- Previews show how each re-imported channel will look **after Confirm geometry**, without double-rotating channels that were not re-read.
+
+**Commit subject**
+
+Fix re-import Orient preview for channel-scoped geometry
+
+**Commit body**
+
+Partial re-import Orient step 5 now limits the tile grid to re-imported sections, greys out skipped channels in the menu, and applies preview rotation only to re-imported channels so DAPI and other untouched images are not shown with extra transforms.
+
+---
+
 ## v5.0.4
 
 **What's new**

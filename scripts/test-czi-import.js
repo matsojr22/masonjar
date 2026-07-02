@@ -1035,6 +1035,53 @@ function testBuildReextractGeometryScope() {
 	assert.deepStrictEqual(scope["M528_s002"], ["signal_somata"]);
 }
 
+function testReextractOrientDisplayChannels() {
+	var cziImport = require("../js/czi_import");
+	assert.strictEqual(cziImport.displayChannelKeyForRoleKey("signal_somata"), "somata");
+	assert.strictEqual(cziImport.displayChannelKeyForRoleKey("dapi"), "dapi");
+	assert.strictEqual(cziImport.displayChannelKeyForRoleKey("other:my_branch"), "my_branch");
+
+	var scope = {
+		M528_s001: ["signal_somata"],
+	};
+	assert.deepStrictEqual(cziImport.unionDisplayChannelKeysFromScope(scope), ["somata"]);
+	assert.deepStrictEqual(cziImport.sliceIdsInReextractScope(scope), ["M528_s001"]);
+
+	var cfg = {
+		channels: [
+			{ keep: true, role: "dapi", index: 0 },
+			{ keep: true, role: "signal_somata", index: 1 },
+			{ keep: true, role: "signal_nuclei", index: 2 },
+		],
+	};
+	assert.strictEqual(
+		cziImport.isDisplayChannelInReextractScope("M528_s001", "somata", scope, cfg),
+		true,
+	);
+	assert.strictEqual(
+		cziImport.isDisplayChannelInReextractScope("M528_s001", "dapi", scope, cfg),
+		false,
+	);
+	assert.strictEqual(
+		cziImport.isDisplayChannelInReextractScope("M528_s001", "nuclei", scope, cfg),
+		false,
+	);
+
+	var list = cziImport.listOrientDisplayChannelsForReextract(null, cfg, scope);
+	var byKey = {};
+	for (var i = 0; i < list.length; i++) {
+		byKey[list[i].key] = list[i].enabled;
+	}
+	assert.strictEqual(byKey.dapi, false);
+	assert.strictEqual(byKey.somata, true);
+	assert.strictEqual(byKey.nuclei, false);
+
+	assert.strictEqual(
+		cziImport.firstEnabledReextractDisplayChannel(null, cfg, scope),
+		"somata",
+	);
+}
+
 testLowResTiffAudit();
 testResolveOrientPreviewPath();
 testListOrientDisplayChannels();
@@ -1047,5 +1094,6 @@ testComputeMeanLumaFromImageData();
 testBuildReextractConfigPreservesBitDepth();
 testGeometryHistoryParseAndReconcile();
 testBuildReextractGeometryScope();
+testReextractOrientDisplayChannels();
 testCziWizardModulesParse();
 console.log("test-czi-import.js: OK");

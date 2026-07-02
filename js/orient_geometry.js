@@ -192,7 +192,7 @@ function resetGeometryMap(geometryMap, sliceIds) {
 	return out;
 }
 
-function updateTileGeometryDom(grid, sliceId, geom) {
+function updateTileGeometryDom(grid, sliceId, geom, shouldApplyCss) {
 	if (!grid) {
 		return;
 	}
@@ -202,7 +202,11 @@ function updateTileGeometryDom(grid, sliceId, geom) {
 	}
 	var viewport = tile.querySelector(".czi-orient-tile-viewport");
 	if (viewport) {
-		if (isIdentityGeometry(geom)) {
+		var applyCss = !isIdentityGeometry(geom);
+		if (applyCss && shouldApplyCss && !shouldApplyCss(sliceId, geom)) {
+			applyCss = false;
+		}
+		if (!applyCss) {
 			viewport.style.transform = "";
 		} else {
 			viewport.style.transform = geometryCssTransform(geom);
@@ -215,7 +219,7 @@ function updateTileGeometryDom(grid, sliceId, geom) {
 	}
 }
 
-function wireOrientationGridClicks(grid, getGeometryMap, onChange) {
+function wireOrientationGridClicks(grid, getGeometryMap, onChange, shouldApplyCss) {
 	if (!grid || grid._mjOrientGeoWired) {
 		return;
 	}
@@ -232,7 +236,7 @@ function wireOrientationGridClicks(grid, getGeometryMap, onChange) {
 			return;
 		}
 		map[sid] = applyGeometryAction(map[sid], action);
-		updateTileGeometryDom(grid, sid, map[sid]);
+		updateTileGeometryDom(grid, sid, map[sid], shouldApplyCss);
 		if (onChange) {
 			onChange(sid, action);
 		}
@@ -259,11 +263,10 @@ function reimportTileHintText(sliceId, reextractedSliceIds, geom, geometryApplie
 	}
 	if (geometryHasPending(geom)) {
 		return (
-			"Re-imported from CZI — preview shows your saved rotation. " +
-			"Confirm geometry to update files."
+			"Re-imported from CZI — preview shows final orientation after Confirm geometry."
 		);
 	}
-	return "Re-imported from CZI — use rotate/flip, then Confirm geometry.";
+	return "Re-imported from CZI — adjust if needed, then Confirm geometry.";
 }
 
 function orientPostApplySummaryText(geometryAppliedAt, filesTotal) {
