@@ -6,6 +6,30 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.0
+
+**What's new**
+
+Mason Jar can now check for updates and install them from **Settings → Updates**. On startup, when a newer release is available, choose **Update** to open the updates page, **Download in browser**, or **Later**.
+
+On **Windows**, download the published zip and use **Install and restart** for a one-click upgrade (Mason Jar quits, replaces its install folder, and relaunches). Your projects and models in `%USERPROFILE%\.masonjar` are not touched.
+
+**Advanced:** enable **Allow pre-release versions** to receive beta builds from GitHub when they are newer than the latest stable release.
+
+**macOS** uses the same Updates page to check versions and open the GitHub release for manual DMG install.
+
+**Note for 5.x users:** download and install v6.0.0 once from GitHub to gain in-app updates going forward.
+
+**Commit subject**
+
+Add in-app Windows updates via Settings
+
+**Commit body**
+
+Settings → Updates checks GitHub releases, downloads the Windows zip, and applies it after quit via a detached updater script. Startup dialog offers Update, Download in browser, or Later. Advanced toggle includes pre-release builds when semver is newer.
+
+---
+
 ## v5.0.10
 
 **What's new**

@@ -30,6 +30,7 @@ const Module = require("module");
 })();
 const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 const io_fairshare_1 = require("./io_fairshare");
+const update_manager_1 = require("./update_manager");
 const { promisify } = require("util");
 const { PythonShell } = require("python-shell");
 const tar = require("tar");
@@ -37,7 +38,6 @@ const mv = promisify(fs.rename);
 const exec = promisify(require("child_process").exec);
 const stream = require("stream");
 const https = require("https");
-const semver = require("semver");
 const serverFetch = require("node-fetch");
 var appDir = app.getAppPath();
 var win = null;
@@ -212,7 +212,7 @@ var pyCommand = process.platform === "win32" ? "python.exe" : "./python3";
 const pyScriptsPath = path.join(appDir, "/py");
 const ioFairshareDir = (0, io_fairshare_1.defaultCoordinatorDir)();
 const CURRENT_VERSION_TAG = getVersion();
-const GITHUB_API_RELEASES = `https://api.github.com/repos/${BRANDING.GITHUB_REPO}/releases/latest`;
+const updateManager = new update_manager_1.UpdateManager(homeDir, CURRENT_VERSION_TAG, app.isPackaged);
 function loadMenuAndCheckUpdates(targetWin) {
     targetWin.loadFile("pages/menu.html");
     targetWin.webContents.once("did-finish-load", () => {
@@ -248,52 +248,72 @@ function appendFlagPathArg(args, flag, value) {
         args.push(flag, v);
     }
 }
-function checkForUpdates(parentWin) {
+function navigateToUpdatesSettings(targetWin, pending = false) {
+    if (pending) {
+        targetWin.loadFile("pages/settings_updates.html", {
+            query: { pending: "1" },
+        });
+    }
+    else {
+        targetWin.loadFile("pages/settings_updates.html");
+    }
+}
+function checkForUpdates(parentWin, options) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
-            const response = yield serverFetch(GITHUB_API_RELEASES, {
-                headers: {
-                    "User-Agent": `MasonJar/${CURRENT_VERSION_TAG}`,
-                    Accept: "application/vnd.github+json",
-                },
-            });
-            // No published releases yet — normal for a new fork; do not alarm the user.
-            if (response.status === 404) {
-                console.log("No GitHub releases published yet; skipping update check.");
+            const result = yield updateManager.checkForUpdatesDetailed();
+            if (result.error) {
+                console.warn("Failed to check for updates:", result.error);
+                if ((options === null || options === void 0 ? void 0 : options.manual) && parentWin) {
+                    dialog.showMessageBox(parentWin, {
+                        type: "warning",
+                        title: "Update check failed",
+                        message: "Could not reach GitHub to check for updates.",
+                        detail: result.error,
+                        buttons: ["OK"],
+                    });
+                }
                 return;
             }
-            if (!response.ok) {
-                console.warn(`Update check: GitHub API returned ${response.status}; skipping.`);
-                return;
-            }
-            const data = yield response.json();
-            const latestVersionTag = data.tag_name;
-            const latestCoerced = latestVersionTag
-                ? semver.coerce(latestVersionTag)
-                : null;
-            const currentCoerced = semver.coerce(CURRENT_VERSION_TAG);
-            if (latestCoerced &&
-                currentCoerced &&
-                semver.gt(latestCoerced, currentCoerced)) {
+            if (result.updateAvailable && result.latest) {
+                const detailParts = [
+                    `The latest version is ${result.latest}.`,
+                    result.isPrerelease ? "This is a pre-release build." : "",
+                    result.releaseNotesExcerpt || "",
+                ].filter(Boolean);
                 const userResponse = yield dialog.showMessageBox(parentWin || undefined, {
                     type: "info",
                     title: "Update Available",
                     message: "A new version of Mason Jar is available.",
-                    detail: `The latest version is ${latestCoerced.version}. Would you like to download it?`,
-                    buttons: ["Yes", "No"],
+                    detail: detailParts.join("\n\n"),
+                    buttons: ["Update", "Download in browser", "Later"],
                     defaultId: 0,
-                    cancelId: 1,
+                    cancelId: 2,
                 });
-                if (userResponse.response === 0 && data.html_url) {
-                    shell.openExternal(data.html_url);
+                if (userResponse.response === 0) {
+                    const target = parentWin || win;
+                    if (target) {
+                        navigateToUpdatesSettings(target, true);
+                    }
                 }
+                else if (userResponse.response === 1 && result.releaseUrl) {
+                    shell.openExternal(result.releaseUrl);
+                }
+            }
+            else if ((options === null || options === void 0 ? void 0 : options.manual) && parentWin) {
+                dialog.showMessageBox(parentWin, {
+                    type: "info",
+                    title: "No updates",
+                    message: "You're up to date.",
+                    detail: `Mason Jar ${CURRENT_VERSION_TAG} is the latest version available for your update settings.`,
+                    buttons: ["OK"],
+                });
             }
             else {
                 console.log("No updates available.");
             }
         }
         catch (error) {
-            // Network or parse errors should not block launch with a modal dialog.
             console.warn("Failed to check for updates:", error);
         }
     });
@@ -885,8 +905,55 @@ app.on("window-all-closed", function () {
 });
 ipcMain.on("checkForUpdates", (event) => {
     const parent = BrowserWindow.fromWebContents(event.sender);
-    checkForUpdates(parent || win);
+    checkForUpdates(parent || win, { manual: true });
 });
+ipcMain.handle("getUpdatePreferences", () => __awaiter(void 0, void 0, void 0, function* () {
+    return updateManager.getPreferences();
+}));
+ipcMain.handle("saveUpdatePreferences", (_event, patch) => __awaiter(void 0, void 0, void 0, function* () {
+    const saved = updateManager.savePreferences({
+        allow_prerelease: !!(patch === null || patch === void 0 ? void 0 : patch.allowPrerelease),
+    });
+    return saved;
+}));
+ipcMain.handle("getUpdateStatus", () => __awaiter(void 0, void 0, void 0, function* () {
+    return {
+        preferences: updateManager.getPreferences(),
+        cached: updateManager.getCachedCheck(),
+        applyInfo: updateManager.getApplyInfo(),
+        currentVersion: CURRENT_VERSION_TAG,
+    };
+}));
+ipcMain.handle("checkForUpdatesDetailed", (_event, opts) => __awaiter(void 0, void 0, void 0, function* () {
+    const result = yield updateManager.checkForUpdatesDetailed(opts === null || opts === void 0 ? void 0 : opts.allowPrerelease);
+    return {
+        result,
+        applyInfo: updateManager.getApplyInfo(),
+    };
+}));
+ipcMain.handle("downloadWindowsUpdate", (event) => __awaiter(void 0, void 0, void 0, function* () {
+    const sender = event.sender;
+    return updateManager.downloadWindowsUpdate((percent, message) => {
+        sender.send("updateDownloadProgress", [percent, message]);
+    });
+}));
+ipcMain.handle("applyWindowsUpdate", () => __awaiter(void 0, void 0, void 0, function* () {
+    const prepared = updateManager.prepareWindowsApply();
+    if (!prepared.ok) {
+        return prepared;
+    }
+    updateManager.launchApplyAndQuit(prepared.scriptPath, () => {
+        app.quit();
+    });
+    return { ok: true };
+}));
+ipcMain.handle("openExternalUrl", (_event, url) => __awaiter(void 0, void 0, void 0, function* () {
+    const target = String(url || "").trim();
+    if (target) {
+        yield shell.openExternal(target);
+    }
+    return { ok: true };
+}));
 ipcMain.on("getVersion", (event) => {
     event.sender.send("version", getVersion());
 });

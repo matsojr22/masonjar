@@ -23,6 +23,7 @@ const PAGES = [
 	"credits.html",
 	"settings.html",
 	"settings_network.html",
+	"settings_updates.html",
 	"batch_wizard.html",
 	"geometry_repair_wizard.html",
 	"orient.html",
@@ -73,6 +74,11 @@ const DOM_ASSERTIONS = {
 		"ioFairsharePanel",
 		"ioFairshareNasList",
 		"ioFairsharePickNas",
+	],
+	"settings_updates.html": [
+		"updateStatusPanel",
+		"checkAgainBtn",
+		"allowPrerelease",
 	],
 	"parcellation_wizard.html": [
 		"step1",

@@ -16,6 +16,7 @@
 const fs = require("fs");
 const https = require("https");
 const path = require("path");
+const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 
 const REPO_ROOT = path.join(__dirname, "..");
@@ -270,11 +271,37 @@ function buildGithubReleaseBody(version, opts) {
 	return lines.join("\n");
 }
 
+function sha256SidecarPath(zipPath) {
+	return zipPath + ".sha256";
+}
+
+function writeSha256Sidecar(filePath) {
+	const hash = crypto.createHash("sha256");
+	hash.update(fs.readFileSync(filePath));
+	const line = hash.digest("hex") + "  " + path.basename(filePath) + "\n";
+	const sidecar = sha256SidecarPath(filePath);
+	fs.writeFileSync(sidecar, line, "utf8");
+	return sidecar;
+}
+
+function expandArtifactsWithSidecars(artifacts) {
+	const expanded = [];
+	for (const filePath of artifacts) {
+		expanded.push(filePath);
+		if (/^masonjar-win32-x64-.+\.zip$/i.test(path.basename(filePath))) {
+			expanded.push(writeSha256Sidecar(filePath));
+		}
+	}
+	return expanded;
+}
+
 async function main() {
 	const opts = parseArgs(process.argv);
 	const version = readVersion();
 	const tag = "v" + version;
-	const artifacts = findArtifacts(version, opts.allPlatforms);
+	const artifacts = expandArtifactsWithSidecars(
+		findArtifacts(version, opts.allPlatforms),
+	);
 
 	console.log("Publish " + tag + " to " + REPO);
 	console.log(
