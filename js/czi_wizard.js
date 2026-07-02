@@ -97,6 +97,20 @@ function isReextractPartialOrient() {
 	return isReextractFlow() && !!reextractGeometryScope();
 }
 
+function isReextractMissingGeometryHistory() {
+	if (!isReextractPartialOrient() || !wizardState.bundleRoot) {
+		return false;
+	}
+	var sliceIds = orientGridSliceIds();
+	if (!sliceIds.length) {
+		return false;
+	}
+	return geometryHistory.reextractSliceIdsLackHistory(
+		wizardState.bundleRoot,
+		sliceIds,
+	);
+}
+
 function orientGridSliceIds() {
 	var scope = reextractGeometryScope();
 	if (isReextractPartialOrient() && scope) {
@@ -1388,19 +1402,25 @@ function ensureGeometryMap() {
 function updateOrientStepChrome() {
 	var devInfo = qs("orientStepDevInfo");
 	var reextractBanner = qs("orientReextractBanner");
+	var missingHistoryBanner = qs("orientMissingHistoryBanner");
 	var applyAllBtn = qs("orientApplyAll");
 	var showReextractOrient =
 		isReextractFlow() &&
 		wizardState.reextractedSliceIds &&
 		wizardState.reextractedSliceIds.length > 0;
+	var missingHistory = showReextractOrient && isReextractMissingGeometryHistory();
 	if (devInfo) {
 		devInfo.classList.toggle("d-none", isReextractFlow());
 	}
 	if (reextractBanner) {
-		reextractBanner.classList.toggle("d-none", !showReextractOrient);
+		reextractBanner.classList.toggle("d-none", !showReextractOrient || missingHistory);
+	}
+	if (missingHistoryBanner) {
+		missingHistoryBanner.classList.toggle("d-none", !missingHistory);
 	}
 	if (applyAllBtn) {
-		applyAllBtn.disabled = isReextractPartialOrient();
+		applyAllBtn.disabled =
+			isReextractPartialOrient() && !isReextractMissingGeometryHistory();
 	}
 }
 
@@ -1605,6 +1625,14 @@ function updateOrientPreviewBanner() {
 		} else if (geoState.policyState === "interrupted") {
 			step5Hint.innerHTML =
 				'Geometry apply is blocked. Open <a href="./geometry_repair_wizard.html">Check Orientation Consistency</a> to audit and repair.';
+		} else if (isReextractMissingGeometryHistory()) {
+			if (pendingForApply === 0) {
+				step5Hint.textContent =
+					"Use the rotation buttons below (or Copy first tile geometry to all), then Confirm geometry.";
+			} else {
+				step5Hint.textContent =
+					"CSS preview — not yet written to files. Confirm geometry writes transforms to disk.";
+			}
 		} else if (geoState.policyState === "reextract_partial") {
 			step5Hint.textContent =
 				"Preview shows how each re-imported channel will look after Confirm geometry. Skipped channels are greyed out in the menu.";
@@ -1723,6 +1751,7 @@ function renderOrientationGrid() {
 			return wizardState.cziImport.geometry;
 		},
 		function () {
+			updateOrientStepChrome();
 			updateOrientPreviewBanner();
 		},
 		isReextractPartialOrient()
@@ -2385,6 +2414,11 @@ async function runExtract(options) {
 						"No geometry history for re-imported section(s): " +
 							reconcileResult.missing.join(", "),
 					);
+					if (reconcileResult.restored.length === 0) {
+						verboseExtractLog(
+							"Orient step: set rotation manually, then Confirm geometry.",
+						);
+					}
 				}
 			}
 			wizardState.repairMode = false;
@@ -2839,7 +2873,10 @@ function bindStep5() {
 		});
 	}
 	qs("orientApplyAll").addEventListener("click", function () {
-		var ids = cziImport.collectSliceIds(wizardState.cziImport);
+		var ids =
+			isReextractFlow() && orientGridSliceIds().length
+				? orientGridSliceIds()
+				: cziImport.collectSliceIds(wizardState.cziImport);
 		if (!ids.length) {
 			return;
 		}
@@ -2848,7 +2885,9 @@ function bindStep5() {
 		for (var i = 1; i < ids.length; i++) {
 			wizardState.cziImport.geometry[ids[i]] = orientGeometry.cloneGeometry(copied);
 		}
+		updateOrientStepChrome();
 		renderOrientationGrid();
+		updateOrientPreviewBanner();
 	});
 	qs("step5Next").addEventListener("click", function () {
 		runApplyGeometry().catch(function (err) {

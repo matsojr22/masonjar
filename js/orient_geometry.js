@@ -220,11 +220,13 @@ function updateTileGeometryDom(grid, sliceId, geom, shouldApplyCss) {
 }
 
 function wireOrientationGridClicks(grid, getGeometryMap, onChange, shouldApplyCss) {
-	if (!grid || grid._mjOrientGeoWired) {
+	if (!grid) {
 		return;
 	}
-	grid._mjOrientGeoWired = true;
-	grid.addEventListener("click", function (ev) {
+	if (grid._mjOrientGeoClick) {
+		grid.removeEventListener("click", grid._mjOrientGeoClick);
+	}
+	grid._mjOrientGeoClick = function (ev) {
 		var btn = ev.target.closest && ev.target.closest("button[data-geo]");
 		if (!btn || !grid.contains(btn)) {
 			return;
@@ -240,7 +242,8 @@ function wireOrientationGridClicks(grid, getGeometryMap, onChange, shouldApplyCs
 		if (onChange) {
 			onChange(sid, action);
 		}
-	});
+	};
+	grid.addEventListener("click", grid._mjOrientGeoClick);
 }
 
 function orientPreviewHintText(geometryAppliedAt, pendingCount) {

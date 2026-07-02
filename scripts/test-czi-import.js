@@ -1024,6 +1024,35 @@ function testGeometryHistoryParseAndReconcile() {
 	assert.ok(!fs.existsSync(path.join(metaDir, "geometry_apply_last_result.json")));
 }
 
+function testReextractSliceIdsLackHistory() {
+	var geometryHistory = require("../js/geometry_history");
+	var branding = require("../js/branding");
+
+	var bundleEmpty = fs.mkdtempSync(path.join(os.tmpdir(), "geom-lack-"));
+	assert.strictEqual(
+		geometryHistory.reextractSliceIdsLackHistory(bundleEmpty, ["M528_s001"]),
+		true,
+	);
+
+	var bundleWithHistory = fs.mkdtempSync(path.join(os.tmpdir(), "geom-lack-"));
+	var metaDir = path.join(bundleWithHistory, branding.META_DIR);
+	fs.mkdirSync(metaDir, { recursive: true });
+	fs.writeFileSync(
+		path.join(metaDir, geometryHistory.HISTORY_FILENAME),
+		'{"kind":"file","slice_id":"M528_s001","ops":["rot90"]}\n',
+		"utf8",
+	);
+	assert.strictEqual(
+		geometryHistory.reextractSliceIdsLackHistory(bundleWithHistory, ["M528_s001"]),
+		false,
+	);
+	assert.strictEqual(
+		geometryHistory.reextractSliceIdsLackHistory(bundleWithHistory, ["M528_s002"]),
+		true,
+	);
+	assert.strictEqual(geometryHistory.reextractSliceIdsLackHistory(bundleWithHistory, []), false);
+}
+
 function testBuildReextractGeometryScope() {
 	var cziImport = require("../js/czi_import");
 	var scope = cziImport.buildReextractGeometryScope([
@@ -1093,6 +1122,7 @@ testFindBlankPreviews();
 testComputeMeanLumaFromImageData();
 testBuildReextractConfigPreservesBitDepth();
 testGeometryHistoryParseAndReconcile();
+testReextractSliceIdsLackHistory();
 testBuildReextractGeometryScope();
 testReextractOrientDisplayChannels();
 testCziWizardModulesParse();

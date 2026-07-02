@@ -6,6 +6,27 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.6
+
+**What's new**
+
+After **re-import from CZI**, if the project has no saved orientation history (older projects oriented before history was recorded), Orient step 5 now shows a clear warning and lets you set rotation manually.
+
+**Fixes**
+
+- Re-import Orient: rotation buttons, **Copy first tile geometry to all**, and **Confirm geometry** work when orientation history is missing.
+- When history exists, re-import Orient behavior is unchanged (restored transforms and existing confirm flow).
+
+**Commit subject**
+
+Release v6.0.6 — re-import orient when geometry history is missing
+
+**Commit body**
+
+Warn on Orient step 5 when geometry_history.jsonl is absent after re-import; enable manual rotation and confirm for legacy projects.
+
+---
+
 ## v6.0.5
 
 **What's new**

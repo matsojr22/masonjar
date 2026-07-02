@@ -123,6 +123,25 @@ function reconcileGeometryAfterReextract(bundleRoot, cziImport, sliceIds) {
 	return { restored: restored, missing: missing };
 }
 
+/**
+ * True when none of the given slice ids have non-empty ops in geometry history.
+ */
+function reextractSliceIdsLackHistory(bundleRoot, sliceIds) {
+	sliceIds = sliceIds || [];
+	if (!sliceIds.length) {
+		return false;
+	}
+	var entries = readGeometryHistory(bundleRoot);
+	var opsBySlice = lastOpsBySliceId(entries, sliceIds);
+	for (var i = 0; i < sliceIds.length; i++) {
+		var ops = opsBySlice[sliceIds[i]];
+		if (ops && ops.length) {
+			return false;
+		}
+	}
+	return true;
+}
+
 module.exports = {
 	HISTORY_FILENAME: HISTORY_FILENAME,
 	historyPath: historyPath,
@@ -130,4 +149,5 @@ module.exports = {
 	readGeometryHistory: readGeometryHistory,
 	lastOpsBySliceId: lastOpsBySliceId,
 	reconcileGeometryAfterReextract: reconcileGeometryAfterReextract,
+	reextractSliceIdsLackHistory: reextractSliceIdsLackHistory,
 };
