@@ -2784,6 +2784,9 @@ ipcMain.on("runDetection", function (event: any, data: any[]) {
   }
 
   appendSliceListArg(custom_args, data, 9);
+  if (data.length > 10 && data[10]) {
+    custom_args.push("--per-slice-qc");
+  }
 
   const partial = {
     mode: "text" as const,

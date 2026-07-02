@@ -764,6 +764,9 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
         if (sliceListPath) {
             args.push("--slice-list", sliceListPath);
         }
+        if (params.perSliceQc) {
+            args.push("--per-slice-qc");
+        }
         return {
             scriptName: "find_neurons.py",
             args,

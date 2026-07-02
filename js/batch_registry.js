@@ -172,6 +172,7 @@ var DEFAULT_PARAMS = {
 		eccentricity: 0.2,
 		multichannel: false,
 		customModel: "",
+		perSliceQc: false,
 	},
 	intensity: {
 		wholeSlice: true,

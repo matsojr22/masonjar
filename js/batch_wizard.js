@@ -336,6 +336,12 @@ function renderParamSection(stepId, body, params) {
 				'<input type="text" class="form-control form-control-sm" id="detect-customModel" value="' +
 					escapeHtml(params.customModel || "") +
 					'" />',
+			) +
+			fieldRow(
+				"Per-slice QC histograms",
+				'<input type="checkbox" class="form-check-input" id="detect-perSliceQc" ' +
+					(params.perSliceQc ? "checked" : "") +
+					" /> <span class=\"small text-muted\">Run-level QC PNGs are always written</span>",
 			);
 		return;
 	}
@@ -1033,6 +1039,9 @@ function collectParamsFromUi() {
 				qs("detect-multichannel") && qs("detect-multichannel").checked
 			);
 			next.customModel = qs("detect-customModel").value || "";
+			next.perSliceQc = !!(
+				qs("detect-perSliceQc") && qs("detect-perSliceQc").checked
+			);
 		} else if (stepId === "intensity") {
 			var hem = qs("intensity-hemisphere") ? qs("intensity-hemisphere").value : "whole";
 			next.wholeSlice = hem === "whole";

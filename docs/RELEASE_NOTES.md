@@ -6,6 +6,30 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v5.0.6
+
+**What's new**
+
+After **Cell Detection** finishes, Mason Jar saves PNG histograms in the detection output folder so you can tune confidence, size, and eccentricity without guess-and-check. Run-level charts (confidence, bounding-box long axis, eccentricity) are written every time; optional per-slice charts are available from a checkbox on the Detect page and in the batch wizard.
+
+Sharpen and **Top-hat filter** wizards now include a **?** help button next to **Set as active max task for this branch**, explaining what that option does and when to use it before running **Cell Detection** or **Isolate Regions**.
+
+**Changes**
+
+- Detection output includes `detect_qc_confidence.png`, `detect_qc_long_axis_px.png`, `detect_qc_eccentricity.png`, and a JSON summary with counts and thresholds used.
+- Re-running Detect into the same output folder replaces prior QC files automatically.
+- Batch **Detect** step supports the same per-slice QC option.
+
+**Commit subject**
+
+Add detection QC histograms and active max task help
+
+**Commit body**
+
+Cell Detection now writes run-level QC histograms and an optional per-slice report to help tune confidence, size, and eccentricity. Sharpen and top-hat Done steps add a help popover for Set as active max task so users know when downstream Detect and Isolate Regions will use filtered images.
+
+---
+
 ## v5.0.5
 
 **What's new**

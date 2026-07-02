@@ -1025,6 +1025,9 @@ function buildJob(
     if (sliceListPath) {
       args.push("--slice-list", sliceListPath);
     }
+    if (params.perSliceQc) {
+      args.push("--per-slice-qc");
+    }
     return {
       scriptName: "find_neurons.py",
       args,

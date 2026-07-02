@@ -2406,6 +2406,9 @@ ipcMain.on("runDetection", function (event, data) {
         custom_args.push(`--multichannel`);
     }
     appendSliceListArg(custom_args, data, 9);
+    if (data.length > 10 && data[10]) {
+        custom_args.push("--per-slice-qc");
+    }
     const partial = {
         mode: "text",
         pythonPath: path.join(envPythonPath, pyCommand),

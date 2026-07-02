@@ -13,6 +13,7 @@ var maxDatasets = require("./max_datasets");
 var cziImport = require("./czi_import");
 var fileIndex = require("./file_index");
 var homeDir = require("./home_dir");
+var activeMaxTaskHelp = require("./active_max_task_help");
 
 var IDLE_PREVIEW_MS = 5000;
 var DEFAULT_VIEW_W = 512;
@@ -1515,6 +1516,12 @@ function wirePreprocessWizard(opts) {
 			finishBack.href = "./menu_category.html?cat=preprocess";
 			finishBack.textContent = "Back to preprocessing";
 			finish.appendChild(finishBack);
+		}
+		var helpBtn = document.getElementById("setActiveMaxHelp");
+		if (helpBtn) {
+			activeMaxTaskHelp.wireActiveMaxHelpPopover(helpBtn, {
+				toolKind: opts.stepId,
+			});
 		}
 	}
 

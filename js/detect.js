@@ -30,8 +30,10 @@ var somata = document.getElementById("somata");
 var nuclei = document.getElementById("nuclei");
 var area = document.getElementById("area");
 var flatOutput = document.getElementById("flatOutput");
+var perSliceQc = document.getElementById("perSliceQc");
 var detectionMethod = "somata";
 var lastDetectionRunRel = "";
+var PER_SLICE_QC_KEY = "masonjar.detect.perSliceQc";
 
 pipelineRun.ensureRunModeUi("runModePanel", "detect");
 
@@ -100,6 +102,21 @@ nuclei.addEventListener("click", function () {
 advance.addEventListener("click", function () {
 	arrow.classList.toggle("down");
 });
+
+if (perSliceQc) {
+	try {
+		perSliceQc.checked = localStorage.getItem(PER_SLICE_QC_KEY) === "1";
+	} catch (_err) {
+		/* ignore */
+	}
+	perSliceQc.addEventListener("change", function () {
+		try {
+			localStorage.setItem(PER_SLICE_QC_KEY, perSliceQc.checked ? "1" : "0");
+		} catch (_err) {
+			/* ignore */
+		}
+	});
+}
 
 function checkNumber(value, message) {
 	var str = value.toString();
@@ -220,6 +237,7 @@ run.addEventListener("click", function () {
 			a,
 			e,
 			plan.sliceListPath || "",
+			!!(perSliceQc && perSliceQc.checked),
 		]);
 	}
 });

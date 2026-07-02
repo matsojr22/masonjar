@@ -573,3 +573,48 @@ body.wizard-busy .btn-primary:not(:disabled)::after,
 	border-radius: 0.25rem;
 	padding: 0.5rem 0.75rem;
 }
+
+.active-max-help-trigger {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.15rem;
+	height: 1.15rem;
+	border-radius: 50%;
+	border: 1px solid var(--mj-border, #adb5bd);
+	font-size: 0.75rem;
+	font-weight: 600;
+	line-height: 1;
+	text-decoration: none !important;
+	vertical-align: middle;
+}
+
+.active-max-help-trigger:hover,
+.active-max-help-trigger:focus {
+	color: var(--mj-primary, #0d6efd) !important;
+	border-color: var(--mj-primary, #0d6efd);
+}
+
+.active-max-help-popover {
+	max-width: 32rem;
+}
+
+.active-max-help-popover .popover-body {
+	text-align: left;
+	max-width: 32rem;
+}
+
+.active-max-help-popover .popover-body p:last-child,
+.active-max-help-popover .popover-body ul:last-child {
+	margin-bottom: 0;
+}
+
+.active-max-help-popover .table {
+	font-size: 0.85rem;
+	margin-bottom: 0.75rem;
+}
+
+.active-max-help-popover code {
+	font-size: 0.8rem;
+	word-break: break-all;
+}
