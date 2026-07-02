@@ -14,6 +14,7 @@ import tifffile as tiff
 
 from bundle_slice_paths import paths_for_slice, signal_branch_dirs_from_cfg
 from czi_common import CANONICAL_REL, emit_log, emit_result, load_import_config, resolve_original_zstack_path
+from czi_common import ROLE_DAPI, branch_for_role_key
 from geometry_apply_progress import (
     clear_progress,
     is_completed,
@@ -126,18 +127,122 @@ def transform_file(path: Path, ops: list) -> tuple[np.ndarray, np.ndarray]:
     return arr, transformed
 
 
+def _scoped_branches_for_role_keys(role_keys: list[str]) -> set[str]:
+    branches: set[str] = set()
+    for rk in role_keys or []:
+        if rk == ROLE_DAPI:
+            branches.add("dapi")
+            continue
+        branch = branch_for_role_key(str(rk))
+        if branch:
+            branches.add(branch)
+    return branches
+
+
+def _max_rel_prefixes_for_scope(cfg: dict, role_keys: list[str]) -> set[str]:
+    prefixes: set[str] = set()
+    max_runs = (cfg.get("max_runs") or {}) if isinstance(cfg, dict) else {}
+    for rk in role_keys or []:
+        rel = str(max_runs.get(rk) or "").replace("\\", "/").strip("/")
+        if rel:
+            prefixes.add(rel.lower())
+        branch = branch_for_role_key(str(rk))
+        if branch:
+            prefixes.add(f"{branch}/max")
+    return prefixes
+
+
+def path_in_reextract_scope(
+    target: Path,
+    bundle_root: Path,
+    slice_id: str,
+    role_keys: list[str],
+    cfg: dict,
+) -> bool:
+    """True when target belongs to a re-imported channel for this slice."""
+    if not role_keys:
+        return False
+    try:
+        rel = target.relative_to(bundle_root).as_posix()
+    except ValueError:
+        return False
+    rel_lower = rel.lower()
+    sid = str(slice_id)
+    sid_lower = sid.lower()
+    branches = _scoped_branches_for_role_keys(role_keys)
+    role_set = {str(rk) for rk in role_keys}
+
+    dapi_png = f"{CANONICAL_REL['dapi']}/{sid}.png".lower()
+    if rel_lower == dapi_png or rel_lower.endswith(f"/00_dapi/{sid_lower}.png"):
+        return ROLE_DAPI in role_set
+
+    prev_prefix = f"{CANONICAL_REL['previews']}/{sid}_".lower()
+    if rel_lower.startswith(prev_prefix) and rel_lower.endswith(".png"):
+        branch = Path(rel).stem[len(sid) + 1 :]
+        if branch == "dapi":
+            return ROLE_DAPI in role_set
+        return branch.lower() in {b.lower() for b in branches if b != "dapi"}
+
+    for branch in branches:
+        if branch == "dapi":
+            continue
+        orig = f"{CANONICAL_REL['original_scans']}/{branch}/{sid}.tif".lower()
+        if rel_lower == orig:
+            return True
+
+    if f"/{sid_lower}.tif" in rel_lower and "/03_max/" in rel_lower:
+        max_prefixes = _max_rel_prefixes_for_scope(cfg, role_keys)
+        max_base = f"{CANONICAL_REL['max']}/".lower()
+        if rel_lower.startswith(max_base):
+            tail = rel_lower[len(max_base) :]
+            for prefix in max_prefixes:
+                if tail.startswith(prefix.lower() + "/") or tail == prefix.lower():
+                    return True
+            for branch in branches:
+                if branch != "dapi" and f"/{branch}/".lower() in rel_lower:
+                    return True
+
+    return False
+
+
+def filter_paths_for_reextract_scope(
+    paths: list[Path],
+    bundle_root: Path,
+    slice_id: str,
+    scope: dict,
+    cfg: dict,
+) -> list[Path]:
+    role_keys = scope.get(slice_id) or []
+    if not role_keys:
+        return []
+    return [
+        p
+        for p in paths
+        if path_in_reextract_scope(p, bundle_root, slice_id, role_keys, cfg)
+    ]
+
+
 def collect_geometry_jobs(
     bundle_root: Path,
     geometry: dict,
     cfg: dict,
 ) -> list[tuple[str, list, list[Path]]]:
     jobs: list[tuple[str, list, list[Path]]] = []
+    reextract_scope = cfg.get("reextract_geometry_scope")
     for slice_id in sorted(geometry.keys()):
         spec = geometry[slice_id] or {}
         ops = compose_ops_from_spec(spec)
         if not ops:
             continue
         targets = paths_for_slice(bundle_root, slice_id, cfg)
+        if reextract_scope:
+            targets = filter_paths_for_reextract_scope(
+                targets,
+                bundle_root,
+                slice_id,
+                reextract_scope,
+                cfg,
+            )
         if targets:
             jobs.append((slice_id, ops, targets))
     return jobs

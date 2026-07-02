@@ -2191,6 +2191,25 @@ function findBlankPreviewsAsync(bundleRoot, cziImport, opts) {
 	});
 }
 
+function buildReextractGeometryScope(repairTargets) {
+	var scope = {};
+	for (var i = 0; i < (repairTargets || []).length; i++) {
+		var t = repairTargets[i];
+		var sid = t && t.slice_id;
+		var roleKey = t && t.role_key;
+		if (!sid || !roleKey) {
+			continue;
+		}
+		if (!scope[sid]) {
+			scope[sid] = [];
+		}
+		if (scope[sid].indexOf(roleKey) < 0) {
+			scope[sid].push(roleKey);
+		}
+	}
+	return scope;
+}
+
 function buildReextractConfig(cziImport, targets, project) {
 	var payload = JSON.parse(JSON.stringify(cziImport || {}));
 	payload.repair_mode = "reextract";
@@ -2326,6 +2345,7 @@ module.exports = {
 	measurePreviewBrightness: measurePreviewBrightness,
 	collectSliceIdsFromImport: collectSliceIdsFromImport,
 	buildRepairTargetsForSelection: buildRepairTargetsForSelection,
+	buildReextractGeometryScope: buildReextractGeometryScope,
 	listReimportOutputPaths: listReimportOutputPaths,
 	validateReimportSources: validateReimportSources,
 	findBlankPreviews: findBlankPreviews,

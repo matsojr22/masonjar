@@ -38,6 +38,21 @@ function writeMetaJson(bundleRoot, name, payload) {
 	return p;
 }
 
+/** Remove stale apply progress after CZI re-extract reconcile. */
+function clearGeometryApplyMeta(bundleRoot) {
+	for (var i = 0; i < 2; i++) {
+		var name = i === 0 ? META_PROGRESS : META_LAST_RESULT;
+		var p = metaFilePath(bundleRoot, name);
+		try {
+			if (fs.existsSync(p)) {
+				fs.unlinkSync(p);
+			}
+		} catch (_err) {
+			/* best-effort */
+		}
+	}
+}
+
 function geometryOnlyHash(cziImport) {
 	var geom = (cziImport && cziImport.geometry) || {};
 	return crypto.createHash("sha256").update(JSON.stringify(geom)).digest("hex");
@@ -171,12 +186,50 @@ function progressMatches(cziImport, progress) {
 	return progress.config_fingerprint === fp && progress.geometry_hash === gh;
 }
 
+function hasReextractGeometryScope(cziImport) {
+	var scope = cziImport && cziImport.reextract_geometry_scope;
+	if (!scope || typeof scope !== "object") {
+		return false;
+	}
+	return Object.keys(scope).length > 0;
+}
+
+function countPendingInReextractScope(cziImport, scope) {
+	var geom = (cziImport && cziImport.geometry) || {};
+	var count = 0;
+	var keys = Object.keys(scope || {});
+	for (var i = 0; i < keys.length; i++) {
+		if (orientGeometry.geometryHasPending(geom[keys[i]])) {
+			count++;
+		}
+	}
+	return count;
+}
+
+function reextractScopeIncludesDapi(scope) {
+	var keys = Object.keys(scope || {});
+	for (var i = 0; i < keys.length; i++) {
+		var roles = scope[keys[i]] || [];
+		for (var r = 0; r < roles.length; r++) {
+			if (roles[r] === cziImport.ROLE_DAPI) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 function assessGeometryApplyState(bundleRoot, cziImport, options) {
 	options = options || {};
 	cziImport = cziImport || {};
 	var sliceIds = options.sliceIds || resolveSliceIds(bundleRoot, cziImport);
 	var previewHealth = options.previewHealth || null;
 	var pendingCount = countPendingGeometry(cziImport, sliceIds);
+	var reextractScope = cziImport.reextract_geometry_scope;
+	var partialReextractApply = hasReextractGeometryScope(cziImport);
+	var pendingInScope = partialReextractApply
+		? countPendingInReextractScope(cziImport, reextractScope)
+		: 0;
 	var signals = [];
 	var policyState = "healthy";
 	var geomHash = geometryOnlyHash(cziImport);
@@ -192,14 +245,15 @@ function assessGeometryApplyState(bundleRoot, cziImport, options) {
 			policyState = "interrupted";
 		} else if (
 			pendingCount > 0 &&
-			!cziImport.geometry_applied_at
+			!cziImport.geometry_applied_at &&
+			!partialReextractApply
 		) {
 			signals.push("finalize_pending");
 			policyState = "finalize_pending";
 		}
 	}
 
-	if (lastResult && progressOk) {
+	if (lastResult && progressOk && !partialReextractApply) {
 		if (lastResult.ok === false) {
 			signals.push("last_result_failed");
 			policyState = "interrupted";
@@ -260,12 +314,28 @@ function assessGeometryApplyState(bundleRoot, cziImport, options) {
 		allowPreviewRepair = false;
 	}
 
+	if (partialReextractApply && pendingInScope > 0 && !previewBlocked) {
+		allowApply = true;
+		showRebuildWizard = false;
+		canFinalizeOnly = false;
+		policyState = "reextract_partial";
+		if (signals.indexOf("reextract_partial_apply") < 0) {
+			signals.push("reextract_partial_apply");
+		}
+		blockReason = "";
+	}
+
 	return {
 		policyState: policyState,
 		signals: signals,
 		sliceIds: sliceIds,
 		pendingCount: pendingCount,
-		allowApply: allowApply && !previewBlocked && pendingCount > 0,
+		pendingInScope: pendingInScope,
+		partialReextractApply: partialReextractApply,
+		reextractScopeIncludesDapi: partialReextractApply
+			? reextractScopeIncludesDapi(reextractScope)
+			: false,
+		allowApply: allowApply && !previewBlocked && (partialReextractApply ? pendingInScope > 0 : pendingCount > 0),
 		allowPreviewRepair: allowPreviewRepair,
 		showRebuildWizard: showRebuildWizard,
 		canFinalizeOnly: canFinalizeOnly,
@@ -306,6 +376,16 @@ function geometryStateBannerText(state, previewHealth) {
 		return (
 			"Geometry files appear fully written but project settings were not finalized. " +
 			"Use Finalize only or Check Orientation Consistency."
+		);
+	}
+	if (state.policyState === "reextract_partial") {
+		var dapiNote = state.reextractScopeIncludesDapi
+			? ""
+			: " DAPI and other skipped channels are left unchanged.";
+		return (
+			"Re-imported channel(s) need saved orientation applied to disk only." +
+			dapiNote +
+			" Click Confirm geometry."
 		);
 	}
 	return "";
@@ -560,6 +640,7 @@ function finalizeGeometryAfterApply(bundleRoot, importCfg, options) {
 	} else if (options.files_total != null) {
 		importCfg.geometry_applied_files_total = options.files_total;
 	}
+	delete importCfg.reextract_geometry_scope;
 	var configExtra = Object.assign({}, options.configExtra || {});
 	if (options.applySource) {
 		configExtra.apply_source = options.applySource;
@@ -652,6 +733,8 @@ module.exports = {
 	resolveSliceIds: resolveSliceIds,
 	previewPathsForSlice: previewPathsForSlice,
 	assessGeometryApplyState: assessGeometryApplyState,
+	clearGeometryApplyMeta: clearGeometryApplyMeta,
+	hasReextractGeometryScope: hasReextractGeometryScope,
 	geometryStateBannerText: geometryStateBannerText,
 	persistLastApplyResult: persistLastApplyResult,
 	repairQueuePath: repairQueuePath,

@@ -86,6 +86,34 @@ def test_collect_geometry_jobs_skips_identity(tmp_path: Path) -> None:
     assert [job[0] for job in jobs] == []
 
 
+def test_collect_geometry_jobs_scoped_reextract_skips_dapi(tmp_path: Path) -> None:
+    from apply_geometry import collect_geometry_jobs
+
+    bundle = tmp_path / "Brain_masonjar"
+    slice_id = "M528_s001"
+    dapi_png = bundle / "data/counting/00_dapi" / f"{slice_id}.png"
+    prev_dapi = bundle / "data/counting/_previews" / f"{slice_id}_dapi.png"
+    prev_somata = bundle / "data/counting/_previews" / f"{slice_id}_somata.png"
+    orig = bundle / "data/original_scans/somata" / f"{slice_id}.tif"
+    for p in (dapi_png, prev_dapi, prev_somata, orig):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+
+    cfg = {
+        "channels": [{"role": "signal_somata", "keep": True}],
+        "reextract_geometry_scope": {
+            slice_id: ["signal_somata"],
+        },
+    }
+    geometry = {slice_id: {"ops": ["rot90"]}}
+    jobs = collect_geometry_jobs(bundle, geometry, cfg)
+    assert len(jobs) == 1
+    targets = {p.name for p in jobs[0][2]}
+    assert f"{slice_id}_somata.png" in targets
+    assert f"{slice_id}.png" not in targets
+    assert f"{slice_id}_dapi.png" not in targets
+
+
 def test_transform_file_roundtrip(tmp_path: Path) -> None:
     from apply_geometry import transform_file
 

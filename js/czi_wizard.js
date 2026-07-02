@@ -169,6 +169,7 @@ function setStep(step) {
 	updateWizardCancelVisibility();
 	updateOrientStepChrome();
 	if (step === 5) {
+		hydrateReextractOrientFromSettings();
 		populateOrientDisplayChannelSelect();
 		updateOrientApplySummary();
 		updateOrientPreviewBanner();
@@ -1354,9 +1355,28 @@ function updateOrientStepChrome() {
 	}
 }
 
+function hydrateReextractOrientFromSettings() {
+	if (!isReextractFlow() || !wizardState.cziImport) {
+		return;
+	}
+	var scope = wizardState.cziImport.reextract_geometry_scope;
+	if (!scope || typeof scope !== "object") {
+		return;
+	}
+	var sliceIds = Object.keys(scope);
+	if (!sliceIds.length) {
+		return;
+	}
+	wizardState.reextractedSliceIds = sliceIds.slice();
+	updateOrientStepChrome();
+}
+
 function clearReextractOrientState() {
 	wizardState.reextractedSliceIds = [];
 	wizardState.reextractPreviewCacheBuster = null;
+	if (wizardState.cziImport) {
+		delete wizardState.cziImport.reextract_geometry_scope;
+	}
 	updateOrientStepChrome();
 }
 
@@ -1477,10 +1497,14 @@ function updateOrientPreviewBanner() {
 	}
 	var geoMsg = geometryState.geometryStateBannerText(geoState, health);
 	if (geomBanner) {
-		if (geoMsg && geoState.policyState === "interrupted") {
-			geomBanner.innerHTML =
-				geoMsg +
-				' <a href="./geometry_repair_wizard.html">Check Orientation Consistency</a>';
+		if (geoMsg && (geoState.policyState === "interrupted" || geoState.policyState === "reextract_partial")) {
+			if (geoState.policyState === "interrupted") {
+				geomBanner.innerHTML =
+					geoMsg +
+					' <a href="./geometry_repair_wizard.html">Check Orientation Consistency</a>';
+			} else {
+				geomBanner.textContent = geoMsg;
+			}
 			geomBanner.classList.remove("d-none");
 		} else {
 			geomBanner.textContent = "";
@@ -1501,6 +1525,9 @@ function updateOrientPreviewBanner() {
 		} else if (geoState.policyState === "interrupted") {
 			step5Hint.innerHTML =
 				'Geometry apply is blocked. Open <a href="./geometry_repair_wizard.html">Check Orientation Consistency</a> to audit and repair.';
+		} else if (geoState.policyState === "reextract_partial") {
+			step5Hint.textContent =
+				"Confirm geometry applies saved rotation to re-imported channels only. Skipped channels (e.g. DAPI) stay unchanged.";
 		} else if (pending === 0) {
 			step5Hint.textContent = wizardState.cziImport.geometry_applied_at
 				? "No pending changes. Review on-disk previews or adjust a slice before confirming again."
@@ -1672,6 +1699,13 @@ function writeImportConfig() {
 		if (reextractPayload.max_runs) {
 			extra.max_runs = reextractPayload.max_runs;
 		}
+	}
+	if (
+		wizardState.cziImport.reextract_geometry_scope &&
+		!isRepair
+	) {
+		extra.reextract_geometry_scope = wizardState.cziImport.reextract_geometry_scope;
+		extra.apply_source = "czi_reextract";
 	}
 	var cfgPath = geometryState.writeCziImportConfig(
 		wizardState.bundleRoot,
@@ -2246,6 +2280,8 @@ async function runExtract(options) {
 					}
 				}
 				wizardState.reextractedSliceIds = Object.keys(sliceIdSet);
+				wizardState.cziImport.reextract_geometry_scope =
+					cziImport.buildReextractGeometryScope(reextractTargets);
 				var reconcileResult = geometryHistory.reconcileGeometryAfterReextract(
 					wizardState.bundleRoot,
 					wizardState.cziImport,
@@ -2320,7 +2356,7 @@ async function runApplyGeometry() {
 		wizardState.cziImport,
 		{ sliceIds: sliceIds },
 	);
-	if (geoState.policyState === "interrupted") {
+	if (geoState.policyState === "interrupted" && !geoState.partialReextractApply) {
 		throw new Error(
 			"Geometry apply is blocked — open Check Orientation Consistency to audit and repair inconsistent files.",
 		);

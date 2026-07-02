@@ -5,6 +5,7 @@ var path = require("path");
 
 var branding = require("./branding");
 var orientGeometry = require("./orient_geometry");
+var geometryState = require("./geometry_state");
 
 var HISTORY_FILENAME = "geometry_history.jsonl";
 
@@ -116,6 +117,9 @@ function reconcileGeometryAfterReextract(bundleRoot, cziImport, sliceIds) {
 	}
 	delete cziImport.geometry_applied_at;
 	delete cziImport.geometry_applied_files_total;
+	if (bundleRoot) {
+		geometryState.clearGeometryApplyMeta(bundleRoot);
+	}
 	return { restored: restored, missing: missing };
 }
 

@@ -6,6 +6,28 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v5.0.4
+
+**What's new**
+
+After **Re-import sections from CZI** with only some channels selected (for example signal channels without DAPI), the CZI import wizard Orient step lets you **Confirm geometry** again and applies rotation only to the channels you re-imported.
+
+**Fixes**
+
+- **Confirm geometry** is no longer greyed out after a partial re-import when prior orientation was already applied.
+- Geometry apply skips DAPI and other channels you did not re-extract, so counterstain orientation is not double-transformed.
+- Banner text on Orient step 5 explains when only re-imported signal channels will be written.
+
+**Commit subject**
+
+Fix partial geometry apply after CZI re-import
+
+**Commit body**
+
+After re-importing selected channels only, Orient step 5 clears stale apply metadata, enables Confirm geometry, and applies saved rotation to scoped channels so DAPI and untouched files stay unchanged.
+
+---
+
 ## v5.0.3
 
 **What's new**

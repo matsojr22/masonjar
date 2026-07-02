@@ -989,6 +989,21 @@ function testGeometryHistoryParseAndReconcile() {
 	var metaDir = path.join(bundle, branding.META_DIR);
 	fs.mkdirSync(metaDir, { recursive: true });
 	fs.writeFileSync(path.join(metaDir, geometryHistory.HISTORY_FILENAME), jsonl, "utf8");
+	fs.writeFileSync(
+		path.join(metaDir, "geometry_apply_progress.json"),
+		JSON.stringify({
+			config_fingerprint: "fp",
+			geometry_hash: "gh",
+			files_total: 10,
+			completed: 10,
+		}),
+		"utf8",
+	);
+	fs.writeFileSync(
+		path.join(metaDir, "geometry_apply_last_result.json"),
+		JSON.stringify({ ok: true, changed: 10, files_total: 10 }),
+		"utf8",
+	);
 
 	var cziImport = {
 		geometry: { M528_s001: { ops: [] }, M528_s099: { ops: ["flipY"] } },
@@ -1005,6 +1020,19 @@ function testGeometryHistoryParseAndReconcile() {
 	assert.deepStrictEqual(cziImport.geometry["M528_s099"].ops, ["flipY"]);
 	assert.strictEqual(cziImport.geometry_applied_at, undefined);
 	assert.strictEqual(cziImport.geometry_applied_files_total, undefined);
+	assert.ok(!fs.existsSync(path.join(metaDir, "geometry_apply_progress.json")));
+	assert.ok(!fs.existsSync(path.join(metaDir, "geometry_apply_last_result.json")));
+}
+
+function testBuildReextractGeometryScope() {
+	var cziImport = require("../js/czi_import");
+	var scope = cziImport.buildReextractGeometryScope([
+		{ slice_id: "M528_s001", role_key: "signal_somata" },
+		{ slice_id: "M528_s001", role_key: "signal_nuclei" },
+		{ slice_id: "M528_s002", role_key: "signal_somata" },
+	]);
+	assert.deepStrictEqual(scope["M528_s001"], ["signal_somata", "signal_nuclei"]);
+	assert.deepStrictEqual(scope["M528_s002"], ["signal_somata"]);
 }
 
 testLowResTiffAudit();
@@ -1018,5 +1046,6 @@ testFindBlankPreviews();
 testComputeMeanLumaFromImageData();
 testBuildReextractConfigPreservesBitDepth();
 testGeometryHistoryParseAndReconcile();
+testBuildReextractGeometryScope();
 testCziWizardModulesParse();
 console.log("test-czi-import.js: OK");

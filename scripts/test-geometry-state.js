@@ -97,6 +97,40 @@ function testReapplyStackRisk() {
 	assert.strictEqual(st.allowApply, false);
 }
 
+function testReextractPartialApplyAllowsConfirm() {
+	var bundle = tempBundle();
+	var meta = path.join(bundle, ".masonjar");
+	fs.mkdirSync(meta, { recursive: true });
+	fs.writeFileSync(
+		path.join(meta, "geometry_apply_progress.json"),
+		JSON.stringify({
+			config_fingerprint: "fp",
+			geometry_hash: "gh",
+			files_total: 20,
+			completed: 20,
+		}),
+		"utf8",
+	);
+	var czi = {
+		geometry: {
+			S1: { ops: ["rot90"] },
+			S2: { ops: [] },
+		},
+		reextract_geometry_scope: {
+			S1: ["signal_somata", "signal_nuclei"],
+		},
+	};
+	var st = geometryState.assessGeometryApplyState(bundle, czi, {
+		sliceIds: ["S1", "S2"],
+		previewHealth: { needsRepair: false, canApply: true },
+	});
+	assert.strictEqual(st.policyState, "reextract_partial");
+	assert.strictEqual(st.allowApply, true);
+	assert.strictEqual(st.partialReextractApply, true);
+	assert.strictEqual(st.pendingInScope, 1);
+	assert.strictEqual(st.reextractScopeIncludesDapi, false);
+}
+
 function testLiveEditingFreshImportStaysHealthy() {
 	// Regression (user-reported): on a freshly extracted multi-channel bundle the
 	// preview/DAPI PNGs are written minutes apart (one phase per channel over a
@@ -385,6 +419,7 @@ function run() {
 	testInterruptedFromLastResult();
 	testFreshPendingAllowsApply();
 	testReapplyStackRisk();
+	testReextractPartialApplyAllowsConfirm();
 	testLiveEditingFreshImportStaysHealthy();
 	testBuildRepairTargets();
 	testBuildRepairTargetsUpgradesSkipWhenConfirmed();
