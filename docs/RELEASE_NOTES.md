@@ -6,6 +6,27 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v5.0.10
+
+**What's new**
+
+Checking **Set as active max task for this branch** after Sharpen or Top-hat now correctly makes **Cell Detection** default to that sharpened or filtered dataset instead of the original max projection.
+
+**Fixes**
+
+- Cell Detection output folders are separate when you run detect on max vs sharpen inputs with the same tuning parameters (each input dataset gets its own run folder under predictions).
+- **Completed tasks** on the workspace menu selects the latest detection run automatically; when you have more than one, a folder button opens the predictions directory so you can browse all runs.
+
+**Commit subject**
+
+Fix sharpen active max propagating to Cell Detection
+
+**Commit body**
+
+The sharpen Done checkbox now sets the active max dataset when checked. Cell Detection honors active max over saved picker state, encodes the input dataset in detection output folder names, and improves Completed tasks for multiple prediction runs.
+
+---
+
 ## v5.0.9
 
 **What's new**
