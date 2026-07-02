@@ -574,6 +574,24 @@ body.wizard-busy .btn-primary:not(:disabled)::after,
 	padding: 0.5rem 0.75rem;
 }
 
+.detect-qc-gallery {
+	max-height: 70vh;
+	overflow-y: auto;
+	text-align: center;
+}
+
+.detect-qc-gallery img {
+	width: 100%;
+	height: auto;
+	max-width: 900px;
+	border: 1px solid var(--mj-border, #dee2e6);
+	border-radius: 0.25rem;
+}
+
+.detect-suggestions-table {
+	max-width: 32rem;
+}
+
 .active-max-help-trigger {
 	display: inline-flex;
 	align-items: center;

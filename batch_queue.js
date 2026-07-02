@@ -648,7 +648,7 @@ function readProjectMeta(projPath) {
     }
 }
 function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
     const params = (plan.params && plan.params[stepId]) || {};
     const meta = readProjectMeta(proj.path);
     const roles = meta.roles;
@@ -730,12 +730,16 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
         }
         const samModelPath = path.join(deps.homeDir, "models/sam_vit_b.pth");
         const stems = (0, batch_paths_1.listImageSliceStems)(paths.indir || "");
+        const maxBase = (0, batch_paths_1.resolveRolePath)(proj.path, roles, "max");
+        const inputDatasetRel = relFromBase(maxBase, paths.indir || "");
         const slug = buildRunSlug("detect", {
             sortedStems: stems,
             confidence: Number((_c = params.confidence) !== null && _c !== void 0 ? _c : 0.5),
             tile: Number((_d = params.tile) !== null && _d !== void 0 ? _d : 640),
             area: Number((_e = params.area) !== null && _e !== void 0 ? _e : 200),
             eccentricity: Number((_f = params.eccentricity) !== null && _f !== void 0 ? _f : 0.2),
+            intensityMin: Number((_g = params.intensityMin) !== null && _g !== void 0 ? _g : 0),
+            inputDatasetRel,
         });
         const base = (0, batch_paths_1.resolveRolePath)(proj.path, roles, "predictions");
         const finalOut = resolveRunLeaf(base, branchName, slug);
@@ -746,15 +750,15 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
             "-o",
             finalOut,
             "-c",
-            String((_g = params.confidence) !== null && _g !== void 0 ? _g : 0.5),
+            String((_h = params.confidence) !== null && _h !== void 0 ? _h : 0.5),
             "-t",
-            String((_h = params.tile) !== null && _h !== void 0 ? _h : 640),
+            String((_j = params.tile) !== null && _j !== void 0 ? _j : 640),
             "-a",
-            String((_j = params.area) !== null && _j !== void 0 ? _j : 200),
+            String((_k = params.area) !== null && _k !== void 0 ? _k : 200),
             "-s",
             samModelPath,
             "-e",
-            String((_k = params.eccentricity) !== null && _k !== void 0 ? _k : 0.2),
+            String((_l = params.eccentricity) !== null && _l !== void 0 ? _l : 0.2),
             "-m",
             modelPath,
         ];
@@ -766,6 +770,10 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
         }
         if (params.perSliceQc) {
             args.push("--per-slice-qc");
+        }
+        const intensityMin = Number((_m = params.intensityMin) !== null && _m !== void 0 ? _m : 0);
+        if (intensityMin > 0) {
+            args.push("--intensity-min", String(intensityMin));
         }
         return {
             scriptName: "find_neurons.py",
@@ -923,7 +931,7 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
             const d = (0, batch_paths_1.loadProjectJson)(proj.path);
             settings = (d.settings || {});
         }
-        catch (_m) {
+        catch (_p) {
             settings = {};
         }
         const cziImport = (settings.czi_import || {});
@@ -947,7 +955,7 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
         if (!annodir) {
             return null;
         }
-        const pParams = (((_l = plan.params) === null || _l === void 0 ? void 0 : _l.parcellation) || {});
+        const pParams = (((_o = plan.params) === null || _o === void 0 ? void 0 : _o.parcellation) || {});
         const cfg = {
             annotation_dir: annodir,
             tier_id: pParams.ccfAdvanced ? null : pParams.tierId || "areas",

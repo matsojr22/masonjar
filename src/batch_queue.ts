@@ -991,12 +991,16 @@ function buildJob(
     }
     const samModelPath = path.join(deps.homeDir, "models/sam_vit_b.pth");
     const stems = listImageSliceStems(paths.indir || "");
+    const maxBase = resolveRolePath(proj.path, roles, "max");
+    const inputDatasetRel = relFromBase(maxBase, paths.indir || "");
     const slug = buildRunSlug("detect", {
       sortedStems: stems,
       confidence: Number(params.confidence ?? 0.5),
       tile: Number(params.tile ?? 640),
       area: Number(params.area ?? 200),
       eccentricity: Number(params.eccentricity ?? 0.2),
+      intensityMin: Number(params.intensityMin ?? 0),
+      inputDatasetRel,
     });
     const base = resolveRolePath(proj.path, roles, "predictions");
     const finalOut = resolveRunLeaf(base, branchName, slug);
@@ -1027,6 +1031,10 @@ function buildJob(
     }
     if (params.perSliceQc) {
       args.push("--per-slice-qc");
+    }
+    const intensityMin = Number(params.intensityMin ?? 0);
+    if (intensityMin > 0) {
+      args.push("--intensity-min", String(intensityMin));
     }
     return {
       scriptName: "find_neurons.py",

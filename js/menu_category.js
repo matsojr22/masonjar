@@ -39,7 +39,7 @@ var CATEGORIES = {
 	detection: {
 		title: "Cell detection",
 		tools: [
-			{ label: "Cell Detection", href: "./detect.html" },
+			{ label: "Cell Detection", href: "./detect_wizard.html" },
 			{ label: "Count Brain", href: "./count.html" },
 			{ label: "Collate Counts", href: "./collate.html", secondary: true },
 		],

@@ -6,6 +6,27 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v5.0.8
+
+**What's new**
+
+Cell Detection is now a three-step wizard: configure parameters, watch progress, then review QC charts and algorithmic suggestions for confidence, area, eccentricity, and intensity cutoff. After each run Mason Jar analyzes your detections for a low- vs high-intensity split and shows recommended tuning values. Use **Apply suggestions** to pre-fill advanced settings and re-run. An optional **Intensity cutoff** in advanced settings drops dim false positives (defaults to off so existing workflows are unchanged).
+
+**Changes**
+
+- `detect.html` redirects to the new Cell Detection wizard; batch detect supports intensity cutoff.
+- Per-run QC summary JSON includes an `analysis` block and an intensity split line on QC charts.
+
+**Commit subject**
+
+Cell Detection wizard with QC suggestions and intensity cutoff
+
+**Commit body**
+
+Cell Detection is a three-step wizard with in-app QC charts and per-run parameter suggestions from bimodal intensity analysis. Advanced settings add an optional intensity cutoff filter (default off). Apply suggestions pre-fills tuning values for a quick re-run.
+
+---
+
 ## v5.0.7
 
 **What's new**

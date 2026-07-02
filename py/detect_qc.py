@@ -13,7 +13,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-import numpy as np
+import numpy as np  # noqa: E402
 
 RUN_QC_FILES = (
     "detect_qc_confidence.png",
@@ -304,6 +304,7 @@ def _plot_histogram_with_intensity_dots(
     threshold: float | None = None,
     threshold_label: str | None = None,
     xlim: tuple[float, float] | None = None,
+    intensity_threshold_line: float | None = None,
 ) -> None:
     raw_x = getattr(raw, x_key)
     final_x = getattr(final, x_key)
@@ -363,6 +364,14 @@ def _plot_histogram_with_intensity_dots(
     ax2 = ax.twinx()
     ax2.set_ylabel("Intensity p90 (0–255)")
     ax2.set_ylim(0, 255)
+    if intensity_threshold_line is not None:
+        ax2.axhline(
+            intensity_threshold_line,
+            color="#fd7e14",
+            linestyle=":",
+            linewidth=1.5,
+            label=f"Intensity split ≈ {intensity_threshold_line:g}",
+        )
     _scatter_intensity_dots(
         ax2,
         raw_x,
@@ -401,6 +410,7 @@ def _plot_eccentricity_with_intensity_dots(
     pre_ecc_records: list[tuple[float, float]],
     *,
     threshold: float | None = None,
+    intensity_threshold_line: float | None = None,
 ) -> None:
     ecc_values = [float(e) for e, _ in pre_ecc_records]
     intensities = [float(i) for _, i in pre_ecc_records]
@@ -447,6 +457,14 @@ def _plot_eccentricity_with_intensity_dots(
     ax2 = ax.twinx()
     ax2.set_ylabel("Intensity p90 (0–255)")
     ax2.set_ylim(0, 255)
+    if intensity_threshold_line is not None:
+        ax2.axhline(
+            intensity_threshold_line,
+            color="#fd7e14",
+            linestyle=":",
+            linewidth=1.5,
+            label=f"Intensity split ≈ {intensity_threshold_line:g}",
+        )
     _scatter_intensity_dots(
         ax2,
         ecc_values,
@@ -526,6 +544,11 @@ def write_run_histograms(
     output_dir = Path(output_dir)
     run_files = []
 
+    from detect_qc_analysis import analyze_detection_qc
+
+    analysis = analyze_detection_qc(collector, thresholds)
+    intensity_line = analysis.get("intensity_threshold_estimate")
+
     confidence_path = output_dir / RUN_QC_FILES[0]
     _plot_histogram_with_intensity_dots(
         confidence_path,
@@ -537,6 +560,7 @@ def write_run_histograms(
         threshold=thresholds.get("confidence"),
         threshold_label=f"Confidence cutoff = {thresholds.get('confidence')}",
         xlim=(0, 1),
+        intensity_threshold_line=intensity_line,
     )
     run_files.append(RUN_QC_FILES[0])
 
@@ -550,6 +574,7 @@ def write_run_histograms(
         x_key="area",
         threshold=thresholds.get("area_px2"),
         threshold_label=f"Area cutoff = {thresholds.get('area_px2')} px²",
+        intensity_threshold_line=intensity_line,
     )
     run_files.append(RUN_QC_FILES[1])
 
@@ -558,6 +583,7 @@ def write_run_histograms(
         ecc_path,
         collector.pre_ecc_records,
         threshold=thresholds.get("eccentricity"),
+        intensity_threshold_line=intensity_line,
     )
     run_files.append(RUN_QC_FILES[2])
 
@@ -575,6 +601,7 @@ def write_run_histograms(
         run_files=run_files,
         slice_files=slice_files,
     )
+    summary["analysis"] = analysis
     summary_path = output_dir / SUMMARY_JSON
     with open(summary_path, "w", encoding="utf-8") as fh:
         json.dump(summary, fh, indent=2)
@@ -584,4 +611,5 @@ def write_run_histograms(
         "summary_json": SUMMARY_JSON,
         "slice_files": slice_files,
         "summary": summary,
+        "analysis": analysis,
     }

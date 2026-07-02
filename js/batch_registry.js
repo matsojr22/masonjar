@@ -170,6 +170,7 @@ var DEFAULT_PARAMS = {
 		method: "somata",
 		area: 200,
 		eccentricity: 0.2,
+		intensityMin: 0,
 		multichannel: false,
 		customModel: "",
 		perSliceQc: false,

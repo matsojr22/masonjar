@@ -242,12 +242,19 @@ function buildDetectRunSlug(options) {
 		String(Math.round(a)) +
 		"_e" +
 		decToken(e);
+	if (options.intensityMin && Number(options.intensityMin) > 0) {
+		params += "_i" + decToken(Number(options.intensityMin));
+	}
 	var span = sliceSpanToken(options.sortedStems || []);
 	var subset = "";
 	if (options.subsetCount && options.subsetCount > 0) {
 		subset = "_subset_" + String(options.subsetCount);
 	}
-	return sanitizeSlugPart(span + "_" + params + subset);
+	var inputToken = "";
+	if (options.inputDatasetRel) {
+		inputToken = "_from_" + shortRefToken(options.inputDatasetRel);
+	}
+	return sanitizeSlugPart(span + "_" + params + inputToken + subset);
 }
 
 function buildRunSlug(stepId, context) {
@@ -265,8 +272,10 @@ function buildRunSlug(stepId, context) {
 			tile: context.tile,
 			area: context.area,
 			eccentricity: context.eccentricity,
+			intensityMin: context.intensityMin,
 			sortedStems: stems,
 			subsetCount: context.subsetCount,
+			inputDatasetRel: context.inputDatasetRel,
 		});
 	}
 	if (stepId === "max") {
@@ -575,6 +584,16 @@ function setActiveRunRelForRole(role, rel) {
 	proj.processing.active_runs[role] = rel;
 	if (role === "predictions") {
 		proj.processing.active_prediction_run = proj.processing.active_runs[role];
+	}
+	if (role === "max") {
+		try {
+			if (typeof sessionStorage !== "undefined") {
+				sessionStorage.removeItem("masonjar.detect.maxDataset");
+				sessionStorage.removeItem("masonjar.intensity.maxDataset");
+			}
+		} catch (_err) {
+			/* ignore */
+		}
 	}
 	projectModule().saveProjectJson();
 	return true;

@@ -1312,6 +1312,16 @@ ipcMain.on("openGuide", function (event: any, data: any) {
   openPDF("docs/belljar_guide.pdf");
 });
 
+ipcMain.on("openPathInShell", function (event: any, absPath: string) {
+  const target = String(absPath || "").trim();
+  if (!target) {
+    return;
+  }
+  shell.openPath(target).catch((error: any) => {
+    console.log(error);
+  });
+});
+
 function cleanupPythonKillListener(killChannel: string) {
   ipcMain.removeAllListeners(killChannel);
 }
@@ -2786,6 +2796,9 @@ ipcMain.on("runDetection", function (event: any, data: any[]) {
   appendSliceListArg(custom_args, data, 9);
   if (data.length > 10 && data[10]) {
     custom_args.push("--per-slice-qc");
+  }
+  if (data.length > 11 && Number(data[11]) > 0) {
+    custom_args.push("--intensity-min", String(data[11]));
   }
 
   const partial = {

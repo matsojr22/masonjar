@@ -326,6 +326,12 @@ function renderParamSection(stepId, body, params) {
 					'" />',
 			) +
 			fieldRow(
+				"Intensity cutoff (0–255, 0=off)",
+				'<input type="number" step="1" min="0" max="255" class="form-control form-control-sm" id="detect-intensityMin" value="' +
+					(params.intensityMin || 0) +
+					'" />',
+			) +
+			fieldRow(
 				"Multi-channel",
 				'<input type="checkbox" class="form-check-input" id="detect-multichannel" ' +
 					(params.multichannel ? "checked" : "") +
@@ -1035,6 +1041,7 @@ function collectParamsFromUi() {
 			next.method = qs("detect-method").value;
 			next.area = parseInt(qs("detect-area").value, 10);
 			next.eccentricity = parseFloat(qs("detect-eccentricity").value);
+			next.intensityMin = parseInt(qs("detect-intensityMin").value, 10) || 0;
 			next.multichannel = !!(
 				qs("detect-multichannel") && qs("detect-multichannel").checked
 			);

@@ -17,6 +17,7 @@ import tifffile as tiff
 import torch
 
 from detect_qc import DetectQcCollector, bbox_intensity_p90, cleanup_detect_qc_artifacts, write_run_histograms
+from detect_qc_analysis import filter_objects_by_intensity
 
 
 class DetectionResult:
@@ -200,6 +201,12 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
     )
+    parser.add_argument(
+        "--intensity-min",
+        help="minimum bbox intensity p90 (0-255) to keep detection; 0 disables",
+        type=float,
+        default=0.0,
+    )
     args = parser.parse_args()
 
     input_dir = Path(args.input.strip())
@@ -216,11 +223,13 @@ if __name__ == "__main__":
     area_threshold = float(args.area.strip())
     eccentricity_threshold = float(args.eccentricity.strip())
     confidence_threshold = float(args.confidence)
+    intensity_min = float(args.intensity_min or 0.0)
     qc_collector = DetectQcCollector()
     qc_thresholds = {
         "confidence": confidence_threshold,
         "area_px2": area_threshold,
         "eccentricity": eccentricity_threshold,
+        "intensity_min": intensity_min,
     }
 
     from slice_index import load_slice_list, slice_id_allowed
@@ -274,6 +283,7 @@ if __name__ == "__main__":
         "tile": args.tile,
         "area": args.area,
         "eccentricity": args.eccentricity,
+        "intensity_min": intensity_min,
         "multichannel": bool(args.multichannel),
         "sam": args.sam,
         "slice_list": args.slice_list.strip() or None,
@@ -288,6 +298,8 @@ if __name__ == "__main__":
     print(f"Using device: {device}", flush=True)
     print(f"Using model: {model_path}", flush=True)
     print(f"Using confidence level {confidence_threshold}", flush=True)
+    if intensity_min > 0:
+        print(f"Using intensity minimum {intensity_min}", flush=True)
     print(f"Found {len(files)} images", flush=True)
     
     detection_model = AutoDetectionModel.from_pretrained(
@@ -378,6 +390,15 @@ if __name__ == "__main__":
                     pre_ecc_records,
                     gray_for_qc,
                 )
+                predicted_objects, removed_int = filter_objects_by_intensity(
+                    predicted_objects, gray_for_qc, intensity_min
+                )
+                if intensity_min > 0:
+                    print(
+                        f"LOG: detect_intensity_filter removed={removed_int} "
+                        f"kept={len(predicted_objects)} min={intensity_min:g}",
+                        flush=True,
+                    )
                 bboxes = [obj.bbox.to_xyxy() for obj in predicted_objects]
                 scores = [obj.score.value for obj in predicted_objects]
 
@@ -431,6 +452,15 @@ if __name__ == "__main__":
                 pre_ecc_records,
                 gray_for_qc,
             )
+            predicted_objects, removed_int = filter_objects_by_intensity(
+                predicted_objects, gray_for_qc, intensity_min
+            )
+            if intensity_min > 0:
+                print(
+                    f"LOG: detect_intensity_filter removed={removed_int} "
+                    f"kept={len(predicted_objects)} min={intensity_min:g}",
+                    flush=True,
+                )
 
             bboxes = [obj.bbox.to_xyxy() for obj in predicted_objects]
             scores = [obj.score.value for obj in predicted_objects]

@@ -24,6 +24,13 @@ from detect_qc import (
     cleanup_detect_qc_artifacts,
     write_run_histograms,
 )
+from detect_qc_analysis import (
+    analyze_detection_qc,
+    estimate_intensity_threshold,
+    filter_objects_by_intensity,
+    suggest_detection_params,
+    DetectionRecord,
+)
 
 
 class _Score:
@@ -129,3 +136,88 @@ def test_write_run_histograms_smoke(tmp_path: Path):
     assert summary["run"]["final"]["confidence"]["count"] == 1
     assert summary["run"]["raw"]["intensity_p90"]["count"] == 2
     assert summary["run"]["final"]["intensity_peak"]["count"] == 1
+
+
+def test_estimate_intensity_threshold_bimodal():
+    rng = np.random.default_rng(0)
+    low = rng.normal(35, 4, 200)
+    high = rng.normal(110, 12, 180)
+    vals = np.clip(np.concatenate([low, high]), 0, 255).tolist()
+    info = estimate_intensity_threshold(vals)
+    assert info["bimodal"] is True
+    assert info["intensity_threshold_estimate"] is not None
+    assert 40 <= info["intensity_threshold_estimate"] <= 65
+
+
+def test_estimate_intensity_threshold_unimodal():
+    rng = np.random.default_rng(1)
+    vals = rng.normal(100, 5, 80).tolist()
+    info = estimate_intensity_threshold(vals)
+    assert info["bimodal"] is False
+
+
+def test_suggest_detection_params_prefers_high_intensity():
+    threshold = 50.0
+    records = [
+        DetectionRecord(0.9, 400, 120, 0.8),
+        DetectionRecord(0.85, 350, 115, 0.75),
+        DetectionRecord(0.6, 300, 35, 0.7),
+        DetectionRecord(0.55, 280, 32, 0.65),
+    ]
+    suggestions = suggest_detection_params(
+        records, threshold, {"confidence": 0.5, "area_px2": 200, "eccentricity": 0.2}
+    )
+    assert suggestions.get("intensity_min") == 50
+
+
+def test_filter_objects_by_intensity():
+    gray = np.zeros((50, 50), dtype=np.uint8)
+    gray[5:15, 5:15] = 30
+    gray[25:35, 25:35] = 200
+    dim = _Obj([5, 5, 15, 15], 0.7)
+    bright = _Obj([25, 25, 35, 35], 0.8)
+    kept, removed = filter_objects_by_intensity([dim, bright], gray, 50)
+    assert removed == 1
+    assert len(kept) == 1
+
+
+def test_filter_objects_by_intensity_disabled():
+    objs = [_Obj([0, 0, 10, 10], 0.5)]
+    kept, removed = filter_objects_by_intensity(objs, None, 0)
+    assert len(kept) == 1
+    assert removed == 0
+
+
+def test_write_run_histograms_includes_analysis(tmp_path: Path):
+    gray = np.full((80, 80), 100, dtype=np.uint8)
+    collector = DetectQcCollector()
+    rng = np.random.default_rng(2)
+    raw_objs = []
+    final_objs = []
+    pre_ecc = []
+    pre_rec = []
+    for i in range(40):
+        low = i < 22
+        inten = float(rng.normal(35 if low else 110, 3))
+        conf = float(rng.uniform(0.5, 0.9))
+        area = float(rng.uniform(250, 600))
+        x = int(i * 2) % 60
+        raw_objs.append(_Obj([x, x, x + 12, x + 10], conf))
+        pre_ecc.append(0.7)
+        pre_rec.append((0.7, inten))
+        if not low or conf > 0.55:
+            final_objs.append(_Obj([x, x, x + 12, x + 10], conf))
+    collector.add_slice_pass(
+        "M528_s001", raw_objs, final_objs, pre_ecc, pre_rec, gray
+    )
+    result = write_run_histograms(
+        collector,
+        tmp_path,
+        {"confidence": 0.5, "area_px2": 200, "eccentricity": 0.2, "intensity_min": 0},
+    )
+    assert "analysis" in result
+    import json
+
+    summary = json.loads((tmp_path / "detect_qc_summary.json").read_text(encoding="utf-8"))
+    assert "analysis" in summary
+    assert "summary_lines" in summary["analysis"]
