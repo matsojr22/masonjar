@@ -12,7 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UpdateManager = exports.buildCheckResult = exports.expectedWindowsZipName = exports.resolveInstallRoot = exports.isUpdateInProgress = exports.buildApplySpawnCommand = exports.clearStaleUpdateLock = exports.isUpdateLockStale = exports.appendUpdateLogLine = exports.UPDATE_LOCK_STALE_MS = exports.updateFallbackLogPath = exports.updateLogPath = exports.updateLockPath = exports.masonJarTempRoot = exports.compareUpdateAvailable = exports.pickBestRelease = exports.releaseSemver = exports.pickWindowsZipAsset = exports.releaseNotesExcerpt = exports.saveUpdatePreferences = exports.loadUpdatePreferences = exports.updatePreferencesPath = exports.GITHUB_REPO = void 0;
+exports.UpdateManager = exports.buildCheckResult = exports.expectedWindowsZipName = exports.resolveInstallRoot = exports.isUpdateInProgress = exports.buildApplySpawnCommand = exports.refreshUpdateLockState = exports.writeUpdateLock = exports.releaseUpdateLock = exports.clearOrphanUpdateLock = exports.clearStaleUpdateLock = exports.isUpdateLockStale = exports.appendUpdateLogLine = exports.UPDATE_LOCK_STALE_MS = exports.updateFallbackLogPath = exports.updateLogPath = exports.updateLockPath = exports.masonJarTempRoot = exports.compareUpdateAvailable = exports.pickBestRelease = exports.releaseSemver = exports.pickWindowsZipAsset = exports.releaseNotesExcerpt = exports.saveUpdatePreferences = exports.loadUpdatePreferences = exports.updatePreferencesPath = exports.GITHUB_REPO = void 0;
 const fs_1 = __importDefault(require("fs"));
 const os_1 = __importDefault(require("os"));
 const path_1 = __importDefault(require("path"));
@@ -158,6 +158,57 @@ function clearStaleUpdateLock() {
     return false;
 }
 exports.clearStaleUpdateLock = clearStaleUpdateLock;
+/** Lock older than a few seconds while the app UI is running is orphaned (apply waits for quit). */
+function clearOrphanUpdateLock(minAgeMs = 3000) {
+    const lockPath = updateLockPath();
+    if (!fs_1.default.existsSync(lockPath)) {
+        return false;
+    }
+    if (isUpdateLockStale(lockPath)) {
+        fs_1.default.unlinkSync(lockPath);
+        return true;
+    }
+    try {
+        const age = Date.now() - fs_1.default.statSync(lockPath).mtimeMs;
+        if (age >= minAgeMs) {
+            fs_1.default.unlinkSync(lockPath);
+            return true;
+        }
+    }
+    catch (_a) {
+        try {
+            fs_1.default.unlinkSync(lockPath);
+            return true;
+        }
+        catch (_b) {
+            return false;
+        }
+    }
+    return false;
+}
+exports.clearOrphanUpdateLock = clearOrphanUpdateLock;
+function releaseUpdateLock() {
+    const lockPath = updateLockPath();
+    if (fs_1.default.existsSync(lockPath)) {
+        fs_1.default.unlinkSync(lockPath);
+    }
+}
+exports.releaseUpdateLock = releaseUpdateLock;
+function writeUpdateLock(version) {
+    const lockPath = updateLockPath();
+    fs_1.default.mkdirSync(path_1.default.dirname(lockPath), { recursive: true });
+    fs_1.default.writeFileSync(lockPath, JSON.stringify({
+        started: new Date().toISOString(),
+        version,
+    }));
+}
+exports.writeUpdateLock = writeUpdateLock;
+function refreshUpdateLockState() {
+    const clearedStale = clearStaleUpdateLock();
+    const clearedOrphan = clearOrphanUpdateLock();
+    return { clearedStale, clearedOrphan };
+}
+exports.refreshUpdateLockState = refreshUpdateLockState;
 function buildApplySpawnCommand(scriptPath) {
     return {
         command: "cmd.exe",
@@ -177,6 +228,7 @@ function buildApplySpawnCommand(scriptPath) {
 }
 exports.buildApplySpawnCommand = buildApplySpawnCommand;
 function isUpdateInProgress() {
+    refreshUpdateLockState();
     const lockPath = updateLockPath();
     return fs_1.default.existsSync(lockPath) && !isUpdateLockStale(lockPath);
 }
@@ -304,6 +356,7 @@ class UpdateManager {
         });
     }
     getApplyInfo() {
+        refreshUpdateLockState();
         const installRoot = resolveInstallRoot(this.isPackaged);
         return {
             canApplyInApp: this.isPackaged && process.platform === "win32" && !!installRoot,
@@ -344,6 +397,28 @@ class UpdateManager {
             }
         }
         return null;
+    }
+    restoreStagedFromDisk(version) {
+        if (!version) {
+            return false;
+        }
+        const extractDir = this.extractDirForVersion(version);
+        if (!fs_1.default.existsSync(extractDir)) {
+            return false;
+        }
+        const staged = this.findStagedInstallFolder(extractDir);
+        if (!staged) {
+            return false;
+        }
+        this.stagedVersion = version;
+        this.stagedExtractDir = staged;
+        return true;
+    }
+    isStagingReadyForVersion(version) {
+        if (!version || !this.stagedExtractDir || this.stagedVersion !== version) {
+            return false;
+        }
+        return fs_1.default.existsSync(path_1.default.join(this.stagedExtractDir, "masonjar.exe"));
     }
     downloadWindowsUpdate(onProgress) {
         return __awaiter(this, void 0, void 0, function* () {
@@ -618,7 +693,7 @@ try {
                 error: "In-app updates apply only to the packaged Windows app.",
             };
         }
-        clearStaleUpdateLock();
+        refreshUpdateLockState();
         const lockPath = updateLockPath();
         if (fs_1.default.existsSync(lockPath)) {
             return { ok: false, error: "Another update is already in progress." };
@@ -631,14 +706,9 @@ try {
             return { ok: false, error: "Staged update is missing masonjar.exe." };
         }
         const scriptPath = this.writeApplyScript(installRoot, this.stagedExtractDir, this.currentVersion, this.stagedVersion);
-        fs_1.default.mkdirSync(path_1.default.dirname(lockPath), { recursive: true });
-        fs_1.default.writeFileSync(lockPath, JSON.stringify({
-            started: new Date().toISOString(),
-            version: this.stagedVersion,
-        }));
-        return { ok: true, scriptPath };
+        return { ok: true, scriptPath, stagedVersion: this.stagedVersion };
     }
-    launchApplyAndQuit(scriptPath, quit) {
+    launchApplyAndQuit(scriptPath, stagedVersion, quit) {
         const installRoot = resolveInstallRoot(this.isPackaged);
         appendUpdateLogLine(this.homeDir, `Preparing apply: script=${scriptPath} installRoot=${installRoot || "?"}`);
         appendUpdateLogLine(this.homeDir, `Fallback log path: ${updateFallbackLogPath()}`);
@@ -660,14 +730,17 @@ try {
                 });
                 child.on("error", (err) => {
                     appendUpdateLogLine(this.homeDir, `Spawn failed: ${err.message}`);
+                    releaseUpdateLock();
                     finish({ ok: false, error: err.message });
                 });
                 child.unref();
                 if (!child.pid) {
                     appendUpdateLogLine(this.homeDir, "Spawn failed: no PID returned");
+                    releaseUpdateLock();
                     finish({ ok: false, error: "Failed to start updater process" });
                     return;
                 }
+                writeUpdateLock(stagedVersion);
                 appendUpdateLogLine(this.homeDir, `Updater detached pid=${child.pid}`);
                 setTimeout(() => {
                     if (settled) {
@@ -680,22 +753,40 @@ try {
             catch (error) {
                 const msg = error instanceof Error ? error.message : String(error);
                 appendUpdateLogLine(this.homeDir, `Spawn exception: ${msg}`);
+                releaseUpdateLock();
                 finish({ ok: false, error: msg });
             }
         });
     }
     runWindowsUpdateNow(onProgress, quit) {
+        var _a;
         return __awaiter(this, void 0, void 0, function* () {
-            const download = yield this.downloadWindowsUpdate(onProgress);
-            if (!download.ok) {
-                return download;
+            const lockState = refreshUpdateLockState();
+            const latest = (_a = this.cachedCheck) === null || _a === void 0 ? void 0 : _a.latest;
+            if (!this.isStagingReadyForVersion(latest)) {
+                this.restoreStagedFromDisk(latest);
+            }
+            if (!this.isStagingReadyForVersion(latest)) {
+                const download = yield this.downloadWindowsUpdate(onProgress);
+                if (!download.ok) {
+                    releaseUpdateLock();
+                    return download;
+                }
+            }
+            else {
+                onProgress(100, "Using downloaded update…");
             }
             onProgress(100, "Installing update…");
             const prepared = this.prepareWindowsApply();
             if (!prepared.ok) {
+                releaseUpdateLock();
                 return prepared;
             }
-            return this.launchApplyAndQuit(prepared.scriptPath, quit);
+            const applied = yield this.launchApplyAndQuit(prepared.scriptPath, prepared.stagedVersion || this.stagedVersion || latest || "", quit);
+            if (!applied.ok) {
+                releaseUpdateLock();
+            }
+            return Object.assign(Object.assign({}, applied), { lockCleared: lockState.clearedStale || lockState.clearedOrphan });
         });
     }
 }

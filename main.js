@@ -917,11 +917,13 @@ ipcMain.handle("saveUpdatePreferences", (_event, patch) => __awaiter(void 0, voi
     return saved;
 }));
 ipcMain.handle("getUpdateStatus", () => __awaiter(void 0, void 0, void 0, function* () {
+    const lockState = (0, update_manager_1.refreshUpdateLockState)();
     return {
         preferences: updateManager.getPreferences(),
         cached: updateManager.getCachedCheck(),
         applyInfo: updateManager.getApplyInfo(),
         currentVersion: CURRENT_VERSION_TAG,
+        lockCleared: lockState.clearedStale || lockState.clearedOrphan,
     };
 }));
 ipcMain.handle("checkForUpdatesDetailed", (_event, opts) => __awaiter(void 0, void 0, void 0, function* () {
@@ -942,7 +944,7 @@ ipcMain.handle("applyWindowsUpdate", () => __awaiter(void 0, void 0, void 0, fun
     if (!prepared.ok) {
         return prepared;
     }
-    return updateManager.launchApplyAndQuit(prepared.scriptPath, () => {
+    return updateManager.launchApplyAndQuit(prepared.scriptPath, prepared.stagedVersion || "", () => {
         app.quit();
     });
 }));

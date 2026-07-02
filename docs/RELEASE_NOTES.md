@@ -6,6 +6,27 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.4
+
+**What's new**
+
+**Update Now** on Settings → Updates stays enabled when an update is available — it is no longer greyed out after a failed or interrupted install attempt.
+
+**Fixes**
+
+- Update lock is written only after the updater starts successfully; orphaned locks from failed runs are cleared when you open Settings → Updates.
+- If a download already finished, **Update Now** reuses the staged files instead of downloading again.
+
+**Commit subject**
+
+Fix Update Now staying disabled after failed update
+
+**Commit body**
+
+Stop greying out Update Now when a stale update lock exists; defer lock creation until spawn succeeds; clear orphan locks on status refresh; reuse staged download when retrying.
+
+---
+
 ## v6.0.3
 
 **What's new**

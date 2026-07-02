@@ -157,6 +157,45 @@ function testAppendUpdateLogLine() {
 	}
 }
 
+function testUpdateLockLifecycle() {
+	const os = require("os");
+	const fs = require("fs");
+	const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "mj-update-lock-"));
+	const staging = path.join(tmpHome, "staging");
+	fs.mkdirSync(staging, { recursive: true });
+	fs.writeFileSync(path.join(staging, "masonjar.exe"), "");
+	const lockPath = updateManager.updateLockPath();
+	fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+	try {
+		const mgr = new updateManager.UpdateManager(tmpHome, "6.0.3", true);
+		mgr.stagedExtractDir = staging;
+		mgr.stagedVersion = "6.0.4";
+		const prepared = mgr.prepareWindowsApply();
+		assert(prepared.ok, "prepare without pre-write lock");
+		assert(!fs.existsSync(lockPath), "prepare does not write lock");
+
+		updateManager.writeUpdateLock("6.0.4");
+		assert(fs.existsSync(lockPath), "writeUpdateLock creates lock");
+		updateManager.releaseUpdateLock();
+		assert(!fs.existsSync(lockPath), "releaseUpdateLock clears lock");
+
+		updateManager.writeUpdateLock("6.0.4");
+		const staleTime = Date.now() - updateManager.UPDATE_LOCK_STALE_MS - 1000;
+		fs.utimesSync(lockPath, staleTime / 1000, staleTime / 1000);
+		assert(updateManager.clearStaleUpdateLock(), "clearStaleUpdateLock");
+		assert(!fs.existsSync(lockPath), "stale lock removed");
+
+		updateManager.writeUpdateLock("6.0.4");
+		const orphanTime = Date.now() - 5000;
+		fs.utimesSync(lockPath, orphanTime / 1000, orphanTime / 1000);
+		assert(updateManager.clearOrphanUpdateLock(), "clearOrphanUpdateLock");
+		assert(!fs.existsSync(lockPath), "orphan lock removed");
+	} finally {
+		updateManager.releaseUpdateLock();
+		fs.rmSync(tmpHome, { recursive: true, force: true });
+	}
+}
+
 function testApplyScriptContent() {
 	const os = require("os");
 	const fs = require("fs");
@@ -194,6 +233,7 @@ function run() {
 	testUpdatePreferencesRoundTrip();
 	testBuildApplySpawnCommand();
 	testAppendUpdateLogLine();
+	testUpdateLockLifecycle();
 	testApplyScriptContent();
 	console.log("test-update-manager: ok");
 }

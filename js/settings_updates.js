@@ -112,8 +112,7 @@ function renderActionButtons() {
 	}
 	if (updateNowBtn) {
 		updateNowBtn.classList.toggle("d-none", !canWinApply || !hasUpdate);
-		updateNowBtn.disabled =
-			state.busy || !hasUpdate || !!info.updateInProgress;
+		updateNowBtn.disabled = state.busy || !hasUpdate;
 	}
 	if (macBtn) {
 		macBtn.classList.toggle("d-none", !isDarwin || !hasUpdate);
@@ -130,9 +129,9 @@ function renderUpdateTestBanner() {
 	if (!banner) {
 		return;
 	}
-	if (state.currentVersion === "6.0.3") {
+	if (state.currentVersion === "6.0.5") {
 		banner.textContent =
-			"Pre-release build — validates Update Now from 6.0.2.";
+			"Pre-release build — validates Update Now from 6.0.4.";
 		banner.classList.remove("d-none");
 	} else {
 		banner.textContent = "";
@@ -148,6 +147,9 @@ function applyStatusPayload(payload) {
 	state.applyInfo = payload.applyInfo || state.applyInfo;
 	if (payload.currentVersion) {
 		state.currentVersion = payload.currentVersion;
+	}
+	if (payload.lockCleared) {
+		setFeedback("Cleared a stale update lock from a previous attempt.");
 	}
 	renderVersionLabels();
 	renderActionButtons();
@@ -212,6 +214,9 @@ function onUpdateNowClick() {
 		ipc
 			.invoke("runWindowsUpdateNow")
 			.then(function (result) {
+				if (result && result.lockCleared) {
+					setFeedback("Cleared a stale update lock from a previous attempt.");
+				}
 				if (!result || !result.ok) {
 					setFeedback((result && result.error) || "Update failed.", true);
 					setProgress(false, 0, "");

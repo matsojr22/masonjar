@@ -33,7 +33,7 @@ import {
   type IoFairshareSharedConfig,
   type IoFairshareUserConfig,
 } from "./io_fairshare";
-import { UpdateManager, updateLogPath } from "./update_manager";
+import { UpdateManager, updateLogPath, refreshUpdateLockState } from "./update_manager";
 const { promisify } = require("util");
 const { PythonShell } = require("python-shell");
 const tar = require("tar");
@@ -1090,11 +1090,13 @@ ipcMain.handle(
 );
 
 ipcMain.handle("getUpdateStatus", async () => {
+  const lockState = refreshUpdateLockState();
   return {
     preferences: updateManager.getPreferences(),
     cached: updateManager.getCachedCheck(),
     applyInfo: updateManager.getApplyInfo(),
     currentVersion: CURRENT_VERSION_TAG,
+    lockCleared: lockState.clearedStale || lockState.clearedOrphan,
   };
 });
 
@@ -1123,9 +1125,13 @@ ipcMain.handle("applyWindowsUpdate", async () => {
   if (!prepared.ok) {
     return prepared;
   }
-  return updateManager.launchApplyAndQuit(prepared.scriptPath!, () => {
-    app.quit();
-  });
+  return updateManager.launchApplyAndQuit(
+    prepared.scriptPath!,
+    prepared.stagedVersion || "",
+    () => {
+      app.quit();
+    },
+  );
 });
 
 ipcMain.handle("runWindowsUpdateNow", async (event: any) => {
