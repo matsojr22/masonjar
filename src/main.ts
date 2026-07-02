@@ -33,7 +33,7 @@ import {
   type IoFairshareSharedConfig,
   type IoFairshareUserConfig,
 } from "./io_fairshare";
-import { UpdateManager } from "./update_manager";
+import { UpdateManager, updateLogPath } from "./update_manager";
 const { promisify } = require("util");
 const { PythonShell } = require("python-shell");
 const tar = require("tar");
@@ -1123,10 +1123,33 @@ ipcMain.handle("applyWindowsUpdate", async () => {
   if (!prepared.ok) {
     return prepared;
   }
-  updateManager.launchApplyAndQuit(prepared.scriptPath!, () => {
+  return updateManager.launchApplyAndQuit(prepared.scriptPath!, () => {
     app.quit();
   });
-  return { ok: true };
+});
+
+ipcMain.handle("runWindowsUpdateNow", async (event: any) => {
+  const sender = event.sender;
+  return updateManager.runWindowsUpdateNow((percent, message) => {
+    sender.send("updateDownloadProgress", [percent, message]);
+  }, () => {
+    app.quit();
+  });
+});
+
+ipcMain.handle("openUpdateLog", async () => {
+  const logPath = updateLogPath(homeDir);
+  if (fs.existsSync(logPath)) {
+    await shell.openPath(logPath);
+    return { ok: true, opened: "file" };
+  }
+  fs.mkdirSync(homeDir, { recursive: true });
+  await shell.openPath(homeDir);
+  return {
+    ok: true,
+    opened: "folder",
+    message: "No update log yet — opened Mason Jar settings folder.",
+  };
 });
 
 ipcMain.handle("openExternalUrl", async (_event: any, url: string) => {

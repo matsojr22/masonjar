@@ -942,10 +942,31 @@ ipcMain.handle("applyWindowsUpdate", () => __awaiter(void 0, void 0, void 0, fun
     if (!prepared.ok) {
         return prepared;
     }
-    updateManager.launchApplyAndQuit(prepared.scriptPath, () => {
+    return updateManager.launchApplyAndQuit(prepared.scriptPath, () => {
         app.quit();
     });
-    return { ok: true };
+}));
+ipcMain.handle("runWindowsUpdateNow", (event) => __awaiter(void 0, void 0, void 0, function* () {
+    const sender = event.sender;
+    return updateManager.runWindowsUpdateNow((percent, message) => {
+        sender.send("updateDownloadProgress", [percent, message]);
+    }, () => {
+        app.quit();
+    });
+}));
+ipcMain.handle("openUpdateLog", () => __awaiter(void 0, void 0, void 0, function* () {
+    const logPath = (0, update_manager_1.updateLogPath)(homeDir);
+    if (fs.existsSync(logPath)) {
+        yield shell.openPath(logPath);
+        return { ok: true, opened: "file" };
+    }
+    fs.mkdirSync(homeDir, { recursive: true });
+    yield shell.openPath(homeDir);
+    return {
+        ok: true,
+        opened: "folder",
+        message: "No update log yet — opened Mason Jar settings folder.",
+    };
 }));
 ipcMain.handle("openExternalUrl", (_event, url) => __awaiter(void 0, void 0, void 0, function* () {
     const target = String(url || "").trim();

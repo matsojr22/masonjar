@@ -6,6 +6,27 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.2
+
+**What's new**
+
+Windows in-app updates now use a single **Update Now** button on Settings → Updates — download and install happen in one step.
+
+**Fixes**
+
+- Updater script survives app quit more reliably and waits for Mason Jar to fully exit before replacing files.
+- Update log is created before install starts; **Open update log** opens your settings folder if no log exists yet.
+
+**Commit subject**
+
+Fix Windows updater and add Update Now button
+
+**Commit body**
+
+Reliable detached apply via cmd start, CIM process wait, robocopy retries, and pre-flight logging. Settings → Updates uses one Update Now action instead of separate download and install steps.
+
+---
+
 ## v6.0.1
 
 **What's new**

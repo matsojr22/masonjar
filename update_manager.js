@@ -12,7 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UpdateManager = exports.buildCheckResult = exports.expectedWindowsZipName = exports.resolveInstallRoot = exports.updateLogPath = exports.updateLockPath = exports.masonJarTempRoot = exports.compareUpdateAvailable = exports.pickBestRelease = exports.releaseSemver = exports.pickWindowsZipAsset = exports.releaseNotesExcerpt = exports.saveUpdatePreferences = exports.loadUpdatePreferences = exports.updatePreferencesPath = exports.GITHUB_REPO = void 0;
+exports.UpdateManager = exports.buildCheckResult = exports.expectedWindowsZipName = exports.resolveInstallRoot = exports.isUpdateInProgress = exports.buildApplySpawnCommand = exports.clearStaleUpdateLock = exports.isUpdateLockStale = exports.appendUpdateLogLine = exports.UPDATE_LOCK_STALE_MS = exports.updateFallbackLogPath = exports.updateLogPath = exports.updateLockPath = exports.masonJarTempRoot = exports.compareUpdateAvailable = exports.pickBestRelease = exports.releaseSemver = exports.pickWindowsZipAsset = exports.releaseNotesExcerpt = exports.saveUpdatePreferences = exports.loadUpdatePreferences = exports.updatePreferencesPath = exports.GITHUB_REPO = void 0;
 const fs_1 = __importDefault(require("fs"));
 const os_1 = __importDefault(require("os"));
 const path_1 = __importDefault(require("path"));
@@ -125,6 +125,62 @@ function updateLogPath(homeDir) {
     return path_1.default.join(homeDir, "update.log");
 }
 exports.updateLogPath = updateLogPath;
+function updateFallbackLogPath() {
+    return path_1.default.join(masonJarTempRoot(), "update-fallback.log");
+}
+exports.updateFallbackLogPath = updateFallbackLogPath;
+exports.UPDATE_LOCK_STALE_MS = 30 * 60 * 1000;
+function appendUpdateLogLine(homeDir, message) {
+    fs_1.default.mkdirSync(homeDir, { recursive: true });
+    const line = `[${new Date().toISOString()}] ${message}\n`;
+    fs_1.default.appendFileSync(updateLogPath(homeDir), line, "utf8");
+}
+exports.appendUpdateLogLine = appendUpdateLogLine;
+function isUpdateLockStale(lockPath, maxAgeMs = exports.UPDATE_LOCK_STALE_MS) {
+    try {
+        if (!fs_1.default.existsSync(lockPath)) {
+            return false;
+        }
+        const stat = fs_1.default.statSync(lockPath);
+        return Date.now() - stat.mtimeMs > maxAgeMs;
+    }
+    catch (_a) {
+        return true;
+    }
+}
+exports.isUpdateLockStale = isUpdateLockStale;
+function clearStaleUpdateLock() {
+    const lockPath = updateLockPath();
+    if (fs_1.default.existsSync(lockPath) && isUpdateLockStale(lockPath)) {
+        fs_1.default.unlinkSync(lockPath);
+        return true;
+    }
+    return false;
+}
+exports.clearStaleUpdateLock = clearStaleUpdateLock;
+function buildApplySpawnCommand(scriptPath) {
+    return {
+        command: "cmd.exe",
+        args: [
+            "/c",
+            "start",
+            "",
+            "/MIN",
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            scriptPath,
+        ],
+    };
+}
+exports.buildApplySpawnCommand = buildApplySpawnCommand;
+function isUpdateInProgress() {
+    const lockPath = updateLockPath();
+    return fs_1.default.existsSync(lockPath) && !isUpdateLockStale(lockPath);
+}
+exports.isUpdateInProgress = isUpdateInProgress;
 function resolveInstallRoot(isPackaged) {
     if (!isPackaged) {
         return null;
@@ -257,7 +313,7 @@ class UpdateManager {
             logPath: updateLogPath(this.homeDir),
             stagingReady: !!this.stagedExtractDir && !!this.stagedVersion,
             stagedVersion: this.stagedVersion,
-            updateInProgress: fs_1.default.existsSync(updateLockPath()) || this.downloadInFlight,
+            updateInProgress: isUpdateInProgress() || this.downloadInFlight,
         };
     }
     updatesDir() {
@@ -416,34 +472,88 @@ class UpdateManager {
     writeApplyScript(installRoot, stagingDir, oldVersion, newVersion) {
         const scriptPath = path_1.default.join(masonJarTempRoot(), "apply-update.ps1");
         const logPath = updateLogPath(this.homeDir);
+        const fallbackLogPath = updateFallbackLogPath();
         const backupDir = `${installRoot}.backup-${oldVersion}`;
         const exePath = path_1.default.join(installRoot, "masonjar.exe");
         const lockPath = updateLockPath();
+        const pkgPath = path_1.default.join(installRoot, "package.json");
         const ps1 = `
 $ErrorActionPreference = 'Stop'
 $LogPath = '${logPath.replace(/'/g, "''")}'
+$FallbackLogPath = '${fallbackLogPath.replace(/'/g, "''")}'
 $InstallRoot = '${installRoot.replace(/'/g, "''")}'
 $StagingDir = '${stagingDir.replace(/'/g, "''")}'
 $BackupDir = '${backupDir.replace(/'/g, "''")}'
 $ExePath = '${exePath.replace(/'/g, "''")}'
 $LockPath = '${lockPath.replace(/'/g, "''")}'
+$PkgPath = '${pkgPath.replace(/'/g, "''")}'
+$TargetVersion = '${newVersion.replace(/'/g, "''")}'
 $Elevated = $args -contains '-Elevated'
 
 function Write-Log([string]$Message) {
   $line = "[$(Get-Date -Format o)] $Message"
-  Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+  try {
+    $parent = Split-Path -Parent $LogPath
+    if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+    Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+  } catch {
+    try {
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $FallbackLogPath) | Out-Null
+      Add-Content -LiteralPath $FallbackLogPath -Value $line -Encoding UTF8
+    } catch {
+      # best-effort logging only
+    }
+  }
+}
+
+function Wait-InstallProcesses {
+  $deadline = (Get-Date).AddMinutes(5)
+  $warnedFallback = $false
+  while ((Get-Date) -lt $deadline) {
+    $procs = @()
+    try {
+      $procs = @(Get-CimInstance Win32_Process -Filter "Name='masonjar.exe'" -ErrorAction Stop |
+        Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $ExePath) })
+    } catch {
+      if (-not $warnedFallback) {
+        Write-Log 'WARN: CIM process query failed; waiting on any masonjar process'
+        $warnedFallback = $true
+      }
+      $procs = @(Get-Process -Name masonjar -ErrorAction SilentlyContinue)
+    }
+    if (-not $procs -or $procs.Count -eq 0) { break }
+    Start-Sleep -Milliseconds 500
+  }
+  Start-Sleep -Seconds 2
+}
+
+function Invoke-RobocopyChecked([string]$Source, [string]$Dest, [string]$Label) {
+  cmd /c robocopy "$Source" "$Dest" /E /R:2 /W:2 /NFL /NDL /NJH /NJS /NP
+  $rc = $LASTEXITCODE
+  Write-Log "$Label robocopy exit code $rc"
+  if ($rc -ge 8) {
+    throw "$Label robocopy failed with exit code $rc"
+  }
+}
+
+function Merge-WithRetries {
+  param([int]$MaxAttempts = 3)
+  for ($i = 1; $i -le $MaxAttempts; $i++) {
+    try {
+      Write-Log "Merge attempt $i from $StagingDir"
+      Invoke-RobocopyChecked -Source $StagingDir -Dest $InstallRoot -Label "merge"
+      return
+    } catch {
+      Write-Log $_.Exception.Message
+      if ($i -ge $MaxAttempts) { throw }
+      Start-Sleep -Seconds 2
+    }
+  }
 }
 
 try {
-  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LogPath) | Out-Null
   Write-Log "Apply update started (elevated=$Elevated) ${oldVersion} -> ${newVersion}"
-
-  $deadline = (Get-Date).AddMinutes(5)
-  while ((Get-Date) -lt $deadline) {
-    $running = Get-Process -Name masonjar -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $ExePath }
-    if (-not $running) { break }
-    Start-Sleep -Milliseconds 500
-  }
+  Wait-InstallProcesses
 
   if (-not $Elevated) {
     $probe = Join-Path $InstallRoot '.masonjar_update_write_probe'
@@ -465,18 +575,28 @@ try {
     Remove-Item -LiteralPath $BackupDir -Recurse -Force
   }
   Write-Log "Backing up to $BackupDir"
-  robocopy $InstallRoot $BackupDir /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+  Invoke-RobocopyChecked -Source $InstallRoot -Dest $BackupDir -Label "backup"
 
-  Write-Log "Merging staged files from $StagingDir"
-  $rc = 0
-  cmd /c robocopy "$StagingDir" "$InstallRoot" /E /R:2 /W:2 /NFL /NDL /NJH /NJS /NP
-  $rc = $LASTEXITCODE
-  if ($rc -ge 8) {
-    throw "robocopy failed with exit code $rc"
+  Merge-WithRetries
+
+  if (Test-Path -LiteralPath $PkgPath) {
+    $pkgText = Get-Content -LiteralPath $PkgPath -Raw
+    if ($pkgText -notmatch ('"version"\\s*:\\s*"' + [regex]::Escape($TargetVersion) + '"')) {
+      Write-Log "WARN: package.json after merge does not report version $TargetVersion"
+    } else {
+      Write-Log "Verified package.json version $TargetVersion"
+    }
   }
 
   Write-Log 'Relaunching Mason Jar'
-  Start-Process -FilePath $ExePath -WorkingDirectory $InstallRoot
+  try {
+    Start-Process -FilePath $ExePath -WorkingDirectory $InstallRoot
+    Write-Log 'Relaunch via Start-Process succeeded'
+  } catch {
+    Write-Log "Start-Process failed: $($_.Exception.Message); trying cmd start"
+    cmd /c start "" "$ExePath"
+    Write-Log 'Relaunch via cmd start invoked'
+  }
   Write-Log 'Apply update finished successfully'
 } catch {
   Write-Log "Apply update failed: $($_.Exception.Message)"
@@ -498,7 +618,9 @@ try {
                 error: "In-app updates apply only to the packaged Windows app.",
             };
         }
-        if (fs_1.default.existsSync(updateLockPath())) {
+        clearStaleUpdateLock();
+        const lockPath = updateLockPath();
+        if (fs_1.default.existsSync(lockPath)) {
             return { ok: false, error: "Another update is already in progress." };
         }
         const installRoot = resolveInstallRoot(this.isPackaged);
@@ -509,28 +631,72 @@ try {
             return { ok: false, error: "Staged update is missing masonjar.exe." };
         }
         const scriptPath = this.writeApplyScript(installRoot, this.stagedExtractDir, this.currentVersion, this.stagedVersion);
-        fs_1.default.mkdirSync(path_1.default.dirname(updateLockPath()), { recursive: true });
-        fs_1.default.writeFileSync(updateLockPath(), JSON.stringify({
+        fs_1.default.mkdirSync(path_1.default.dirname(lockPath), { recursive: true });
+        fs_1.default.writeFileSync(lockPath, JSON.stringify({
             started: new Date().toISOString(),
             version: this.stagedVersion,
         }));
         return { ok: true, scriptPath };
     }
     launchApplyAndQuit(scriptPath, quit) {
-        (0, child_process_1.spawn)("powershell.exe", [
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-WindowStyle",
-            "Hidden",
-            "-File",
-            scriptPath,
-        ], {
-            detached: true,
-            stdio: "ignore",
-            windowsHide: true,
-        }).unref();
-        quit();
+        const installRoot = resolveInstallRoot(this.isPackaged);
+        appendUpdateLogLine(this.homeDir, `Preparing apply: script=${scriptPath} installRoot=${installRoot || "?"}`);
+        appendUpdateLogLine(this.homeDir, `Fallback log path: ${updateFallbackLogPath()}`);
+        return new Promise((resolve) => {
+            const { command, args } = buildApplySpawnCommand(scriptPath);
+            let settled = false;
+            const finish = (result) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                resolve(result);
+            };
+            try {
+                const child = (0, child_process_1.spawn)(command, args, {
+                    detached: true,
+                    stdio: "ignore",
+                    windowsHide: true,
+                });
+                child.on("error", (err) => {
+                    appendUpdateLogLine(this.homeDir, `Spawn failed: ${err.message}`);
+                    finish({ ok: false, error: err.message });
+                });
+                child.unref();
+                if (!child.pid) {
+                    appendUpdateLogLine(this.homeDir, "Spawn failed: no PID returned");
+                    finish({ ok: false, error: "Failed to start updater process" });
+                    return;
+                }
+                appendUpdateLogLine(this.homeDir, `Updater detached pid=${child.pid}`);
+                setTimeout(() => {
+                    if (settled) {
+                        return;
+                    }
+                    quit();
+                    finish({ ok: true });
+                }, 400);
+            }
+            catch (error) {
+                const msg = error instanceof Error ? error.message : String(error);
+                appendUpdateLogLine(this.homeDir, `Spawn exception: ${msg}`);
+                finish({ ok: false, error: msg });
+            }
+        });
+    }
+    runWindowsUpdateNow(onProgress, quit) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const download = yield this.downloadWindowsUpdate(onProgress);
+            if (!download.ok) {
+                return download;
+            }
+            onProgress(100, "Installing update…");
+            const prepared = this.prepareWindowsApply();
+            if (!prepared.ok) {
+                return prepared;
+            }
+            return this.launchApplyAndQuit(prepared.scriptPath, quit);
+        });
     }
 }
 exports.UpdateManager = UpdateManager;

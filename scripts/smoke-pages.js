@@ -78,6 +78,7 @@ const DOM_ASSERTIONS = {
 	"settings_updates.html": [
 		"updateStatusPanel",
 		"checkAgainBtn",
+		"updateNowBtn",
 		"allowPrerelease",
 	],
 	"parcellation_wizard.html": [

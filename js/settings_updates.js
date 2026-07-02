@@ -98,8 +98,7 @@ function renderVersionLabels() {
 
 function renderActionButtons() {
 	var checkBtn = qs("checkAgainBtn");
-	var downloadBtn = qs("downloadUpdateBtn");
-	var installBtn = qs("installUpdateBtn");
+	var updateNowBtn = qs("updateNowBtn");
 	var macBtn = qs("macDownloadBtn");
 	var releaseBtn = qs("openReleaseBtn");
 	var info = state.applyInfo || {};
@@ -107,19 +106,14 @@ function renderActionButtons() {
 	var canWinApply = !!info.canApplyInApp;
 	var isDarwin = info.platform === "darwin";
 	var hasUpdate = !!cached.updateAvailable;
-	var stagingReady = !!info.stagingReady;
 
 	if (checkBtn) {
 		checkBtn.disabled = state.busy;
 	}
-	if (downloadBtn) {
-		downloadBtn.classList.toggle("d-none", !canWinApply || !hasUpdate);
-		downloadBtn.disabled = state.busy || !hasUpdate;
-	}
-	if (installBtn) {
-		installBtn.classList.toggle("d-none", !canWinApply || !hasUpdate);
-		installBtn.disabled =
-			state.busy || !stagingReady || !!info.updateInProgress;
+	if (updateNowBtn) {
+		updateNowBtn.classList.toggle("d-none", !canWinApply || !hasUpdate);
+		updateNowBtn.disabled =
+			state.busy || !hasUpdate || !!info.updateInProgress;
 	}
 	if (macBtn) {
 		macBtn.classList.toggle("d-none", !isDarwin || !hasUpdate);
@@ -136,9 +130,9 @@ function renderUpdateTestBanner() {
 	if (!banner) {
 		return;
 	}
-	if (state.currentVersion === "6.0.1") {
+	if (state.currentVersion === "6.0.3") {
 		banner.textContent =
-			"Pre-release build — validates in-app update delivery from 6.0.0.";
+			"Pre-release build — validates Update Now from 6.0.2.";
 		banner.classList.remove("d-none");
 	} else {
 		banner.textContent = "";
@@ -187,71 +181,55 @@ function savePreferencesAndRefresh() {
 		});
 }
 
-function confirmInstall() {
+function confirmUpdateNow() {
 	var cached = state.cached || {};
 	var lines = [
-		"Mason Jar will quit and restart with version " + (cached.latest || "?") + ".",
+		"Mason Jar will download the update, quit, and restart with version " +
+			(cached.latest || "?") +
+			".",
 		"Finish or cancel any running pipeline jobs first.",
 	];
 	if (cached.isPrerelease) {
 		lines.unshift("This is a pre-release build.");
 	}
-	return Promise.resolve(window.confirm("Install update?\n\n" + lines.join("\n\n")));
+	return Promise.resolve(
+		window.confirm("Update Now?\n\n" + lines.join("\n\n")),
+	);
 }
 
-function onDownloadClick() {
+function onUpdateNowClick() {
 	if (state.busy) {
 		return;
 	}
-	state.busy = true;
-	setFeedback("");
-	setProgress(true, 0, "Preparing download…");
-	renderActionButtons();
-	ipc
-		.invoke("downloadWindowsUpdate")
-		.then(function (result) {
-			if (result && result.ok) {
-				setFeedback("Download complete. Ready to install.");
-				setProgress(true, 100, "Ready to install");
-			} else {
-				setFeedback((result && result.error) || "Download failed.", true);
-				setProgress(false, 0, "");
-			}
-			return ipc.invoke("getUpdateStatus");
-		})
-		.then(applyStatusPayload)
-		.catch(function (err) {
-			setFeedback(String(err && err.message ? err.message : err), true);
-			setProgress(false, 0, "");
-		})
-		.finally(function () {
-			state.busy = false;
-			renderActionButtons();
-		});
-}
-
-function onInstallClick() {
-	if (state.busy) {
-		return;
-	}
-	confirmInstall().then(function (ok) {
+	confirmUpdateNow().then(function (ok) {
 		if (!ok) {
 			return;
 		}
 		state.busy = true;
+		setFeedback("");
+		setProgress(true, 0, "Preparing update…");
 		renderActionButtons();
-		setFeedback("Installing update… Mason Jar will restart.");
 		ipc
-			.invoke("applyWindowsUpdate")
+			.invoke("runWindowsUpdateNow")
 			.then(function (result) {
 				if (!result || !result.ok) {
-					setFeedback((result && result.error) || "Install failed.", true);
+					setFeedback((result && result.error) || "Update failed.", true);
+					setProgress(false, 0, "");
 					state.busy = false;
 					renderActionButtons();
+					return ipc.invoke("getUpdateStatus");
+				}
+				setFeedback("Installing update… Mason Jar will restart.");
+				setProgress(true, 100, "Installing update…");
+			})
+			.then(function (payload) {
+				if (payload) {
+					applyStatusPayload(payload);
 				}
 			})
 			.catch(function (err) {
 				setFeedback(String(err && err.message ? err.message : err), true);
+				setProgress(false, 0, "");
 				state.busy = false;
 				renderActionButtons();
 			});
@@ -267,10 +245,13 @@ function openReleasePage() {
 }
 
 function openUpdateLog() {
-	var logPath = state.applyInfo && state.applyInfo.logPath;
-	if (logPath) {
-		ipc.send("openPathInShell", logPath);
-	}
+	ipc.invoke("openUpdateLog").then(function (result) {
+		if (result && result.message) {
+			setFeedback(result.message, false);
+		}
+	}).catch(function (err) {
+		setFeedback(String(err && err.message ? err.message : err), true);
+	});
 }
 
 function restorePrereleaseToggle(prefs) {
@@ -310,8 +291,7 @@ pageInit.onReady(function () {
 	});
 
 	var checkBtn = qs("checkAgainBtn");
-	var downloadBtn = qs("downloadUpdateBtn");
-	var installBtn = qs("installUpdateBtn");
+	var updateNowBtn = qs("updateNowBtn");
 	var macBtn = qs("macDownloadBtn");
 	var releaseBtn = qs("openReleaseBtn");
 	var allowEl = qs("allowPrerelease");
@@ -332,11 +312,8 @@ pageInit.onReady(function () {
 				});
 		});
 	}
-	if (downloadBtn) {
-		downloadBtn.addEventListener("click", onDownloadClick);
-	}
-	if (installBtn) {
-		installBtn.addEventListener("click", onInstallClick);
+	if (updateNowBtn) {
+		updateNowBtn.addEventListener("click", onUpdateNowClick);
 	}
 	if (macBtn) {
 		macBtn.addEventListener("click", openReleasePage);
@@ -370,7 +347,7 @@ pageInit.onReady(function () {
 			state.cached &&
 			state.cached.updateAvailable;
 		if (useCache) {
-			setFeedback("Update available — download below when ready.");
+			setFeedback("Update available — click Update Now when ready.");
 			return null;
 		}
 		return refreshFromMain(false);

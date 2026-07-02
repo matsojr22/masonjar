@@ -131,6 +131,59 @@ function testUpdatePreferencesRoundTrip() {
 	}
 }
 
+function testBuildApplySpawnCommand() {
+	const spec = updateManager.buildApplySpawnCommand("C:\\Temp\\apply-update.ps1");
+	assert(spec.command === "cmd.exe", "cmd spawn");
+	assert(spec.args.includes("start"), "start via cmd");
+	assert(spec.args.includes("powershell.exe"), "powershell in chain");
+	assert(
+		spec.args[spec.args.length - 1] === "C:\\Temp\\apply-update.ps1",
+		"script path last arg",
+	);
+}
+
+function testAppendUpdateLogLine() {
+	const os = require("os");
+	const fs = require("fs");
+	const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "mj-update-log-"));
+	try {
+		updateManager.appendUpdateLogLine(tmpHome, "test line");
+		const logPath = updateManager.updateLogPath(tmpHome);
+		assert(fs.existsSync(logPath), "log file created");
+		const text = fs.readFileSync(logPath, "utf8");
+		assert(text.indexOf("test line") >= 0, "log content");
+	} finally {
+		fs.rmSync(tmpHome, { recursive: true, force: true });
+	}
+}
+
+function testApplyScriptContent() {
+	const os = require("os");
+	const fs = require("fs");
+	const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "mj-update-script-"));
+	const installRoot = path.join(tmpHome, "install");
+	const staging = path.join(tmpHome, "staging");
+	fs.mkdirSync(installRoot, { recursive: true });
+	fs.mkdirSync(staging, { recursive: true });
+	fs.writeFileSync(path.join(staging, "masonjar.exe"), "");
+	try {
+		const mgr = new updateManager.UpdateManager(tmpHome, "6.0.0", true);
+		const scriptPath = mgr.writeApplyScript(
+			installRoot,
+			staging,
+			"6.0.0",
+			"6.0.2",
+		);
+		const ps1 = fs.readFileSync(scriptPath, "utf8");
+		assert(ps1.indexOf("Win32_Process") >= 0, "CIM process wait");
+		assert(ps1.indexOf("Merge-WithRetries") >= 0, "merge retries");
+		assert(ps1.indexOf(".Path -eq") < 0, "no Get-Process Path filter");
+		assert(ps1.indexOf("FallbackLogPath") >= 0, "fallback log");
+	} finally {
+		fs.rmSync(tmpHome, { recursive: true, force: true });
+	}
+}
+
 function run() {
 	testPickWindowsZipAsset();
 	testCompareUpdateAvailable();
@@ -139,6 +192,9 @@ function run() {
 	testReleaseNotesExcerpt();
 	testExpectedWindowsZipName();
 	testUpdatePreferencesRoundTrip();
+	testBuildApplySpawnCommand();
+	testAppendUpdateLogLine();
+	testApplyScriptContent();
 	console.log("test-update-manager: ok");
 }
 
