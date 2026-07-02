@@ -1385,6 +1385,17 @@ function wirePreprocessWizard(opts) {
 	if (processStart) {
 		processStart.addEventListener("click", startProcess);
 	}
+	if (setActiveCheckbox) {
+		setActiveCheckbox.addEventListener("change", function () {
+			if (!setActiveCheckbox.checked || !state.lastRunRel) {
+				return;
+			}
+			pipelineRuns.setActiveRunRel("max", state.lastRunRel);
+			if (project.isActive()) {
+				project.refreshProjectIndex().catch(function () {});
+			}
+		});
+	}
 	if (step2Cancel) {
 		step2Cancel.addEventListener("click", function () {
 			if (state.running) {

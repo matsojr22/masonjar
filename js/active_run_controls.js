@@ -2,6 +2,7 @@
 
 var project = require("./project");
 var pipelineRuns = require("./pipeline_runs");
+var ipc = require("electron").ipcRenderer;
 
 /**
  * Trash button for a run <select>: deletes the selected run folder after confirm.
@@ -81,6 +82,35 @@ function attachRunDeleteButton(selectEl, role, options) {
 	return btn;
 }
 
+/**
+ * Open the predictions role folder in the system file manager.
+ * @param {string} role output role (predictions)
+ * @returns {HTMLButtonElement}
+ */
+function attachRunBrowseButton(role) {
+	var btn = document.createElement("button");
+	btn.type = "button";
+	btn.className = "btn btn-sm btn-outline-secondary ms-1";
+	btn.title = "Open predictions folder (all detection runs)";
+	btn.setAttribute("aria-label", "Open predictions folder");
+	btn.innerHTML = '<i class="fas fa-folder-open" aria-hidden="true"></i>';
+
+	btn.addEventListener("click", function () {
+		if (!project.isActive()) {
+			return;
+		}
+		var abs = pipelineRuns.resolveRoleBaseAbs(role);
+		if (!abs) {
+			alert("Predictions folder not found for this project.");
+			return;
+		}
+		ipc.send("openPathInShell", abs);
+	});
+
+	return btn;
+}
+
 module.exports = {
 	attachRunDeleteButton: attachRunDeleteButton,
+	attachRunBrowseButton: attachRunBrowseButton,
 };

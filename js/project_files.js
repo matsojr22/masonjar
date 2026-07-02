@@ -267,6 +267,7 @@ function bindActiveRunControls(containerId) {
 
 	for (var i = 0; i < pipelineRuns.OUTPUT_ROLES.length; i++) {
 		(function (role) {
+			project.ensureDefaultActiveRunForRole(role);
 			var choices = project.listRunChoicesForRole(role);
 			if (!choices.length) {
 				return;
@@ -317,14 +318,18 @@ function bindActiveRunControls(containerId) {
 				project.refreshProjectIndex().catch(function () {});
 			});
 			selectCol.appendChild(select);
-			selectCol.appendChild(
-				activeRunControls.attachRunDeleteButton(select, role, {
-					onDeleted: function () {
-						bindActiveRunControls(containerId);
-						renderImportNextStepsBanner();
-					},
-				}),
-			);
+			if (role === "predictions" && choices.length > 1) {
+				selectCol.appendChild(activeRunControls.attachRunBrowseButton(role));
+			} else {
+				selectCol.appendChild(
+					activeRunControls.attachRunDeleteButton(select, role, {
+						onDeleted: function () {
+							bindActiveRunControls(containerId);
+							renderImportNextStepsBanner();
+						},
+					}),
+				);
+			}
 			row.appendChild(labelCol);
 			row.appendChild(selectCol);
 			container.appendChild(row);

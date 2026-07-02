@@ -43,6 +43,69 @@ function testListBranchesAndDatasets() {
 	helpers.rmDir(bundle);
 }
 
+function testActiveMaxBeatsSavedRelAndPreferKind() {
+	var bundle = helpers.tmpDir("mj-datasets-active-");
+	var maxBase = path.join(bundle, "data/counting/03_max");
+	var maxDir = path.join(maxBase, "somata", "max", "M528_max_run");
+	var sharpenDir = path.join(maxBase, "somata", "sharpen", "M528_sh_run");
+	fs.mkdirSync(maxDir, { recursive: true });
+	fs.mkdirSync(sharpenDir, { recursive: true });
+	fs.writeFileSync(path.join(maxDir, "M528_s061.tif"), Buffer.alloc(16));
+	fs.writeFileSync(path.join(sharpenDir, "M528_s061.tif"), Buffer.alloc(16));
+
+	var project = require("../js/project");
+	project.setActiveProject(bundle, {
+		name: "test",
+		roles: { max: "data/counting/03_max" },
+		processing: {
+			active_runs: Object.assign(pipelineRuns.defaultActiveRuns(), {
+				max: "somata/sharpen/M528_sh_run",
+			}),
+		},
+	});
+
+	try {
+		global.sessionStorage.setItem(
+			"masonjar.detect.maxDataset",
+			"somata/max/M528_max_run",
+		);
+	} catch (_err) {
+		/* ignore */
+	}
+
+	var def = maxDatasets.defaultDatasetForBranch(bundle, "somata", {
+		preferKind: "max",
+		savedRel: "somata/max/M528_max_run",
+	});
+	assert.strictEqual(def.kind, "sharpen");
+	assert.ok(def.rel.indexOf("sharpen") >= 0);
+
+	project.clearActiveProject();
+	helpers.rmDir(bundle);
+}
+
+function testDetectSlugIncludesInputDataset() {
+	var slugMax = pipelineRuns.buildDetectRunSlug({
+		sortedStems: ["M528_s001"],
+		confidence: 0.5,
+		tile: 640,
+		area: 200,
+		eccentricity: 0.5,
+		inputDatasetRel: "somata/max/M528_run_a",
+	});
+	var slugSharpen = pipelineRuns.buildDetectRunSlug({
+		sortedStems: ["M528_s001"],
+		confidence: 0.5,
+		tile: 640,
+		area: 200,
+		eccentricity: 0.5,
+		inputDatasetRel: "somata/sharpen/M528_run_b",
+	});
+	assert.notStrictEqual(slugMax, slugSharpen);
+	assert.ok(slugMax.indexOf("from_") >= 0);
+	assert.ok(slugSharpen.indexOf("from_") >= 0);
+}
+
 function testTophatSlugWithSource() {
 	var slug = pipelineRuns.buildRunSlug("tophat", {
 		sortedStems: ["M528_s061"],
@@ -62,6 +125,8 @@ function testParseSourceRunRel() {
 }
 
 testListBranchesAndDatasets();
+testActiveMaxBeatsSavedRelAndPreferKind();
+testDetectSlugIncludesInputDataset();
 testTophatSlugWithSource();
 testParseSourceRunRel();
 console.log("test-max-datasets: ok");

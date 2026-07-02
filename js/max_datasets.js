@@ -181,13 +181,6 @@ function defaultDatasetForBranch(bundleRoot, branch, opts) {
 		return null;
 	}
 	var savedRel = opts.savedRel || "";
-	if (savedRel) {
-		for (var i = 0; i < datasets.length; i++) {
-			if (datasets[i].rel === savedRel) {
-				return datasets[i];
-			}
-		}
-	}
 	var activeRel = "";
 	if (project.isActive()) {
 		var proj = project.getProject();
@@ -205,6 +198,13 @@ function defaultDatasetForBranch(bundleRoot, branch, opts) {
 				if (datasets[a].rel === activeRel) {
 					return datasets[a];
 				}
+			}
+		}
+	}
+	if (savedRel) {
+		for (var i = 0; i < datasets.length; i++) {
+			if (datasets[i].rel === savedRel) {
+				return datasets[i];
 			}
 		}
 	}

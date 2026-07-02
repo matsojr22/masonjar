@@ -185,6 +185,11 @@ run.addEventListener("click", function () {
 
 		var sortedStems = listInputSliceStems(indir.value);
 		var branch = modelBranchForSlug(detectionMethod, m);
+		var inputDatasetRel = "";
+		if (project.isActive() && indir.value) {
+			inputDatasetRel =
+				pipelineRuns.relFromRoleBase("max", indir.value) || "";
+		}
 		var slug = pipelineRuns.buildDetectRunSlug({
 			confidence: Number(c),
 			tile: Number(t),
@@ -192,6 +197,7 @@ run.addEventListener("click", function () {
 			eccentricity: Number(e),
 			sortedStems: sortedStems,
 			subsetCount: plan.toProcess ? plan.toProcess.length : 0,
+			inputDatasetRel: inputDatasetRel,
 		});
 		var useFlat = flatOutput && flatOutput.checked;
 		var finalOut = pipelineRuns.resolveStepOutputPath("detect", {
@@ -281,6 +287,7 @@ ipc.on("updateLoad", function (event, response) {
 	loadmessage.innerHTML = response[1];
 });
 
+workspace.applyPreset("detect");
 datasetPicker = maxDatasetPicker.wireMaxDatasetPicker({
 	storageKey: "masonjar.detect.maxDataset",
 	indirInput: indir,
@@ -291,8 +298,6 @@ datasetPicker = maxDatasetPicker.wireMaxDatasetPicker({
 		return maxDatasets.defaultBranchForDetectMethod(detectionMethod);
 	},
 });
-
-workspace.applyPreset("detect");
 workspace.bindPathPicker(indir, "indir", "max");
 workspace.bindPathPicker(outdir, "outdir", "predictions");
 workspace.bindPathPicker(model, "model", null, true);
