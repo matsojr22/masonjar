@@ -16,7 +16,7 @@ from sahi.predict import get_sliced_prediction
 import tifffile as tiff
 import torch
 
-from detect_qc import DetectQcCollector, cleanup_detect_qc_artifacts, write_run_histograms
+from detect_qc import DetectQcCollector, bbox_intensity_p90, cleanup_detect_qc_artifacts, write_run_histograms
 
 
 class DetectionResult:
@@ -106,7 +106,14 @@ def run_sliced_detection(image, detection_model, tile_size, label):
     return _call_get_sliced_prediction(image, detection_model, tile_size, label)
 
 
-def screen_predictions(prediction_objects, area_threshold, eccentricity_threshold=None, image=None, sam_model_path=None):
+def screen_predictions(
+    prediction_objects,
+    area_threshold,
+    eccentricity_threshold=None,
+    image=None,
+    gray_for_qc=None,
+    sam_model_path=None,
+):
     """Screen predictions for objects below a certain area."""
     del sam_model_path  # reserved for future SAM-based screening
     first_pass = [
@@ -127,21 +134,27 @@ def screen_predictions(prediction_objects, area_threshold, eccentricity_threshol
         ]
 
     pre_ecc_eccentricities = []
+    pre_ecc_records: list[tuple[float, float]] = []
     if eccentricity_threshold is not None:
         try:
             assert image is not None
             filtered = []
             for obj in second_pass:
                 val = measure_eccentricity(obj.bbox.to_xyxy(), image)
+                inten = None
+                if gray_for_qc is not None:
+                    inten = bbox_intensity_p90(obj.bbox.to_xyxy(), gray_for_qc)
                 if val is not None:
                     pre_ecc_eccentricities.append(val)
+                    if inten is not None:
+                        pre_ecc_records.append((val, inten))
                 if val is None or val > eccentricity_threshold:
                     filtered.append(obj)
             second_pass = filtered
         except AssertionError:
             print("Image not provided. Eccentricity screening not performed.")
 
-    return second_pass, pre_ecc_eccentricities
+    return second_pass, pre_ecc_eccentricities, pre_ecc_records
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Find neurons in images")
@@ -335,6 +348,7 @@ if __name__ == "__main__":
                 # equalize
                 chan_img = equalize_adapthist(chan_img, clip_limit=0.01)
                 chan_img = (chan_img * 255).astype(np.uint8)
+                gray_for_qc = chan_img.copy()
                 # convert to BGR
                 chan_img = cv2.cvtColor(chan_img, cv2.COLOR_GRAY2BGR)
                 result = run_sliced_detection(
@@ -348,19 +362,21 @@ if __name__ == "__main__":
                     f"Screening {len(result.object_prediction_list)} detections on {file} ch{i + 1}…",
                     flush=True,
                 )
-                predicted_objects, pre_ecc_ecc = screen_predictions(
+                predicted_objects, pre_ecc_ecc, pre_ecc_records = screen_predictions(
                     result.object_prediction_list,
                     area_threshold,
                     eccentricity_threshold=eccentricity_threshold,
                     image=chan_img,
+                    gray_for_qc=gray_for_qc,
                     sam_model_path=Path(args.sam.strip()).expanduser(),
                 )
                 qc_collector.add_slice_pass(
                     slice_id,
                     result.object_prediction_list,
-                    None,
                     predicted_objects,
                     pre_ecc_ecc,
+                    pre_ecc_records,
+                    gray_for_qc,
                 )
                 bboxes = [obj.bbox.to_xyxy() for obj in predicted_objects]
                 scores = [obj.score.value for obj in predicted_objects]
@@ -383,6 +399,7 @@ if __name__ == "__main__":
             
             img = equalize_adapthist(img, clip_limit=0.01)
             img = (img * 255).astype(np.uint8)
+            gray_for_qc = img.copy()
 
             # convert to BGR
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
@@ -398,19 +415,21 @@ if __name__ == "__main__":
                 f"Screening {len(result.object_prediction_list)} detections on {file}…",
                 flush=True,
             )
-            predicted_objects, pre_ecc_ecc = screen_predictions(
+            predicted_objects, pre_ecc_ecc, pre_ecc_records = screen_predictions(
                 result.object_prediction_list,
                 area_threshold,
                 image=img,
+                gray_for_qc=gray_for_qc,
                 sam_model_path=Path(args.sam.strip()).expanduser(),
                 eccentricity_threshold=eccentricity_threshold,
             )
             qc_collector.add_slice_pass(
                 slice_id,
                 result.object_prediction_list,
-                None,
                 predicted_objects,
                 pre_ecc_ecc,
+                pre_ecc_records,
+                gray_for_qc,
             )
 
             bboxes = [obj.bbox.to_xyxy() for obj in predicted_objects]

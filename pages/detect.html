@@ -246,15 +246,6 @@
               value="multichannel"
             />
           </div>
-          <div class="col m-1">
-            <h5>Per-slice QC histograms</h5>
-            <div class="form-check">
-              <input class="form-check-input" type="checkbox" id="perSliceQc" />
-              <label class="form-check-label" for="perSliceQc">
-                Write per-slice QC PNGs (run-level histograms are always saved)
-              </label>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -266,6 +257,12 @@
             <label class="form-check-label" for="flatOutput"
               >Write outputs directly to the output folder (legacy flat layout; no run subfolder)</label
             >
+          </div>
+          <div class="form-check mt-2">
+            <input class="form-check-input" type="checkbox" id="perSliceQc" />
+            <label class="form-check-label" for="perSliceQc">
+              Enable additional per-slice QC plots
+            </label>
           </div>
         </div>
       </div>

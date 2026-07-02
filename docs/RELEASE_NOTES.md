@@ -6,6 +6,27 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v5.0.7
+
+**What's new**
+
+Detection QC charts now plot **bbox area (px²)** with a line at your area cutoff, replacing the less useful long-axis chart. Each QC histogram also overlays **per-detection brightness** (black dots = all SAHI candidates, blue outlines = detections kept after screening) so you can spot dim false positives vs bright somata when tuning confidence, area, and eccentricity.
+
+**Changes**
+
+- Middle QC file is now `detect_qc_area_px2.png`; summary JSON includes intensity percentiles.
+- **Enable additional per-slice QC plots** moved to the Detect page footer, below the flat-output checkbox.
+
+**Commit subject**
+
+Improve detection QC with area chart and intensity dots
+
+**Commit body**
+
+Detection QC replaces the long-axis histogram with area versus the screening cutoff and adds per-bbox intensity dots on all three charts. The optional per-slice QC checkbox sits in the Detect footer next to other output options.
+
+---
+
 ## v5.0.6
 
 **What's new**
