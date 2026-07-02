@@ -6,6 +6,26 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.5
+
+**What's new**
+
+Pre-release build for testing **Update Now** from v6.0.4. Enable **Advanced → Allow pre-release versions**, then **Check again** to receive this build.
+
+**Changes**
+
+- Settings → Updates shows a confirmation banner on v6.0.5 for pre-release update testing.
+
+**Commit subject**
+
+Release v6.0.5 pre-release for Update Now testing
+
+**Commit body**
+
+Pre-release zip to validate one-click Update Now from 6.0.4 stable installs.
+
+---
+
 ## v6.0.4
 
 **What's new**
