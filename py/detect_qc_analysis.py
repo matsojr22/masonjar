@@ -176,6 +176,7 @@ def _score_threshold(
     candidates: list[float],
     higher_is_pass: bool = True,
 ) -> float | None:
+    """Reserved for future labeled-data tuning of confidence/area/eccentricity."""
     if not records or intensity_threshold is None:
         return None
 
@@ -209,64 +210,11 @@ def suggest_detection_params(
     intensity_threshold: float | None,
     current_thresholds: dict[str, float],
 ) -> dict[str, Any]:
-    suggestions: dict[str, Any] = {}
+    """Return intensity cutoff only; other params deferred until labeled TP/FP data exists."""
+    del raw_records, current_thresholds
     if intensity_threshold is not None and intensity_threshold > 0:
-        suggestions["intensity_min"] = int(round(intensity_threshold))
-
-    if not raw_records or intensity_threshold is None:
-        return suggestions
-
-    conf_candidates = [round(c, 2) for c in np.arange(0.35, 0.91, 0.01)]
-    conf = _score_threshold(
-        raw_records,
-        intensity_threshold,
-        attr="confidence",
-        candidates=conf_candidates,
-        higher_is_pass=True,
-    )
-    if conf is not None:
-        suggestions["confidence"] = float(conf)
-
-    areas = sorted({int(round(r.area_px2)) for r in raw_records})
-    if areas:
-        area_candidates = list(range(max(50, areas[0]), min(areas[-1] + 1, 5000), max(1, (areas[-1] - areas[0]) // 40 or 1)))
-        if not area_candidates:
-            area_candidates = areas
-        area = _score_threshold(
-            raw_records,
-            intensity_threshold,
-            attr="area_px2",
-            candidates=[float(a) for a in area_candidates],
-            higher_is_pass=True,
-        )
-        if area is not None:
-            suggestions["area"] = int(round(area))
-
-    ecc_records = [r for r in raw_records if r.eccentricity is not None]
-    if ecc_records:
-        ecc_candidates = [round(e, 2) for e in np.arange(0.05, 0.96, 0.01)]
-        ecc = _score_threshold(
-            ecc_records,
-            intensity_threshold,
-            attr="eccentricity",
-            candidates=ecc_candidates,
-            higher_is_pass=True,
-        )
-        if ecc is not None:
-            suggestions["eccentricity"] = float(ecc)
-
-    cur_conf = float(current_thresholds.get("confidence", 0.5))
-    cur_area = float(current_thresholds.get("area_px2", 200))
-    cur_ecc = float(current_thresholds.get("eccentricity", 0.2))
-
-    if "confidence" in suggestions and abs(suggestions["confidence"] - cur_conf) < 0.02:
-        suggestions.pop("confidence", None)
-    if "area" in suggestions and abs(suggestions["area"] - cur_area) < 5:
-        suggestions.pop("area", None)
-    if "eccentricity" in suggestions and abs(suggestions["eccentricity"] - cur_ecc) < 0.03:
-        suggestions.pop("eccentricity", None)
-
-    return suggestions
+        return {"intensity_min": int(round(intensity_threshold))}
+    return {}
 
 
 def _build_summary_lines(
@@ -312,18 +260,9 @@ def _build_summary_lines(
             f"Setting intensity cutoff to {suggestions['intensity_min']} would drop "
             f"dim candidates while keeping brighter somata."
         )
-    if suggestions:
-        parts = []
-        if "confidence" in suggestions:
-            parts.append(f"confidence {suggestions['confidence']:.2f}")
-        if "area" in suggestions:
-            parts.append(f"area {suggestions['area']} px²")
-        if "eccentricity" in suggestions:
-            parts.append(f"eccentricity {suggestions['eccentricity']:.2f}")
-        if parts:
-            lines.append(
-                "Additional tuning may help: " + ", ".join(parts) + "."
-            )
+        lines.append(
+            "Re-run with this intensity cutoff in Advanced settings to apply it."
+        )
     return lines
 
 

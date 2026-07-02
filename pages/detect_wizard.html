@@ -187,12 +187,12 @@
         <div id="summaryAlert" class="alert text-start"></div>
         <div id="qcGallery" class="detect-qc-gallery mb-3"></div>
         <div id="qcAnalysisSummary" class="text-start mb-3"></div>
-        <button type="button" class="btn btn-outline-primary mb-3" id="applySuggestions">
-          Apply suggestions
+        <button type="button" class="btn btn-outline-primary mb-3 d-none" id="applyIntensityCutoff">
+          Use suggested intensity cutoff
         </button>
         <p id="rerunFooter" class="small text-muted mb-3">
-          Re-running your cell detections with the following custom parameters may improve your cell
-          detections.
+          Re-running cell detection with the suggested intensity cutoff may reduce dim false
+          positives.
         </p>
         <a class="btn btn-primary" id="backToTools" href="./workspace_menu.html">Back to workspace</a>
         <a class="btn btn-outline-primary ms-2" href="./count.html">Count Brain</a>

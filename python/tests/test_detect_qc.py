@@ -167,7 +167,10 @@ def test_suggest_detection_params_prefers_high_intensity():
     suggestions = suggest_detection_params(
         records, threshold, {"confidence": 0.5, "area_px2": 200, "eccentricity": 0.2}
     )
-    assert suggestions.get("intensity_min") == 50
+    assert suggestions == {"intensity_min": 50}
+    assert "confidence" not in suggestions
+    assert "area" not in suggestions
+    assert "eccentricity" not in suggestions
 
 
 def test_filter_objects_by_intensity():
@@ -221,3 +224,5 @@ def test_write_run_histograms_includes_analysis(tmp_path: Path):
     summary = json.loads((tmp_path / "detect_qc_summary.json").read_text(encoding="utf-8"))
     assert "analysis" in summary
     assert "summary_lines" in summary["analysis"]
+    sug = summary["analysis"].get("suggestions") or {}
+    assert set(sug.keys()) <= {"intensity_min"}

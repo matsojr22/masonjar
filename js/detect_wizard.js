@@ -111,24 +111,18 @@ function loadLastRun() {
 	}
 }
 
-function formatParamValue(key, val) {
-	if (val === null || val === undefined || val === "") {
-		return "—";
-	}
-	if (key === "confidence" || key === "eccentricity") {
-		return Number(val).toFixed(2);
-	}
-	return String(val);
-}
-
 function renderAnalysisSummary(summaryJson) {
 	var container = qs("qcAnalysisSummary");
-	var applyBtn = qs("applySuggestions");
+	var applyBtn = qs("applyIntensityCutoff");
 	if (!container) {
 		return;
 	}
 	container.innerHTML = "";
 	lastAnalysis = (summaryJson && summaryJson.analysis) || null;
+
+	if (!applyBtn) {
+		applyBtn = null;
+	}
 
 	if (!lastAnalysis) {
 		container.innerHTML =
@@ -151,54 +145,32 @@ function renderAnalysisSummary(summaryJson) {
 		container.appendChild(ul);
 	}
 
-	var suggestions = lastAnalysis.suggestions || {};
-	var current = lastAnalysis.current || {};
-	var hasSuggestions = Object.keys(suggestions).length > 0;
+	var intensitySug =
+		lastAnalysis.suggestions && lastAnalysis.suggestions.intensity_min != null
+			? lastAnalysis.suggestions.intensity_min
+			: lastAnalysis.intensity_threshold_estimate;
+	var currentIntensity =
+		lastAnalysis.current && lastAnalysis.current.intensity_min != null
+			? lastAnalysis.current.intensity_min
+			: 0;
 
-	if (hasSuggestions) {
-		var table = document.createElement("table");
-		table.className = "table table-sm detect-suggestions-table";
-		var thead = document.createElement("thead");
-		thead.innerHTML =
-			"<tr><th>Parameter</th><th>Current</th><th>Suggested</th></tr>";
-		table.appendChild(thead);
-		var tbody = document.createElement("tbody");
-		var rows = [
-			{ key: "confidence", label: "Confidence", cur: current.confidence, sug: suggestions.confidence },
-			{ key: "area", label: "Area cutoff (px²)", cur: current.area, sug: suggestions.area },
-			{ key: "eccentricity", label: "Eccentricity", cur: current.eccentricity, sug: suggestions.eccentricity },
-			{
-				key: "intensity_min",
-				label: "Intensity cutoff",
-				cur: current.intensity_min || 0,
-				sug: suggestions.intensity_min,
-			},
-		];
-		for (var r = 0; r < rows.length; r++) {
-			var row = rows[r];
-			if (row.sug === undefined) {
-				continue;
-			}
-			var tr = document.createElement("tr");
-			tr.innerHTML =
-				"<td>" +
-				row.label +
-				"</td><td>" +
-				formatParamValue(row.key, row.cur) +
-				"</td><td><strong>" +
-				formatParamValue(row.key, row.sug) +
-				"</strong></td>";
-			tbody.appendChild(tr);
-		}
-		table.appendChild(tbody);
-		container.appendChild(table);
+	if (intensitySug != null && intensitySug > 0) {
+		var callout = document.createElement("div");
+		callout.className = "alert alert-info py-2 px-3 small mb-0";
+		var curText =
+			currentIntensity > 0
+				? " (current: " + String(currentIntensity) + ")"
+				: "";
+		callout.textContent =
+			"Suggested intensity cutoff: " + String(intensitySug) + curText;
+		container.appendChild(callout);
 		if (applyBtn) {
 			applyBtn.classList.remove("d-none");
 		}
 	} else if (!lines.length) {
 		var p = document.createElement("p");
 		p.className = "text-muted small";
-		p.textContent = "Not enough data in this run to recommend parameter changes.";
+		p.textContent = "Not enough data in this run to recommend an intensity cutoff.";
 		container.appendChild(p);
 		if (applyBtn) {
 			applyBtn.classList.add("d-none");
@@ -263,26 +235,32 @@ function showSummaryStep(success, message) {
 	}
 }
 
-function applySuggestionsToForm() {
-	if (!lastAnalysis || !lastAnalysis.suggestions) {
+function applyIntensityCutoff() {
+	if (!lastAnalysis) {
 		return;
 	}
-	var sug = lastAnalysis.suggestions;
+	var intensitySug =
+		lastAnalysis.suggestions && lastAnalysis.suggestions.intensity_min != null
+			? lastAnalysis.suggestions.intensity_min
+			: lastAnalysis.intensity_threshold_estimate;
+	if (intensitySug == null || intensitySug <= 0) {
+		return;
+	}
 	var form = formRefs();
-	if (sug.confidence !== undefined && form.confidence) {
-		form.confidence.value = String(sug.confidence);
-	}
-	if (sug.area !== undefined && form.area) {
-		form.area.value = String(sug.area);
-	}
-	if (sug.eccentricity !== undefined && form.eccentricity) {
-		form.eccentricity.value = String(sug.eccentricity);
-	}
 	if (form.intensityMin) {
-		form.intensityMin.value =
-			sug.intensity_min !== undefined && sug.intensity_min > 0
-				? String(sug.intensity_min)
-				: "";
+		form.intensityMin.value = String(intensitySug);
+	}
+	var collapse = document.getElementById("collapseAdvanced");
+	var advance = qs("advance");
+	if (collapse && !collapse.classList.contains("show")) {
+		if (typeof bootstrap !== "undefined" && bootstrap.Collapse) {
+			bootstrap.Collapse.getOrCreateInstance(collapse, { toggle: false }).show();
+		} else {
+			collapse.classList.add("show");
+		}
+		if (advance) {
+			advance.setAttribute("aria-expanded", "true");
+		}
 	}
 	setStep(1);
 }
@@ -397,9 +375,9 @@ if (step2Cancel) {
 	});
 }
 
-var applyBtn = qs("applySuggestions");
+var applyBtn = qs("applyIntensityCutoff");
 if (applyBtn) {
-	applyBtn.addEventListener("click", applySuggestionsToForm);
+	applyBtn.addEventListener("click", applyIntensityCutoff);
 }
 
 ipc.on("detectResult", function () {

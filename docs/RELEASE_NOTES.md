@@ -6,6 +6,26 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v5.0.9
+
+**What's new**
+
+After Cell Detection, the summary step now suggests and applies only the **intensity cutoff** (the bimodal brightness split). Confidence, area, and eccentricity are no longer suggested or copied—lab testing showed those recommendations could remove all detections on re-run.
+
+**Changes**
+
+- **Use suggested intensity cutoff** replaces **Apply suggestions** on the summary step.
+
+**Commit subject**
+
+Cell Detection QC suggests intensity cutoff only
+
+**Commit body**
+
+The detection summary step no longer suggests or applies confidence, area, or eccentricity changes. Only the GMM intensity threshold is offered, with a single button to pre-fill Advanced settings.
+
+---
+
 ## v5.0.8
 
 **What's new**
