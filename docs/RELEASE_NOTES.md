@@ -6,6 +6,26 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.1
+
+**What's new**
+
+Pre-release build for lab testing of **Settings → Updates** from v6.0.0. Enable **Advanced → Allow pre-release versions**, then **Check again** to receive this build; users who leave pre-releases off stay on 6.0.0 until a future stable release.
+
+**Changes**
+
+- Settings → Updates shows a short banner on v6.0.1 confirming the pre-release test build.
+
+**Commit subject**
+
+Release v6.0.1 pre-release for update testing
+
+**Commit body**
+
+Pre-release zip for validating in-app update delivery and pre-release channel gating from 6.0.0 stable installs.
+
+---
+
 ## v6.0.0
 
 **What's new**

@@ -131,6 +131,21 @@ function renderActionButtons() {
 	}
 }
 
+function renderUpdateTestBanner() {
+	var banner = qs("updateTestBanner");
+	if (!banner) {
+		return;
+	}
+	if (state.currentVersion === "6.0.1") {
+		banner.textContent =
+			"Pre-release build — validates in-app update delivery from 6.0.0.";
+		banner.classList.remove("d-none");
+	} else {
+		banner.textContent = "";
+		banner.classList.add("d-none");
+	}
+}
+
 function applyStatusPayload(payload) {
 	if (!payload) {
 		return;
@@ -142,6 +157,7 @@ function applyStatusPayload(payload) {
 	}
 	renderVersionLabels();
 	renderActionButtons();
+	renderUpdateTestBanner();
 }
 
 function refreshFromMain(useCacheOnly) {
