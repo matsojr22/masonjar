@@ -3,9 +3,7 @@
 var navTrail = require("./nav_trail");
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
-
-project.tryRestoreActiveProject();
-pipelineGate.assertPipelineAccess();
+var legacyMode = require("./legacy_mode");
 
 var CATEGORIES = {
 	preprocess: {
@@ -53,32 +51,53 @@ var CATEGORIES = {
 	},
 };
 
-var params = new URLSearchParams(window.location.search);
-var cat = params.get("cat") || "preprocess";
-var config = CATEGORIES[cat] || CATEGORIES.preprocess;
+function legacyStatusForTool(tool) {
+	if (!tool || !tool.href) {
+		return "full";
+	}
+	return legacyMode.getLegacyStatusForHref(tool.href);
+}
 
-var categoryTitle = document.getElementById("categoryTitle");
-var toolLinks = document.getElementById("toolLinks");
+function appendToolLink(container, tool, legacyContext) {
+	var status = legacyStatusForTool(tool);
+	var wrapper = document.createElement("div");
+	wrapper.className = "text-start";
 
-navTrail.renderTrail(
-	[
-		{ label: "Start", href: "./menu.html" },
-		{ label: "Workspace", href: "./workspace_menu.html" },
-		{ label: config.title },
-	],
-	"navTrail",
-);
+	if (legacyContext && status === "blocked") {
+		var blocked = document.createElement("button");
+		blocked.type = "button";
+		blocked.className = tool.secondary
+			? "btn btn-secondary w-100"
+			: "btn btn-primary w-100";
+		blocked.disabled = true;
+		blocked.textContent = tool.label;
+		wrapper.appendChild(blocked);
+		var blockedHint = document.createElement("p");
+		blockedHint.className = "small text-muted mb-2";
+		blockedHint.textContent = "Requires a .masonjar project.";
+		wrapper.appendChild(blockedHint);
+		container.appendChild(wrapper);
+		return;
+	}
 
-function appendToolLink(container, tool) {
 	var link = document.createElement("a");
 	link.role = "button";
 	link.className = tool.secondary ? "btn btn-secondary" : "btn btn-primary";
 	link.href = tool.href;
 	link.textContent = tool.label;
-	container.appendChild(link);
+	wrapper.appendChild(link);
+
+	if (legacyContext && status === "partial") {
+		var partialHint = document.createElement("p");
+		partialHint.className = "small text-warning mb-2";
+		partialHint.textContent = "Limited in legacy mode — some project features unavailable.";
+		wrapper.appendChild(partialHint);
+	}
+
+	container.appendChild(wrapper);
 }
 
-function appendToolGroup(container, groupDef, groupIndex) {
+function appendToolGroup(container, groupDef, groupIndex, legacyContext) {
 	var collapseId = "toolGroup" + groupIndex;
 	var wrapper = document.createElement("div");
 	wrapper.className = "mb-2 text-start";
@@ -99,13 +118,7 @@ function appendToolGroup(container, groupDef, groupIndex) {
 	var inner = document.createElement("div");
 	inner.className = "d-grid gap-2";
 	for (var j = 0; j < groupDef.tools.length; j++) {
-		var subTool = groupDef.tools[j];
-		var subLink = document.createElement("a");
-		subLink.role = "button";
-		subLink.className = "btn btn-outline-secondary";
-		subLink.href = subTool.href;
-		subLink.textContent = subTool.label;
-		inner.appendChild(subLink);
+		appendToolLink(inner, groupDef.tools[j], legacyContext);
 	}
 	collapse.appendChild(inner);
 	wrapper.appendChild(toggle);
@@ -113,19 +126,50 @@ function appendToolGroup(container, groupDef, groupIndex) {
 	container.appendChild(wrapper);
 }
 
-if (categoryTitle) {
-	categoryTitle.textContent = config.title;
-}
-if (toolLinks) {
-	toolLinks.innerHTML = "";
-	var groupIndex = 0;
-	for (var i = 0; i < config.tools.length; i++) {
-		var tool = config.tools[i];
-		if (tool.group && tool.tools && tool.tools.length) {
-			appendToolGroup(toolLinks, tool, groupIndex);
-			groupIndex++;
-		} else if (tool.href) {
-			appendToolLink(toolLinks, tool);
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+	project.tryRestoreActiveProject();
+	pipelineGate.assertPipelineAccess();
+
+	var isLegacyContext =
+		!project.isActive() && pipelineGate.hasValidLegacyWorkspace();
+
+	var params = new URLSearchParams(window.location.search);
+	var cat = params.get("cat") || "preprocess";
+	var config = CATEGORIES[cat] || CATEGORIES.preprocess;
+
+	var categoryTitle = document.getElementById("categoryTitle");
+	var toolLinks = document.getElementById("toolLinks");
+	var legacyBanner = document.getElementById("legacyModeCategoryBanner");
+
+	navTrail.renderTrail(
+		[
+			{ label: "Start", href: "./menu.html" },
+			{ label: "Workspace", href: "./workspace_menu.html" },
+			{ label: config.title },
+		],
+		"navTrail",
+	);
+
+	if (legacyBanner) {
+		legacyBanner.classList.toggle("d-none", !isLegacyContext);
+	}
+
+	if (categoryTitle) {
+		categoryTitle.textContent = config.title;
+	}
+	if (toolLinks) {
+		toolLinks.innerHTML = "";
+		var groupIndex = 0;
+		for (var i = 0; i < config.tools.length; i++) {
+			var tool = config.tools[i];
+			if (tool.group && tool.tools && tool.tools.length) {
+				appendToolGroup(toolLinks, tool, groupIndex, isLegacyContext);
+				groupIndex++;
+			} else if (tool.href) {
+				appendToolLink(toolLinks, tool, isLegacyContext);
+			}
 		}
 	}
 }
+
+module.exports = { CATEGORIES: CATEGORIES };

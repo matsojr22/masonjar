@@ -6,6 +6,28 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.7
+
+**What's new**
+
+Legacy mode (classic Bell Jar `M###/counting/` folders without a `.masonjar` project) now shows a clear agreement dialog before you open a brain folder. The dialog lists which pipeline tools work, which are limited, and which require a project bundle. While in legacy mode, unavailable tools are disabled in the pipeline menus, and the workspace shows a banner where you can review the limitations again.
+
+**Changes**
+
+- Consent required once per caveats version before entering legacy mode.
+- Pipeline category menus mark limited tools and disable project-only tools in legacy mode.
+- Workspace menu shows a legacy notice and updated category subtitles.
+
+**Commit subject**
+
+Legacy mode shows agreement dialog and marks limited tools
+
+**Commit body**
+
+Before opening a classic Bell Jar folder layout, users must accept a dialog listing supported, limited, and unavailable pipeline tools. Legacy workspace menus disable project-only tools and show a review banner.
+
+---
+
 ## v6.0.6
 
 **What's new**

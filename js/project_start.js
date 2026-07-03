@@ -1,13 +1,12 @@
 "use strict";
 
 var fs = require("fs");
-var path = require("path");
 var pageInit = require("./page_init");
 var navTrail = require("./nav_trail");
 var project = require("./project");
 var workspace = require("./workspace");
 var dialogs = require("./dialogs");
-var branding = require("./branding");
+var legacyMode = require("./legacy_mode");
 
 var WORKSPACE_MENU = "./workspace_menu.html";
 
@@ -107,27 +106,27 @@ function handleAction(action, target) {
 		if (target) {
 			target.disabled = true;
 		}
-		dialogs
-			.pickDirectory({ tag: "brainRoot" })
-			.then(function (selected) {
-				if (target) {
-					target.disabled = false;
+		legacyMode.requestLegacyModeEntry().then(function (result) {
+			if (target) {
+				target.disabled = false;
+			}
+			if (!result.ok) {
+				if (result.message) {
+					if (legacyStatus) {
+						legacyStatus.textContent = result.message;
+					}
+					if (result.workspace && !result.workspace.countingRoot) {
+						alert(result.message);
+					}
 				}
-				if (!selected) {
-					return;
-				}
-				workspace.scanBrainRoot(selected);
-				var msg = workspace.getScanStatusMessage();
-				if (legacyStatus) {
-					legacyStatus.textContent = msg;
-				}
-				var ws = workspace.loadWorkspace();
-				if (ws.countingRoot) {
-					window.location.href = WORKSPACE_MENU;
-				} else if (msg) {
-					alert(msg);
-				}
-			});
+				return;
+			}
+			var msg = result.message || workspace.getScanStatusMessage();
+			if (legacyStatus) {
+				legacyStatus.textContent = msg;
+			}
+			window.location.href = WORKSPACE_MENU;
+		});
 	}
 }
 
