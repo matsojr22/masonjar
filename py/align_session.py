@@ -195,6 +195,16 @@ def is_model_only_predict_complete_session(
     return int(session.get("visited", 0)) == 0
 
 
+def ap_extrapolation_locked(session: dict[str, Any] | None, num_slices: int) -> bool:
+    """True when reopening a finished session — Next must not rewrite saved AP."""
+    if not session or num_slices <= 0:
+        return False
+    status = session.get("status")
+    visited_saved = int(session.get("visited", 0))
+    max_idx = max(0, num_slices - 1)
+    return status == "completed" or visited_saved >= max_idx
+
+
 def extrapolate_ap_positions(
     confirmed_aps: list[float | int],
     num_slices: int,
@@ -278,6 +288,7 @@ def persist_session(
     parcellation: dict[str, Any],
     reason: str,
     status: str = "in_progress",
+    layout_mode: str | None = None,
 ) -> None:
     paths = session_paths(dapi_dir)
     payload = _strip_atlas_slices_for_pickle(atlas_slices)
@@ -297,6 +308,8 @@ def persist_session(
         "slice_count": len(atlas_slices),
         "slices": [_slice_summary(s) for s in atlas_slices.values()],
     }
+    if layout_mode:
+        session_doc["layout_mode"] = str(layout_mode)
     _write_json_atomic(paths["json"], session_doc)
 
 
@@ -425,6 +438,29 @@ def _should_clear_on_load_failure(detail: str) -> bool:
     return False
 
 
+def _load_completed_session_fingerprint_mismatch(
+    dapi_dir: Path | str,
+) -> LoadResult | None:
+    """Load a finished session when layout fingerprint differs (do not discard tuning)."""
+    paths = session_paths(dapi_dir)
+    session = _read_session_json(paths["json"])
+    if session is None or session.get("status") != "completed":
+        return None
+    raw = _load_pickle(paths["pkl"])
+    source = "pkl"
+    if raw is None:
+        raw = _load_pickle(paths["bak"])
+        source = "bak"
+    if raw is None:
+        return None
+    return LoadResult(
+        atlas_slices=raw,
+        session=session,
+        source=source,
+        restore_navigation=False,
+    )
+
+
 def recover_alignment_session(
     dapi_dir: Path | str,
     expected_tuning_fingerprint: str,
@@ -440,6 +476,15 @@ def recover_alignment_session(
     result = load_session(dapi_dir, expected_tuning_fingerprint)
     if result is None:
         detail = diagnose_load_failure(dapi_dir, expected_tuning_fingerprint)
+        if detail.startswith("fingerprint_mismatch"):
+            fallback = _load_completed_session_fingerprint_mismatch(dapi_dir)
+            if fallback is not None:
+                print(
+                    "LOG: align_session_fingerprint_mismatch "
+                    "loaded_completed_session anyway",
+                    flush=True,
+                )
+                return fallback
         if _should_clear_on_load_failure(detail):
             clear_alignment_session(dapi_dir)
             reason = detail.split()[0] if detail else "load_failed"

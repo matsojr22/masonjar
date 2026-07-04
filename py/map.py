@@ -29,6 +29,7 @@ from align_tissue_layout import (
 )
 from align_session import (
     apply_slice_tuning_from_controls,
+    ap_extrapolation_locked,
     compute_tuning_fingerprint,
     extrapolate_ap_positions,
     mark_session_completed,
@@ -36,6 +37,7 @@ from align_session import (
     recover_alignment_session,
     should_sync_controls_before_autosave,
 )
+
 from model import TissuePredictor
 import nrrd
 import SimpleITK as sitk
@@ -465,6 +467,7 @@ class AlignmentController:
         self.atlas_slices = {}
 
         self.visited = 0  # The index of the furthest visited section
+        self._ap_locked = False  # True when reopening a completed / fully visited session
         self.current_section = 0  # The index of the current section
         self.initial_pos = None  # The first section actually selected by the user
         self.predicted_delta = None  # The predicted delta between sections
@@ -868,6 +871,7 @@ class AlignmentController:
                 visited=self.visited,
                 parcellation=self._parcellation_state(),
                 reason=reason,
+                layout_mode=self.layout_mode,
             )
             print(
                 f"LOG: align_session_saved reason={reason} files={len(self.atlas_slices)}",
@@ -1122,6 +1126,12 @@ class AlignmentController:
 
             if result.session:
                 self._apply_parcellation_state(result.session.get("parcellation"))
+                if ap_extrapolation_locked(result.session, self.num_slices):
+                    self._ap_locked = True
+                    print(
+                        "LOG: align_ap_extrapolate locked reason=session_completed",
+                        flush=True,
+                    )
                 if result.restore_navigation:
                     self._session_restore_nav = True
                     max_idx = max(0, self.num_slices - 1)
@@ -1460,6 +1470,12 @@ class AlignmentController:
 
     def adjust_positions(self):
         """Extrapolate AP for unconfirmed sections from tuned (confirmed) prefix."""
+        if getattr(self, "_ap_locked", False):
+            print(
+                "LOG: align_ap_extrapolate skipped reason=ap_locked",
+                flush=True,
+            )
+            return
         if self.current_section >= self.num_slices - 1:
             return
         # Callers must sync the slice being confirmed before advancing; do not sync

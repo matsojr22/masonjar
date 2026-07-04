@@ -6,6 +6,28 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.8
+
+**What's new**
+
+- Finished Align sessions keep your tuned AP positions when you reopen and navigate with **Next**. Mason Jar no longer re-extrapolates over saved tuning on a completed session.
+- The Align setup page restores your last **Alignment Method** (Automatic, whole brain, or single hemisphere) from the saved session so reopening matches how you tuned.
+- A completed session is no longer deleted when the alignment method dropdown does not match the saved fingerprint.
+
+**Changes**
+
+- Align saves `layout_mode` in the session file and shows a short resume banner on the setup page when the method is restored.
+
+**Commit subject**
+
+Fix Align AP corruption when reopening finished sessions
+
+**Commit body**
+
+Clicking Next on a completed Align session no longer runs AP extrapolation over saved tuning. Completed sessions survive a layout-method fingerprint mismatch, and the Align setup page restores the saved alignment method from the session file.
+
+---
+
 ## v6.0.7
 
 **What's new**

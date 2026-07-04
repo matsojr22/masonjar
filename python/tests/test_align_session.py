@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO_PY))
 
 from align_session import (  # noqa: E402
     SESSION_JSON_NAME,
+    ap_extrapolation_locked,
     apply_slice_tuning_from_controls,
     clear_alignment_session,
     compute_fingerprint,
@@ -474,12 +475,66 @@ def test_recover_clears_fingerprint_mismatch(tmp_path: Path) -> None:
         visited=0,
         parcellation={},
         reason="edit",
+        status="in_progress",
     )
     assert session_artifacts_present(dapi)
 
     fp_b = _tuning_fp(["A.png", "B.png"])
     assert recover_alignment_session(dapi, fp_b) is None
     assert not session_artifacts_present(dapi)
+
+
+def test_recover_loads_completed_session_on_fingerprint_mismatch(
+    tmp_path: Path,
+) -> None:
+    dapi = tmp_path / "00_dapi"
+    dapi.mkdir()
+    out = tmp_path / "out"
+    files = ["A.png", "B.png"]
+    fp_saved = _tuning_fp(files, layout="hemi")
+    persist_session(
+        dapi,
+        {
+            files[0]: _FakeSlice(files[0], ap=400),
+            files[1]: _FakeSlice(files[1], ap=410),
+        },
+        tuning_fingerprint=fp_saved,
+        output_path=out,
+        current_section=1,
+        visited=1,
+        parcellation={},
+        reason="finish",
+        status="completed",
+        layout_mode="hemi",
+    )
+    mark_session_completed(dapi, fp_saved)
+
+    fp_auto = _tuning_fp(files, layout="auto")
+    loaded = recover_alignment_session(dapi, fp_auto)
+    assert loaded is not None
+    assert loaded.atlas_slices[files[0]].ap_position == 400
+    assert loaded.restore_navigation is False
+    assert session_artifacts_present(dapi)
+
+
+def test_persist_writes_layout_mode(tmp_path: Path) -> None:
+    dapi = tmp_path / "00_dapi"
+    dapi.mkdir()
+    files = ["A.png"]
+    fp = _tuning_fp(files, layout="hemi")
+    persist_session(
+        dapi,
+        {files[0]: _FakeSlice(files[0], ap=100)},
+        tuning_fingerprint=fp,
+        output_path=tmp_path / "out",
+        current_section=0,
+        visited=0,
+        parcellation={},
+        reason="edit",
+        layout_mode="hemi",
+    )
+    doc = json.loads((dapi / SESSION_JSON_NAME).read_text(encoding="utf-8"))
+    assert doc["layout_mode"] == "hemi"
 
 
 def test_recover_clears_corrupt_pickle(tmp_path: Path) -> None:
@@ -567,3 +622,18 @@ def test_clear_alignment_session_removes_all_artifacts(tmp_path: Path) -> None:
 
     clear_alignment_session(dapi)
     assert not session_artifacts_present(dapi)
+
+
+def test_ap_extrapolation_locked_when_session_completed() -> None:
+    session = {"status": "completed", "visited": 10}
+    assert ap_extrapolation_locked(session, 54) is True
+
+
+def test_ap_extrapolation_locked_when_fully_visited_in_progress() -> None:
+    session = {"status": "in_progress", "visited": 53}
+    assert ap_extrapolation_locked(session, 54) is True
+
+
+def test_ap_extrapolation_not_locked_mid_session() -> None:
+    session = {"status": "in_progress", "visited": 5}
+    assert ap_extrapolation_locked(session, 54) is False

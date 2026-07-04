@@ -26,6 +26,56 @@ var useLegacy = "False";
 var methods = document.querySelector("#methods");
 var lastRunRel = "";
 var alignNapariBanner = document.getElementById("alignNapariBanner");
+var alignSessionRestoreBanner = document.getElementById("alignSessionRestoreBanner");
+
+function setAlignmentMethod(mode) {
+	if (mode === "hemi" || mode === "False" || mode === false) {
+		methods.textContent = "Single hemisphere (all sections)";
+		alignmentMethod = "False";
+		return true;
+	}
+	if (mode === "whole" || mode === "True" || mode === true) {
+		methods.textContent = "Both hemispheres (all sections)";
+		alignmentMethod = "True";
+		return true;
+	}
+	if (mode === "auto") {
+		methods.textContent = "Automatic (recommended)";
+		alignmentMethod = "auto";
+		return true;
+	}
+	return false;
+}
+
+function restoreAlignmentMethodFromSession(dapiDir) {
+	if (!dapiDir) {
+		return false;
+	}
+	var sessionPath = path.join(dapiDir, "alignment_session.json");
+	if (!fs.existsSync(sessionPath)) {
+		return false;
+	}
+	try {
+		var doc = JSON.parse(fs.readFileSync(sessionPath, "utf8"));
+		if (!doc || !doc.layout_mode) {
+			return false;
+		}
+		return setAlignmentMethod(String(doc.layout_mode));
+	} catch (err) {
+		return false;
+	}
+}
+
+function setAlignSessionRestoreBannerVisible(visible) {
+	if (!alignSessionRestoreBanner) {
+		return;
+	}
+	if (visible) {
+		alignSessionRestoreBanner.classList.remove("d-none");
+	} else {
+		alignSessionRestoreBanner.classList.add("d-none");
+	}
+}
 
 function setAlignNapariBannerVisible(visible) {
 	if (!alignNapariBanner) {
@@ -51,18 +101,15 @@ function resetAlignRunUi() {
 pipelineRun.ensureRunModeUi("runModePanel", "align");
 
 autoMode.addEventListener("click", function () {
-	methods.textContent = "Automatic (recommended)";
-	alignmentMethod = "auto";
+	setAlignmentMethod("auto");
 });
 
 whole.addEventListener("click", function () {
-	methods.textContent = "Both hemispheres (all sections)";
-	alignmentMethod = "True";
+	setAlignmentMethod("whole");
 });
 
 half.addEventListener("click", function () {
-	methods.textContent = "Single hemisphere (all sections)";
-	alignmentMethod = "False";
+	setAlignmentMethod("hemi");
 });
 
 run.addEventListener("click", function () {
@@ -187,3 +234,6 @@ ipc.on("updateLoad", function (event, response) {
 workspace.applyPreset("align");
 workspace.bindPathPicker(indir, "indir", "dapi");
 workspace.bindPathPicker(outdir, "outdir", "slices");
+if (indir && indir.value && restoreAlignmentMethodFromSession(indir.value)) {
+	setAlignSessionRestoreBannerVisible(true);
+}
