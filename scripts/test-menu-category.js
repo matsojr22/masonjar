@@ -94,3 +94,14 @@ for (const moved of ["DAPI cleanup", "Orient slices"]) {
 }
 
 console.log("test-menu-category.js ok");
+
+if (!/btn btn-primary w-100/.test(src) || !/btn btn-secondary w-100/.test(src)) {
+	console.error("appendToolLink must assign w-100 to primary and secondary tool links");
+	process.exit(1);
+}
+if (!/wrapper.className = "text-start w-100"/.test(src)) {
+	console.error("appendToolLink wrapper must use text-start w-100");
+	process.exit(1);
+}
+
+console.log("test-menu-category.js layout ok");

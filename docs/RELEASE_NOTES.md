@@ -6,6 +6,22 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.9
+
+**What's new**
+
+- Category tool menus (Atlas alignment, preprocessing, detection, exports) use full-width buttons again instead of narrow left-aligned links.
+
+**Commit subject**
+
+Restore full-width buttons on category tool menus
+
+**Commit body**
+
+Legacy-mode category menu changes in v6.0.7 wrapped tool links without full width; tool buttons again span the menu column like v6.0.6.
+
+---
+
 ## v6.0.8
 
 **What's new**

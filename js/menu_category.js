@@ -61,7 +61,7 @@ function legacyStatusForTool(tool) {
 function appendToolLink(container, tool, legacyContext) {
 	var status = legacyStatusForTool(tool);
 	var wrapper = document.createElement("div");
-	wrapper.className = "text-start";
+	wrapper.className = "text-start w-100";
 
 	if (legacyContext && status === "blocked") {
 		var blocked = document.createElement("button");
@@ -82,7 +82,9 @@ function appendToolLink(container, tool, legacyContext) {
 
 	var link = document.createElement("a");
 	link.role = "button";
-	link.className = tool.secondary ? "btn btn-secondary" : "btn btn-primary";
+	link.className = tool.secondary
+		? "btn btn-secondary w-100"
+		: "btn btn-primary w-100";
 	link.href = tool.href;
 	link.textContent = tool.label;
 	wrapper.appendChild(link);
