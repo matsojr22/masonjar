@@ -90,10 +90,13 @@
         </div>
       </div>
       <div id="runModePanel" class="row m-2 d-none workspace-block"></div>
-      <div class="row align-items-center m-2 workspace-block">
+      <div
+        id="alignSessionRestoreBannerRow"
+        class="row align-items-center m-2 workspace-block d-none"
+      >
         <div
           id="alignSessionRestoreBanner"
-          class="col alert alert-secondary text-start d-none"
+          class="col alert alert-secondary text-start"
           role="status"
         >
           Resuming saved alignment tuning — alignment method restored from your last session.
@@ -105,10 +108,13 @@
           <label class="form-check-label" for="flatOutput">Write outputs directly to the output folder (legacy flat layout)</label>
         </div>
       </div>
-      <div class="row align-items-center m-2 workspace-block">
+      <div
+        id="alignNapariBannerRow"
+        class="row align-items-center m-2 workspace-block d-none"
+      >
         <div
           id="alignNapariBanner"
-          class="col alert alert-info text-start d-none"
+          class="col alert alert-info text-start"
           role="status"
         >
           Atlas Alignment opened in Napari — switch to the

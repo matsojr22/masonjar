@@ -6,6 +6,22 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.10
+
+**What's new**
+
+- Hidden Align setup banners no longer leave empty bordered boxes on the page.
+
+**Commit subject**
+
+Hide empty Align banner frames when messages are not shown
+
+**Commit body**
+
+Align session-restore and Napari handoff banners now hide their full workspace-block rows, matching the run-mode panel pattern so empty frames do not appear on the setup page.
+
+---
+
 ## v6.0.9
 
 **What's new**

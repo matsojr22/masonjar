@@ -25,8 +25,10 @@ var alignmentMethod = "auto";
 var useLegacy = "False";
 var methods = document.querySelector("#methods");
 var lastRunRel = "";
-var alignNapariBanner = document.getElementById("alignNapariBanner");
-var alignSessionRestoreBanner = document.getElementById("alignSessionRestoreBanner");
+var alignNapariBannerRow = document.getElementById("alignNapariBannerRow");
+var alignSessionRestoreBannerRow = document.getElementById(
+	"alignSessionRestoreBannerRow",
+);
 
 function setAlignmentMethod(mode) {
 	if (mode === "hemi" || mode === "False" || mode === false) {
@@ -67,24 +69,24 @@ function restoreAlignmentMethodFromSession(dapiDir) {
 }
 
 function setAlignSessionRestoreBannerVisible(visible) {
-	if (!alignSessionRestoreBanner) {
+	if (!alignSessionRestoreBannerRow) {
 		return;
 	}
 	if (visible) {
-		alignSessionRestoreBanner.classList.remove("d-none");
+		alignSessionRestoreBannerRow.classList.remove("d-none");
 	} else {
-		alignSessionRestoreBanner.classList.add("d-none");
+		alignSessionRestoreBannerRow.classList.add("d-none");
 	}
 }
 
 function setAlignNapariBannerVisible(visible) {
-	if (!alignNapariBanner) {
+	if (!alignNapariBannerRow) {
 		return;
 	}
 	if (visible) {
-		alignNapariBanner.classList.remove("d-none");
+		alignNapariBannerRow.classList.remove("d-none");
 	} else {
-		alignNapariBanner.classList.add("d-none");
+		alignNapariBannerRow.classList.add("d-none");
 	}
 }
 
