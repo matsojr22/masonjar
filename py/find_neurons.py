@@ -293,8 +293,8 @@ if __name__ == "__main__":
     with open(output_dir / "run_manifest.json", "w", encoding="utf-8") as mf:
         json.dump(manifest, mf, indent=2)
 
-    # Extra headroom in step count for per-tile progress lines (IPC progress bar).
-    print(5 + len(files) * 40, flush=True)
+    # Slice count for the Mason Jar progress bar (one step per image).
+    print(len(files), flush=True)
     print(f"Using device: {device}", flush=True)
     print(f"Using model: {model_path}", flush=True)
     print(f"Using confidence level {confidence_threshold}", flush=True)
@@ -311,7 +311,8 @@ if __name__ == "__main__":
 
     written = 0
     failed_reads = 0
-    for file in files:
+    n_files = len(files)
+    for file_index, file in enumerate(files):
         file_path = os.path.join(input_dir, file)
         stripped, ext = file.split(".")[0], file.split(".")[-1]
         slice_id = _image_slice_id(file)
@@ -337,6 +338,10 @@ if __name__ == "__main__":
             print(f"Error reading {file}!", flush=True)
             print(e, flush=True)
             failed_reads += 1
+            print(
+                f"SLICE_DONE:{file_index + 1}/{n_files}:{file}",
+                flush=True,
+            )
             continue
 
         # If multichannel, split into individual channels
@@ -478,6 +483,10 @@ if __name__ == "__main__":
         with open(output_dir / f"Predictions_{stripped}.pkl", "wb") as f:
             pickle.dump(predictions, f)
         written += 1
+        print(
+            f"SLICE_DONE:{file_index + 1}/{n_files}:{file}",
+            flush=True,
+        )
 
     qc_result = write_run_histograms(
         qc_collector,

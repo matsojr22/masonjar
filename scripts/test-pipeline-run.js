@@ -126,6 +126,38 @@ function testPlanRunReexport() {
 	helpers.rmDir(bundle);
 }
 
+function testPrepareDetectMergeUsesOutputRunRel() {
+	var bundle = setupBundle();
+	var predBase = path.join(bundle, project.CANONICAL_ROLES.predictions);
+	var activeLeaf = path.join(predBase, "somata", "old_run");
+	fs.mkdirSync(activeLeaf, { recursive: true });
+	fs.writeFileSync(path.join(activeLeaf, "Predictions_M528_s061.pkl"), "x");
+	fs.writeFileSync(path.join(activeLeaf, "Predictions_M528_s062.pkl"), "x");
+	var proj = project.getProject();
+	proj.processing.active_runs = { predictions: "somata/old_run" };
+	project.saveProjectJson();
+
+	var againstActive = pipelineRun.preparePipelineRun("detect", "merge");
+	assert.deepStrictEqual(
+		againstActive.toProcess,
+		[],
+		"merge against active somata leaf should skip all",
+	);
+
+	var againstNew = pipelineRun.preparePipelineRun("detect", "merge", {
+		outputRunRel: "somata/from_starters_run",
+		sliceIds: ["M528_s061", "M528_s062"],
+	});
+	assert.deepStrictEqual(
+		againstNew.toProcess,
+		["M528_s061", "M528_s062"],
+		"merge against empty starters leaf should process all",
+	);
+
+	project.clearActiveProject();
+	helpers.rmDir(bundle);
+}
+
 var tests = [
 	testInactiveProject,
 	testPrepareMergeAlign,
@@ -133,6 +165,7 @@ var tests = [
 	testPrepareSubset,
 	testPrepareNoIndex,
 	testPlanRunReexport,
+	testPrepareDetectMergeUsesOutputRunRel,
 ];
 
 for (var i = 0; i < tests.length; i++) {

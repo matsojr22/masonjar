@@ -8,8 +8,17 @@ var pipelineRuns = require("./pipeline_runs");
 /**
  * Prepare a project-mode pipeline run: plan slices, persist list, return IPC extras.
  * Legacy workspace: returns empty sliceListPath (unchanged IPC).
+ *
+ * @param {string} stepId
+ * @param {string} [runMode]
+ * @param {object} [options]
+ * @param {string} [options.outputRunRel] Plan merge/skip against this output run
+ *   (relative to the step output role), not the active run. Required for detect
+ *   when the intensity branch changes so merge does not see the prior channel's PKLs.
+ * @param {string[]} [options.sliceIds] Candidate slice ids (default: project match set).
  */
-function preparePipelineRun(stepId, runMode) {
+function preparePipelineRun(stepId, runMode, options) {
+	options = options || {};
 	if (!project.isActive()) {
 		return { sliceListPath: "", summary: "", toProcess: [], skipped: [] };
 	}
@@ -23,14 +32,24 @@ function preparePipelineRun(stepId, runMode) {
 	var activeRuns =
 		(proj.processing && proj.processing.active_runs) ||
 		pipelineRuns.migrateActiveRuns(proj.processing);
+	if (options.outputRunRel) {
+		var outCfg = fileIndex.STEP_OUTPUT[stepId];
+		if (outCfg && outCfg.role) {
+			activeRuns = Object.assign({}, activeRuns);
+			activeRuns[outCfg.role] = options.outputRunRel;
+		}
+	}
 	var report = fileIndex.computeMatchReport(index, fileIndex.INPUT_MATCH_ROLES, {
 		activeRuns: activeRuns,
 		bundleRoot: bundleRoot,
 		roles: roles,
 	});
-	var candidateIds = fileIndex.getProcessingSliceIds(bundleRoot, proj, index, report, {
-		stepId: stepId,
-	});
+	var candidateIds =
+		options.sliceIds && options.sliceIds.length
+			? options.sliceIds.slice()
+			: fileIndex.getProcessingSliceIds(bundleRoot, proj, index, report, {
+					stepId: stepId,
+				});
 	var modes = (proj.processing && proj.processing.run_modes) || {};
 	var mode = runMode || modes[stepId] || "merge";
 	var plan = fileIndex.planRun(bundleRoot, stepId, {

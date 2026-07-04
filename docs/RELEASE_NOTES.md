@@ -6,6 +6,25 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.11
+
+**What's new**
+
+- Cell Detection keeps the intensity-branch dropdown visible when switching channels (e.g. somata → starters).
+- **Merge** plans against the new output folder for that channel, so a first starters run is not blocked by an existing somata predictions leaf.
+- Detection outputs go under `05_predictions/{signal branch}/…` (e.g. `starters/`, `somata/`), matching how max projections are organized—not under the model name alone.
+- Step 2 progress bar works again and tracks **slices** (e.g. slice 12/54 ≈ 22%), not every log line.
+
+**Commit subject**
+
+Fix Cell Detection branch switching, merge, output paths, and progress
+
+**Commit body**
+
+Intensity-branch selection no longer hides the dataset picker. Merge plans against the intended predictions leaf for the selected channel. Outputs are stored under the signal branch folder. The process progress bar advances per slice.
+
+---
+
 ## v6.0.10
 
 **What's new**

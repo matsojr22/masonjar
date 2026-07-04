@@ -340,6 +340,41 @@ function testResolveStepOutputPathDetectNoNest() {
 	helpers.rmDir(bundle);
 }
 
+function testResolveStepOutputPathDetectUsesSignalBranch() {
+	var bundle = helpers.tmpDir("mj-detect-sig-");
+	var roles = {
+		predictions: "data/counting/05_predictions",
+		max: "data/counting/03_max",
+	};
+	project.setActiveProject(bundle, {
+		name: "test",
+		roles: roles,
+		processing: { active_runs: pipelineRuns.defaultActiveRuns() },
+	});
+	var predBase = path.join(bundle, roles.predictions);
+	var startersMax = path.join(
+		bundle,
+		roles.max,
+		"starters",
+		"max",
+		"M465_s001-M465_s054",
+	);
+	var finalOut = pipelineRuns.resolveStepOutputPath("detect", {
+		slug: "run_starters",
+		branchOverride: "somata",
+		signalBranch: "starters",
+		indirAbs: startersMax,
+		runMode: "merge",
+	});
+	assert.strictEqual(
+		finalOut,
+		path.join(predBase, "starters", "run_starters"),
+		"detect output folder is intensity branch, not model name",
+	);
+	project.clearActiveProject();
+	helpers.rmDir(bundle);
+}
+
 function testResolveStepOutputPathDetectOverwrite() {
 	var bundle = helpers.tmpDir("mj-detect-ow-");
 	var roles = { predictions: "data/counting/05_predictions" };
@@ -468,6 +503,7 @@ var tests = [
 	testDedupeModelBranchRunRel,
 	testResolveLogicalPathOutputVsInput,
 	testResolveStepOutputPathDetectNoNest,
+	testResolveStepOutputPathDetectUsesSignalBranch,
 	testResolveStepOutputPathDetectOverwrite,
 	testResolveStepOutputPathMaxCziSibling,
 	testDiscoverDetectRelParity,

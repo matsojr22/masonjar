@@ -2924,34 +2924,84 @@ ipcMain.on("runDetection", function (event: any, data: any[]) {
   attachPythonShellKillCleanup(pyshell, "killDetect");
   var total: number = 0;
   var current: number = 0;
+  let detectFinished = false;
+
+  event.sender.send("updateLoad", [0, "Launching cell detection…"]);
+
+  function finishDetect(err: unknown, code: unknown, signal: unknown) {
+    if (detectFinished) {
+      return;
+    }
+    detectFinished = true;
+    releaseJob();
+    const pyFail = describePythonShellFailure(err, code, signal);
+    if (pyFail) {
+      reportPythonFailure(pyFail);
+      event.sender.send("detectError", [pyFail]);
+    } else {
+      console.log("The exit code was: " + code);
+      console.log("The exit signal was: " + signal);
+      event.sender.send("updateLoad", [100, "Done!"]);
+      event.sender.send("detectResult");
+    }
+    ipcMain.removeAllListeners("killDetect");
+  }
 
   pyshell.on("stderr", function (stderr: string) {
     queueLogLineForUi(stderr);
   });
 
   pyshell.on("message", (message: string) => {
-    if (total === 0) {
-      total = Number(message);
-    } else if (message == "Done!") {
-      pyshell.end((err: unknown, code: unknown, signal: unknown) => {
-        releaseJob();
-        const pyFail = describePythonShellFailure(err, code, signal);
-        if (pyFail) {
-          reportPythonFailure(pyFail);
-        } else {
-          console.log("The exit code was: " + code);
-          console.log("The exit signal was: " + signal);
-        }
-        event.sender.send("detectResult");
-        ipcMain.removeAllListeners("killDetect");
-      });
-    } else {
-      current++;
+    const trimmed = String(message || "").trim();
+    // First numeric line is the image count (see find_neurons.py). Do not treat
+    // LOG: io_fairshare / other banners as the total (Number("LOG:…") === NaN).
+    if (total === 0 && /^\d+$/.test(trimmed)) {
+      total = Number(trimmed);
       event.sender.send("updateLoad", [
-        Math.round((current / total) * 100),
-        message,
+        0,
+        total > 0 ? `Ready — ${total} slice(s)` : "Ready",
       ]);
+      return;
     }
+    if (trimmed === "Done!") {
+      pyshell.end((err: unknown, code: unknown, signal: unknown) => {
+        finishDetect(err, code, signal);
+      });
+      return;
+    }
+    if (trimmed.startsWith("LOG:")) {
+      queueLogLineForUi(trimmed);
+      return;
+    }
+    // Slice-based progress: one step per image (not per log line).
+    const sliceDone = /^SLICE_DONE:(\d+)\/(\d+):(.*)$/.exec(trimmed);
+    if (sliceDone) {
+      current = Number(sliceDone[1]);
+      total = Number(sliceDone[2]) || total;
+      const label = (sliceDone[3] || "").trim() || message;
+      const pct =
+        total > 0 ? Math.min(99, Math.round((current / total) * 100)) : 0;
+      event.sender.send("updateLoad", [
+        pct,
+        `Slice ${current}/${total}: ${label}`,
+      ]);
+      return;
+    }
+    if (total > 0) {
+      // Status text only (tiles, screening, …) — keep last slice percent.
+      const pct =
+        total > 0 ? Math.min(99, Math.round((current / total) * 100)) : 0;
+      event.sender.send("updateLoad", [pct, message]);
+    } else {
+      queueLogLineForUi(trimmed);
+    }
+  });
+
+  pyshell.on("close", function (code: unknown, signal: unknown) {
+    if (detectFinished) {
+      return;
+    }
+    finishDetect(null, code, signal);
   });
 
   ipcMain.once("killDetect", function (event: any, data: any[]) {

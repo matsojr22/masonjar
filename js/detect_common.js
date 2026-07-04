@@ -136,18 +136,26 @@ function buildRunPayload(options) {
 	var form = options.form;
 	var detectionMethod = options.detectionMethod;
 	var mode = pipelineRun.getSelectedRunMode("detect");
-	var plan = pipelineRun.preparePipelineRun("detect", mode);
-	if (project.isActive() && !plan.toProcess.length) {
-		return { error: "No slices to process (subset empty or all filtered)." };
-	}
-
 	var params = parseDetectParams(form);
 	var sortedStems = listInputSliceStems(form.indir.value);
-	var branch = modelBranchForSlug(detectionMethod, params.model);
+	if (project.isActive() && !sortedStems.length) {
+		return { error: "No slices to process (input folder has no images)." };
+	}
+
+	var modelBranch = modelBranchForSlug(detectionMethod, params.model);
 	var inputDatasetRel = "";
 	if (project.isActive() && form.indir.value) {
 		inputDatasetRel = pipelineRuns.relFromRoleBase("max", form.indir.value) || "";
 	}
+	// Folder under 05_predictions is the intensity/signal branch (starters, somata, …),
+	// not the detection model name — mirrors 03_max/{branch}/….
+	var signalBranch =
+		pipelineRuns.inferSignalBranchForMaxFamily(
+			inputDatasetRel,
+			form.indir.value,
+		) || modelBranch;
+	// Resolve the intended output leaf *before* merge planning so we do not treat
+	// an active predictions run from another intensity branch as "already done".
 	var slug = pipelineRuns.buildDetectRunSlug({
 		confidence: params.confidence,
 		tile: params.tile,
@@ -155,15 +163,18 @@ function buildRunPayload(options) {
 		eccentricity: params.eccentricity,
 		intensityMin: params.intensityMin,
 		sortedStems: sortedStems,
-		subsetCount: plan.toProcess ? plan.toProcess.length : 0,
+		subsetCount: sortedStems.length,
 		inputDatasetRel: inputDatasetRel,
+		modelBranch: modelBranch,
 	});
 	var useFlat = form.flatOutput && form.flatOutput.checked;
 	var finalOut = pipelineRuns.resolveStepOutputPath("detect", {
 		slug: slug,
 		flat: useFlat,
 		runMode: mode,
-		branchOverride: branch,
+		branchOverride: signalBranch,
+		signalBranch: signalBranch,
+		indirAbs: form.indir.value,
 		legacyOutBase: form.outdir.value,
 	});
 	try {
@@ -175,6 +186,14 @@ function buildRunPayload(options) {
 	var lastDetectionRunRel = "";
 	if (project.isActive() && !useFlat) {
 		lastDetectionRunRel = pipelineRuns.relFromRoleBase("detect", finalOut);
+	}
+
+	var plan = pipelineRun.preparePipelineRun("detect", mode, {
+		outputRunRel: lastDetectionRunRel || "",
+		sliceIds: sortedStems,
+	});
+	if (project.isActive() && !plan.toProcess.length) {
+		return { error: "No slices to process (subset empty or all filtered)." };
 	}
 
 	return {

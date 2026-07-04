@@ -290,6 +290,9 @@ function startDetection() {
 	var msg = qs("processMessage");
 	if (prog) {
 		prog.style.width = "0%";
+		prog.style.minWidth = "";
+		prog.textContent = "";
+		prog.setAttribute("aria-valuenow", "0");
 	}
 	if (msg) {
 		var planMsg = payload.plan.summary || "";
@@ -297,7 +300,7 @@ function startDetection() {
 			planMsg =
 				(planMsg ? planMsg + " " : "") + "Run folder: " + lastDetectionRunRel;
 		}
-		msg.textContent = planMsg || "Running cell detection…";
+		msg.textContent = planMsg || "Launching cell detection…";
 	}
 	var logEl = qs("wizardLog");
 	if (logEl) {
@@ -380,8 +383,25 @@ if (applyBtn) {
 	applyBtn.addEventListener("click", applyIntensityCutoff);
 }
 
+function setProcessProgress(pct, text) {
+	var n = Math.min(100, Math.max(0, Number(pct) || 0));
+	var prog = qs("processProgress");
+	var msg = qs("processMessage");
+	if (prog) {
+		prog.style.width = String(n) + "%";
+		prog.style.minWidth = n > 0 && n < 12 ? "2.5rem" : "";
+		prog.textContent = n > 0 ? String(n) + "%" : "";
+		prog.setAttribute("aria-valuenow", String(n));
+	}
+	if (msg && text) {
+		msg.textContent = text;
+		appendLog(text);
+	}
+}
+
 ipc.on("detectResult", function () {
 	running = false;
+	setProcessProgress(100, "Done!");
 	if (project.isActive() && lastDetectionRunRel) {
 		pipelineRuns.setActiveRunRel("detect", lastDetectionRunRel);
 		project.refreshProjectIndex().catch(function () {});
@@ -395,17 +415,10 @@ ipc.on("detectError", function () {
 });
 
 ipc.on("updateLoad", function (_event, response) {
-	var pct = Math.min(100, Math.max(0, Number(response[0]) || 0));
-	var prog = qs("processProgress");
-	var msg = qs("processMessage");
-	if (prog) {
-		prog.style.width = String(pct) + "%";
-		prog.setAttribute("aria-valuenow", String(pct));
+	if (!running) {
+		return;
 	}
-	if (msg && response[1]) {
-		msg.textContent = response[1];
-		appendLog(response[1]);
-	}
+	setProcessProgress(response[0], response[1]);
 });
 
 workspace.applyPreset("detect");

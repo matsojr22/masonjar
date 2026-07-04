@@ -250,11 +250,20 @@ function buildDetectRunSlug(options) {
 	if (options.subsetCount && options.subsetCount > 0) {
 		subset = "_subset_" + String(options.subsetCount);
 	}
+	// Prefer dataset kind (max/sharpen/…) over full branch path — signal branch
+	// is already the predictions folder name.
 	var inputToken = "";
 	if (options.inputDatasetRel) {
-		inputToken = "_from_" + shortRefToken(options.inputDatasetRel);
+		var inParts = normalizeRelPath(options.inputDatasetRel).split("/");
+		var kindTok =
+			inParts.length >= 2 ? inParts.slice(1).join("_") : options.inputDatasetRel;
+		inputToken = "_from_" + shortRefToken(kindTok);
 	}
-	return sanitizeSlugPart(span + "_" + params + inputToken + subset);
+	var modelTok = "";
+	if (options.modelBranch && options.modelBranch !== "somata") {
+		modelTok = "_m_" + sanitizeSlugPart(options.modelBranch);
+	}
+	return sanitizeSlugPart(span + "_" + params + inputToken + modelTok + subset);
 }
 
 function buildRunSlug(stepId, context) {
@@ -438,20 +447,35 @@ function inferSignalBranchForMaxFamily(activeRel, indirAbs) {
 		}
 	}
 	if (indirAbs) {
-		var origBase = resolveRoleBaseAbs("original_scans");
-		if (origBase) {
-			var normIndir = path.resolve(indirAbs);
-			var normOrig = path.resolve(origBase);
+		var normIndir = path.resolve(indirAbs);
+		var roleBases = ["max", "original_scans"];
+		for (var ri = 0; ri < roleBases.length; ri++) {
+			var roleBase = resolveRoleBaseAbs(roleBases[ri]);
+			if (!roleBase) {
+				continue;
+			}
+			var normBase = path.resolve(roleBase);
 			if (
-				normIndir === normOrig ||
-				normIndir.indexOf(normOrig + path.sep) === 0
+				normIndir === normBase ||
+				normIndir.indexOf(normBase + path.sep) === 0
 			) {
-				var relPart = path
-					.relative(normOrig, normIndir)
+				var relParts = path
+					.relative(normBase, normIndir)
 					.split(path.sep)
-					.filter(Boolean)[0];
-				if (relPart) {
-					return relPart;
+					.filter(Boolean);
+				if (!relParts.length) {
+					continue;
+				}
+				// 03_max/{branch}/max|sharpen|tophat/... or original_scans/{branch}/...
+				if (
+					roleBases[ri] === "max" &&
+					relParts.length >= 2 &&
+					MAX_KIND_DIRS.indexOf(relParts[1]) >= 0
+				) {
+					return relParts[0];
+				}
+				if (MAX_KIND_DIRS.indexOf(relParts[0]) < 0) {
+					return relParts[0];
 				}
 			}
 		}
@@ -1293,6 +1317,14 @@ function resolveStepOutputPath(stepId, options) {
 				projectModule().getBundleRoot(),
 				signalBranch,
 			);
+		}
+	}
+	if (stepId === "detect") {
+		signalBranch =
+			signalBranch ||
+			inferSignalBranchForMaxFamily("", options.indirAbs);
+		if (signalBranch) {
+			branchOverride = signalBranch;
 		}
 	}
 

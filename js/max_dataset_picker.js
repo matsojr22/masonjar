@@ -40,6 +40,8 @@ function wireMaxDatasetPicker(opts) {
 			section.classList.add("d-none");
 			return;
 		}
+		// Never hide in project mode: a branch with only one dataset used to
+		// set d-none on the whole section, which removes the branch dropdown.
 		section.classList.remove("d-none");
 		var root = project.getBundleRoot();
 		var branch = branchSelect ? branchSelect.value : "";
@@ -69,7 +71,6 @@ function wireMaxDatasetPicker(opts) {
 			opts.indirInput.value = def.abs;
 			persistRel(def.rel);
 		}
-		section.classList.toggle("d-none", datasets.length <= 1);
 	}
 
 	function onDatasetChange() {

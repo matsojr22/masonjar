@@ -177,34 +177,40 @@ run.addEventListener("click", function () {
 		}
 
 		var mode = pipelineRun.getSelectedRunMode("detect");
-		var plan = pipelineRun.preparePipelineRun("detect", mode);
-		if (project.isActive() && !plan.toProcess.length) {
-			alert("No slices to process (subset empty or all filtered).");
+		var sortedStems = listInputSliceStems(indir.value);
+		if (project.isActive() && !sortedStems.length) {
+			alert("No slices to process (input folder has no images).");
 			return;
 		}
-
-		var sortedStems = listInputSliceStems(indir.value);
-		var branch = modelBranchForSlug(detectionMethod, m);
+		var modelBranch = modelBranchForSlug(detectionMethod, m);
 		var inputDatasetRel = "";
 		if (project.isActive() && indir.value) {
 			inputDatasetRel =
 				pipelineRuns.relFromRoleBase("max", indir.value) || "";
 		}
+		var signalBranch =
+			pipelineRuns.inferSignalBranchForMaxFamily(
+				inputDatasetRel,
+				indir.value,
+			) || modelBranch;
 		var slug = pipelineRuns.buildDetectRunSlug({
 			confidence: Number(c),
 			tile: Number(t),
 			area: Number(a),
 			eccentricity: Number(e),
 			sortedStems: sortedStems,
-			subsetCount: plan.toProcess ? plan.toProcess.length : 0,
+			subsetCount: sortedStems.length,
 			inputDatasetRel: inputDatasetRel,
+			modelBranch: modelBranch,
 		});
 		var useFlat = flatOutput && flatOutput.checked;
 		var finalOut = pipelineRuns.resolveStepOutputPath("detect", {
 			slug: slug,
 			flat: useFlat,
 			runMode: mode,
-			branchOverride: branch,
+			branchOverride: signalBranch,
+			signalBranch: signalBranch,
+			indirAbs: indir.value,
 			legacyOutBase: outdir.value,
 		});
 		try {
@@ -218,6 +224,15 @@ run.addEventListener("click", function () {
 			lastDetectionRunRel = pipelineRuns.relFromRoleBase("detect", finalOut);
 		} else {
 			lastDetectionRunRel = "";
+		}
+
+		var plan = pipelineRun.preparePipelineRun("detect", mode, {
+			outputRunRel: lastDetectionRunRel || "",
+			sliceIds: sortedStems,
+		});
+		if (project.isActive() && !plan.toProcess.length) {
+			alert("No slices to process (subset empty or all filtered).");
+			return;
 		}
 
 		run.classList.add("disabled");
