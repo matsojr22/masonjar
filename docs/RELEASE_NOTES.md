@@ -6,6 +6,23 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.14
+
+**What's new**
+
+- **Network fair-share in the title bar:** When NAS fair-share is enabled, the window title (and Windows taskbar) shows active job count, your per-job speed limit, and this instance’s throttled NAS throughput—updated every few seconds so you can see it while pipeline jobs run on other pages.
+- **Workspace hub:** The compact network-share line on the Pipeline page uses the same wording as the title bar.
+
+**Commit subject**
+
+Show network fair-share stats in the window title
+
+**Commit body**
+
+Adds throttled NAS byte tracking in the fair-share worker and a main-process title poller. Job count, Mbps limit, and 1-minute NAS rate appear in the native title on Windows and macOS when fair-share is on.
+
+---
+
 ## v6.0.13
 
 **What's new**

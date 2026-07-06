@@ -148,6 +148,76 @@ function testStatusIncludesNasPrefixes() {
 	fs.rmSync(home, { recursive: true, force: true });
 }
 
+function testFormatFairshareTitleSuffix() {
+	const disabled = ioFairshare.formatFairshareTitleSuffix({ enabled: false });
+	assert(disabled === "", "disabled returns empty suffix");
+
+	const enabled = ioFairshare.formatFairshareTitleSuffix({
+		enabled: true,
+		active_jobs: 3,
+		limit_mbps: 85.4,
+		local_throttled_mbps_1m: 0,
+	});
+	assert(enabled.indexOf("3 jobs") >= 0, "shows job count");
+	assert(enabled.indexOf("~85 Mbps") >= 0, "shows limit");
+	assert(enabled.indexOf("NAS") < 0, "omits NAS when idle");
+
+	const withNas = ioFairshare.formatFairshareTitleSuffix({
+		enabled: true,
+		active_jobs: 1,
+		limit_mbps: 100,
+		local_throttled_mbps_1m: 12.3,
+	});
+	assert(withNas.indexOf("NAS 12 Mbps") >= 0, "shows NAS throughput");
+}
+
+function testLocalThrottledMbpsAggregation() {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mj-io-throttle-"));
+	const reg = path.join(tmp, "registry");
+	fs.mkdirSync(reg, { recursive: true });
+	fs.writeFileSync(
+		path.join(tmp, "config.json"),
+		JSON.stringify({ stale_seconds: 30 }),
+	);
+	const home = fs.mkdtempSync(path.join(os.tmpdir(), "mj-io-home2-"));
+	const instanceId = "test-instance-abc";
+	ioFairshare.setAppInstanceId(instanceId);
+	const now = new Date().toISOString();
+	const mkEntry = function (jobId, rate, instId) {
+		return {
+			job_id: jobId,
+			pid: process.pid,
+			user: "test",
+			hostname: "test",
+			label: "max",
+			started_at: now,
+			last_heartbeat: now,
+			app_instance_id: instId,
+			throttled_mbps_1m: rate,
+		};
+	};
+	fs.writeFileSync(
+		path.join(reg, "a.json"),
+		JSON.stringify(mkEntry("a", 10, instanceId)),
+	);
+	fs.writeFileSync(
+		path.join(reg, "b.json"),
+		JSON.stringify(mkEntry("b", 5.5, instanceId)),
+	);
+	fs.writeFileSync(
+		path.join(reg, "c.json"),
+		JSON.stringify(mkEntry("c", 99, "other-instance")),
+	);
+	const status = ioFairshare.getIoFairshareStatus(tmp, home);
+	assert(
+		Math.abs(status.local_throttled_mbps_1m - 15.5) < 0.01,
+		"sums instance-scoped NAS rates",
+	);
+	ioFairshare.setAppInstanceId("");
+	fs.rmSync(tmp, { recursive: true, force: true });
+	fs.rmSync(home, { recursive: true, force: true });
+}
+
 function main() {
 	testParseLinkSpeed();
 	testComputeJobLimit();
@@ -158,6 +228,8 @@ function main() {
 	testWriteJsonAtomicHeartbeatRewrite();
 	testTouchJobMissingIsNoop();
 	testStatusIncludesNasPrefixes();
+	testFormatFairshareTitleSuffix();
+	testLocalThrottledMbpsAggregation();
 	console.log("test-io-fairshare: ok");
 }
 

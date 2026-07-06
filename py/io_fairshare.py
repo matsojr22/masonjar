@@ -16,8 +16,10 @@ _SMALL_FILE_BYTES = int(os.environ.get("MASONJAR_IO_SMALL_FILE_BYTES", str(256 *
 _CHUNK_BYTES = int(os.environ.get("MASONJAR_IO_CHUNK_BYTES", str(2 * 1024 * 1024)))
 _STALE_SECONDS = float(os.environ.get("MASONJAR_IO_STALE_SECONDS", "30"))
 _HEARTBEAT_SECONDS = 5.0
+_BYTES_WINDOW_SECONDS = 60.0
 
 _state_lock = threading.RLock()
+_byte_samples: list[tuple[float, int]] = []
 _activated = False
 _job_id = ""
 _job_label = ""
@@ -155,20 +157,55 @@ def compute_limit_mbps() -> float:
     return min(max_mbps, max(min_mbps, raw))
 
 
+def _throttled_mbps_1m() -> float:
+    """Rolling 1-minute average Mbps for throttled NAS bytes."""
+    global _byte_samples
+    now = time.monotonic()
+    total = _BUCKET.bytes_total()
+    with _state_lock:
+        _byte_samples.append((now, total))
+        cutoff = now - _BYTES_WINDOW_SECONDS
+        _byte_samples = [(t, b) for t, b in _byte_samples if t >= cutoff]
+        if len(_byte_samples) < 2:
+            return 0.0
+        oldest = _byte_samples[0]
+        newest = _byte_samples[-1]
+        dt = newest[0] - oldest[0]
+        if dt <= 0:
+            return 0.0
+        delta_bytes = newest[1] - oldest[1]
+        return max(0.0, (delta_bytes * 8.0) / dt / 1_000_000.0)
+
+
 def _write_registry() -> None:
     if not _job_id:
         return
     reg = _registry_dir()
     reg.mkdir(parents=True, exist_ok=True)
-    entry = {
+    app_instance_id = os.environ.get("MASONJAR_IO_APP_INSTANCE_ID", "").strip()
+    existing_path = reg / f"{_job_id}.json"
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    try:
+        if existing_path.is_file():
+            with open(existing_path, encoding="utf-8") as f:
+                prev = json.load(f)
+            if isinstance(prev, dict) and prev.get("started_at"):
+                started_at = str(prev["started_at"])
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+    entry: dict[str, Any] = {
         "job_id": _job_id,
         "pid": os.getpid(),
         "user": os.environ.get("USERNAME") or os.environ.get("USER") or "unknown",
         "hostname": socket.gethostname(),
         "label": _job_label,
-        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "started_at": started_at,
         "last_heartbeat": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "throttled_bytes_total": _BUCKET.bytes_total(),
+        "throttled_mbps_1m": round(_throttled_mbps_1m(), 2),
     }
+    if app_instance_id:
+        entry["app_instance_id"] = app_instance_id
     path = reg / f"{_job_id}.json"
     tmp = path.with_suffix(f".{os.getpid()}.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -199,6 +236,11 @@ class TokenBucket:
         self._tokens = 0.0
         self._last = time.monotonic()
         self._lock = threading.Lock()
+        self._bytes_total = 0
+
+    def bytes_total(self) -> int:
+        with self._lock:
+            return self._bytes_total
 
     def _refill(self) -> None:
         now = time.monotonic()
@@ -217,6 +259,7 @@ class TokenBucket:
                 self._refill()
                 if self._tokens >= nbytes:
                     self._tokens -= nbytes
+                    self._bytes_total += nbytes
                     return
                 need = nbytes - self._tokens
                 limit_mbps = compute_limit_mbps()

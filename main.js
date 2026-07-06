@@ -1,4 +1,27 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -29,6 +52,7 @@ const Module = require("module");
     }
 })();
 const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
+const crypto = __importStar(require("crypto"));
 const io_fairshare_1 = require("./io_fairshare");
 const python_job_1 = require("./python_job");
 const update_manager_1 = require("./update_manager");
@@ -212,6 +236,9 @@ var pyCommand = process.platform === "win32" ? "python.exe" : "./python3";
 // Path to our python files
 const pyScriptsPath = path.join(appDir, "/py");
 const ioFairshareDir = (0, io_fairshare_1.defaultCoordinatorDir)();
+(0, io_fairshare_1.setAppInstanceId)(typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString("hex"));
 const CURRENT_VERSION_TAG = getVersion();
 const updateManager = new update_manager_1.UpdateManager(homeDir, CURRENT_VERSION_TAG, app.isPackaged);
 function loadMenuAndCheckUpdates(targetWin) {
@@ -769,6 +796,50 @@ function createWindow() {
     win.loadFile("pages/loading.html");
     return win;
 }
+let mainWindowBaseTitle = "Mason Jar";
+let ioFairshareTitleTimer = null;
+function refreshMainWindowFairshareTitle(targetWin) {
+    if (!targetWin || targetWin.isDestroyed()) {
+        return;
+    }
+    try {
+        const status = (0, io_fairshare_1.getIoFairshareStatus)(ioFairshareDir, homeDir);
+        const suffix = (0, io_fairshare_1.formatFairshareTitleSuffix)(status);
+        targetWin.setTitle(mainWindowBaseTitle + suffix);
+        try {
+            targetWin.webContents.send("ioFairshareStatus", status);
+        }
+        catch (_e) {
+            /* ignore */
+        }
+    }
+    catch (_err) {
+        /* ignore */
+    }
+}
+function attachFairshareTitleBar(targetWin) {
+    mainWindowBaseTitle = targetWin.getTitle() || "Mason Jar";
+    targetWin.webContents.on("page-title-updated", (_event, title) => {
+        mainWindowBaseTitle = title || "Mason Jar";
+        refreshMainWindowFairshareTitle(targetWin);
+    });
+    if (ioFairshareTitleTimer) {
+        clearInterval(ioFairshareTitleTimer);
+    }
+    refreshMainWindowFairshareTitle(targetWin);
+    ioFairshareTitleTimer = setInterval(() => {
+        refreshMainWindowFairshareTitle(targetWin);
+    }, 5000);
+    if (ioFairshareTitleTimer && typeof ioFairshareTitleTimer.unref === "function") {
+        ioFairshareTitleTimer.unref();
+    }
+    targetWin.on("closed", () => {
+        if (ioFairshareTitleTimer) {
+            clearInterval(ioFairshareTitleTimer);
+            ioFairshareTitleTimer = null;
+        }
+    });
+}
 function createLogWindow() {
     const win = new BrowserWindow({
         width: 500,
@@ -844,6 +915,7 @@ app.on("ready", () => {
         logUiFlushTimer = null;
     }
     win = createWindow();
+    attachFairshareTitleBar(win);
     // Uncomment if you want tools on launch
     // win.webContents.toggleDevTools()
     win.on("close", function (e) {

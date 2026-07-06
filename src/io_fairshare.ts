@@ -28,6 +28,9 @@ export interface IoFairshareRegistryEntry {
   label: string;
   started_at: string;
   last_heartbeat: string;
+  app_instance_id?: string;
+  throttled_bytes_total?: number;
+  throttled_mbps_1m?: number;
 }
 
 export interface IoFairshareStatus {
@@ -41,6 +44,7 @@ export interface IoFairshareStatus {
   min_mbps_per_job: number;
   max_mbps_per_job: number;
   local_jobs: string[];
+  local_throttled_mbps_1m: number;
   nas_path_prefixes: string[];
   shared_config_path: string;
   shared_link_mbps: number | "auto";
@@ -58,6 +62,15 @@ const DEFAULT_SHARED: IoFairshareSharedConfig = {
 };
 
 let cachedLinkMbps: number | null = null;
+let appInstanceId = "";
+
+export function setAppInstanceId(id: string): void {
+  appInstanceId = String(id || "").trim();
+}
+
+export function getAppInstanceId(): string {
+  return appInstanceId;
+}
 
 export function resetLinkSpeedCache(): void {
   cachedLinkMbps = null;
@@ -464,6 +477,62 @@ export function isFairshareEnabled(
   return shared.enabled !== false;
 }
 
+function sumLocalThrottledMbps1m(
+  entries: IoFairshareRegistryEntry[],
+  instanceId: string,
+): number {
+  if (!instanceId) {
+    return 0;
+  }
+  let total = 0;
+  for (const entry of entries) {
+    if (entry.app_instance_id !== instanceId) {
+      continue;
+    }
+    const rate = Number(entry.throttled_mbps_1m);
+    if (Number.isFinite(rate) && rate > 0) {
+      total += rate;
+    }
+  }
+  return total;
+}
+
+export function formatFairshareTitleSuffix(status: IoFairshareStatus): string {
+  if (!status.enabled) {
+    return "";
+  }
+  const jobs = status.active_jobs || 0;
+  const limit = Math.round(status.limit_mbps || 0);
+  const parts = [`${jobs} job${jobs === 1 ? "" : "s"}`, `~${limit} Mbps`];
+  const nas = Number(status.local_throttled_mbps_1m);
+  if (Number.isFinite(nas) && nas >= 0.5) {
+    parts.push(`NAS ${Math.round(nas)} Mbps`);
+  }
+  return " · " + parts.join(" · ");
+}
+
+export function formatFairshareCompactLine(status: IoFairshareStatus): string {
+  if (!status || !status.enabled) {
+    return "";
+  }
+  const jobs = status.active_jobs || 0;
+  const limit = Math.round(status.limit_mbps || 0);
+  let line =
+    "Network share: " +
+    jobs +
+    " active job" +
+    (jobs === 1 ? "" : "s") +
+    " on this machine · ~" +
+    limit +
+    " Mbps for new pipeline I/O";
+  const nas = Number(status.local_throttled_mbps_1m);
+  if (Number.isFinite(nas) && nas >= 0.5) {
+    line += " · NAS " + Math.round(nas) + " Mbps";
+  }
+  line += " · configure in Start → Settings → Network";
+  return line;
+}
+
 export function getIoFairshareStatus(
   coordinatorDir: string,
   homeDir: string,
@@ -481,6 +550,7 @@ export function getIoFairshareStatus(
   const localJobs = entries
     .filter((e) => e.pid === process.pid || e.hostname === os.hostname())
     .map((e) => e.label);
+  const localThrottledMbps = sumLocalThrottledMbps1m(entries, appInstanceId);
   return {
     enabled,
     coordinator_dir: coordinatorDir,
@@ -492,6 +562,7 @@ export function getIoFairshareStatus(
     min_mbps_per_job: shared.min_mbps_per_job,
     max_mbps_per_job: maxCap,
     local_jobs: localJobs,
+    local_throttled_mbps_1m: localThrottledMbps,
     nas_path_prefixes: mergeNasPathPrefixes(shared.nas_path_prefixes || [], []),
     shared_config_path: sharedConfigPath(coordinatorDir),
     shared_link_mbps: shared.link_mbps,
@@ -521,6 +592,9 @@ export function registerJob(
       started_at: new Date().toISOString(),
       last_heartbeat: new Date().toISOString(),
     };
+    if (appInstanceId) {
+      entry.app_instance_id = appInstanceId;
+    }
     writeJsonAtomic(path.join(registryDir(coordinatorDir), `${jobId}.json`), entry);
   } catch (err) {
     warnRegistryBestEffort(
@@ -616,6 +690,9 @@ export function applyIoFairsharePythonEnv(
   env.MASONJAR_IO_HEADROOM = String(status.headroom);
   env.MASONJAR_IO_MIN_MBPS = String(status.min_mbps_per_job);
   env.MASONJAR_IO_MAX_MBPS = String(status.max_mbps_per_job);
+  if (appInstanceId) {
+    env.MASONJAR_IO_APP_INSTANCE_ID = appInstanceId;
+  }
   return env;
 }
 

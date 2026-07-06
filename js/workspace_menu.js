@@ -107,17 +107,13 @@ pageInit.onReady(function () {
 	var compact = document.getElementById("ioFairshareStatusCompact");
 	if (compact) {
 		var ipc = require("electron").ipcRenderer;
+		var ioFairshare = require("../io_fairshare");
 		ipc.on("ioFairshareStatus", function (_event, status) {
 			if (!status || !status.enabled) {
 				compact.textContent = "";
 				return;
 			}
-			compact.textContent =
-				"Network share: " +
-				(status.active_jobs || 0) +
-				" active job(s) on this machine · ~" +
-				Math.round(status.limit_mbps || 0) +
-				" Mbps for new pipeline I/O · configure in Start → Settings → Network";
+			compact.textContent = ioFairshare.formatFairshareCompactLine(status);
 		});
 		ioFairshareSettings.refreshStatus();
 	}

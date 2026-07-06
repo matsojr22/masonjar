@@ -23,7 +23,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createHeavyJobHandle = exports.applyIoFairsharePythonEnv = exports.endNodeJobTracking = exports.beginNodeJobTracking = exports.unregisterJob = exports.touchJob = exports.registerJob = exports.newJobId = exports.getIoFairshareStatus = exports.isFairshareEnabled = exports.computeJobLimitMbps = exports.listRegistryEntries = exports.saveUserConfig = exports.loadUserConfig = exports.saveSharedConfig = exports.loadSharedConfig = exports.ensureCoordinatorDir = exports.detectLinkMbps = exports.parseLinkSpeedText = exports.writeJsonAtomic = exports.mergeNasPathPrefixes = exports.normalizeNasPathPrefix = exports.getSharedConfigPath = exports.userConfigPath = exports.defaultCoordinatorDir = exports.resetLinkSpeedCache = void 0;
+exports.createHeavyJobHandle = exports.applyIoFairsharePythonEnv = exports.endNodeJobTracking = exports.beginNodeJobTracking = exports.unregisterJob = exports.touchJob = exports.registerJob = exports.newJobId = exports.getIoFairshareStatus = exports.formatFairshareCompactLine = exports.formatFairshareTitleSuffix = exports.isFairshareEnabled = exports.computeJobLimitMbps = exports.listRegistryEntries = exports.saveUserConfig = exports.loadUserConfig = exports.saveSharedConfig = exports.loadSharedConfig = exports.ensureCoordinatorDir = exports.detectLinkMbps = exports.parseLinkSpeedText = exports.writeJsonAtomic = exports.mergeNasPathPrefixes = exports.normalizeNasPathPrefix = exports.getSharedConfigPath = exports.userConfigPath = exports.defaultCoordinatorDir = exports.resetLinkSpeedCache = exports.getAppInstanceId = exports.setAppInstanceId = void 0;
 const crypto = __importStar(require("crypto"));
 const fs = __importStar(require("fs"));
 const os = __importStar(require("os"));
@@ -40,6 +40,15 @@ const DEFAULT_SHARED = {
     nas_path_prefixes: [],
 };
 let cachedLinkMbps = null;
+let appInstanceId = "";
+function setAppInstanceId(id) {
+    appInstanceId = String(id || "").trim();
+}
+exports.setAppInstanceId = setAppInstanceId;
+function getAppInstanceId() {
+    return appInstanceId;
+}
+exports.getAppInstanceId = getAppInstanceId;
 function resetLinkSpeedCache() {
     cachedLinkMbps = null;
 }
@@ -408,6 +417,57 @@ function isFairshareEnabled(coordinatorDir, homeDir) {
     return shared.enabled !== false;
 }
 exports.isFairshareEnabled = isFairshareEnabled;
+function sumLocalThrottledMbps1m(entries, instanceId) {
+    if (!instanceId) {
+        return 0;
+    }
+    let total = 0;
+    for (const entry of entries) {
+        if (entry.app_instance_id !== instanceId) {
+            continue;
+        }
+        const rate = Number(entry.throttled_mbps_1m);
+        if (Number.isFinite(rate) && rate > 0) {
+            total += rate;
+        }
+    }
+    return total;
+}
+function formatFairshareTitleSuffix(status) {
+    if (!status.enabled) {
+        return "";
+    }
+    const jobs = status.active_jobs || 0;
+    const limit = Math.round(status.limit_mbps || 0);
+    const parts = [`${jobs} job${jobs === 1 ? "" : "s"}`, `~${limit} Mbps`];
+    const nas = Number(status.local_throttled_mbps_1m);
+    if (Number.isFinite(nas) && nas >= 0.5) {
+        parts.push(`NAS ${Math.round(nas)} Mbps`);
+    }
+    return " · " + parts.join(" · ");
+}
+exports.formatFairshareTitleSuffix = formatFairshareTitleSuffix;
+function formatFairshareCompactLine(status) {
+    if (!status || !status.enabled) {
+        return "";
+    }
+    const jobs = status.active_jobs || 0;
+    const limit = Math.round(status.limit_mbps || 0);
+    let line = "Network share: " +
+        jobs +
+        " active job" +
+        (jobs === 1 ? "" : "s") +
+        " on this machine · ~" +
+        limit +
+        " Mbps for new pipeline I/O";
+    const nas = Number(status.local_throttled_mbps_1m);
+    if (Number.isFinite(nas) && nas >= 0.5) {
+        line += " · NAS " + Math.round(nas) + " Mbps";
+    }
+    line += " · configure in Start → Settings → Network";
+    return line;
+}
+exports.formatFairshareCompactLine = formatFairshareCompactLine;
 function getIoFairshareStatus(coordinatorDir, homeDir) {
     ensureCoordinatorDir(coordinatorDir);
     const shared = loadSharedConfig(coordinatorDir);
@@ -422,6 +482,7 @@ function getIoFairshareStatus(coordinatorDir, homeDir) {
     const localJobs = entries
         .filter((e) => e.pid === process.pid || e.hostname === os.hostname())
         .map((e) => e.label);
+    const localThrottledMbps = sumLocalThrottledMbps1m(entries, appInstanceId);
     return {
         enabled,
         coordinator_dir: coordinatorDir,
@@ -433,6 +494,7 @@ function getIoFairshareStatus(coordinatorDir, homeDir) {
         min_mbps_per_job: shared.min_mbps_per_job,
         max_mbps_per_job: maxCap,
         local_jobs: localJobs,
+        local_throttled_mbps_1m: localThrottledMbps,
         nas_path_prefixes: mergeNasPathPrefixes(shared.nas_path_prefixes || [], []),
         shared_config_path: sharedConfigPath(coordinatorDir),
         shared_link_mbps: shared.link_mbps,
@@ -458,6 +520,9 @@ function registerJob(coordinatorDir, jobId, label) {
             started_at: new Date().toISOString(),
             last_heartbeat: new Date().toISOString(),
         };
+        if (appInstanceId) {
+            entry.app_instance_id = appInstanceId;
+        }
         writeJsonAtomic(path.join(registryDir(coordinatorDir), `${jobId}.json`), entry);
     }
     catch (err) {
@@ -539,6 +604,9 @@ function applyIoFairsharePythonEnv(baseEnv, coordinatorDir, homeDir, jobId, jobL
     env.MASONJAR_IO_HEADROOM = String(status.headroom);
     env.MASONJAR_IO_MIN_MBPS = String(status.min_mbps_per_job);
     env.MASONJAR_IO_MAX_MBPS = String(status.max_mbps_per_job);
+    if (appInstanceId) {
+        env.MASONJAR_IO_APP_INSTANCE_ID = appInstanceId;
+    }
     return env;
 }
 exports.applyIoFairsharePythonEnv = applyIoFairsharePythonEnv;

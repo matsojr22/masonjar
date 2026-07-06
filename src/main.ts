@@ -19,16 +19,19 @@ const Module = require("module");
 })();
 
 const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
+import * as crypto from "crypto";
 import type { BatchPlan } from "./batch_queue";
 import {
   defaultCoordinatorDir,
   detectLinkMbps,
   ensureCoordinatorDir,
+  formatFairshareTitleSuffix,
   getIoFairshareStatus,
   loadUserConfig,
   saveSharedConfig,
   saveUserConfig,
   resetLinkSpeedCache,
+  setAppInstanceId,
   type IoFairshareSharedConfig,
   type IoFairshareUserConfig,
 } from "./io_fairshare";
@@ -241,6 +244,12 @@ var pyCommand = process.platform === "win32" ? "python.exe" : "./python3";
 // Path to our python files
 const pyScriptsPath = path.join(appDir, "/py");
 const ioFairshareDir = defaultCoordinatorDir();
+
+setAppInstanceId(
+  typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString("hex"),
+);
 
 const CURRENT_VERSION_TAG = getVersion();
 const updateManager = new UpdateManager(
@@ -932,6 +941,56 @@ function createWindow() {
   return win;
 }
 
+let mainWindowBaseTitle = "Mason Jar";
+let ioFairshareTitleTimer: NodeJS.Timeout | null = null;
+
+function refreshMainWindowFairshareTitle(
+  targetWin: typeof BrowserWindow | null,
+): void {
+  if (!targetWin || targetWin.isDestroyed()) {
+    return;
+  }
+  try {
+    const status = getIoFairshareStatus(ioFairshareDir, homeDir);
+    const suffix = formatFairshareTitleSuffix(status);
+    targetWin.setTitle(mainWindowBaseTitle + suffix);
+    try {
+      targetWin.webContents.send("ioFairshareStatus", status);
+    } catch (_e) {
+      /* ignore */
+    }
+  } catch (_err) {
+    /* ignore */
+  }
+}
+
+function attachFairshareTitleBar(targetWin: typeof BrowserWindow): void {
+  mainWindowBaseTitle = targetWin.getTitle() || "Mason Jar";
+  targetWin.webContents.on(
+    "page-title-updated",
+    (_event: unknown, title: string) => {
+      mainWindowBaseTitle = title || "Mason Jar";
+      refreshMainWindowFairshareTitle(targetWin);
+    },
+  );
+  if (ioFairshareTitleTimer) {
+    clearInterval(ioFairshareTitleTimer);
+  }
+  refreshMainWindowFairshareTitle(targetWin);
+  ioFairshareTitleTimer = setInterval(() => {
+    refreshMainWindowFairshareTitle(targetWin);
+  }, 5000);
+  if (ioFairshareTitleTimer && typeof ioFairshareTitleTimer.unref === "function") {
+    ioFairshareTitleTimer.unref();
+  }
+  targetWin.on("closed", () => {
+    if (ioFairshareTitleTimer) {
+      clearInterval(ioFairshareTitleTimer);
+      ioFairshareTitleTimer = null;
+    }
+  });
+}
+
 function createLogWindow() {
   const win = new BrowserWindow({
     width: 500,
@@ -1014,6 +1073,7 @@ app.on("ready", () => {
     logUiFlushTimer = null;
   }
   win = createWindow();
+  attachFairshareTitleBar(win);
   // Uncomment if you want tools on launch
   // win.webContents.toggleDevTools()
   win.on("close", function (e: any) {
