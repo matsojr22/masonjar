@@ -66,6 +66,21 @@ def xyxy_to_area(box):
     return (box[2] - box[0]) * (box[3] - box[1])
 
 
+def _limit_detect_threads():
+    """Electron path: no extra OS processes from torch/OpenMP (worker sets env too)."""
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+    try:
+        torch.set_num_threads(1)
+        if hasattr(torch, "set_num_interop_threads"):
+            torch.set_num_interop_threads(1)
+    except Exception:
+        pass
+    print("LOG: detect_threads=1", flush=True)
+
+
 def make_tile_progress_printer(label):
     """Emit stdout lines so Mason Jar's progress bar updates during SAHI tiling."""
     state = {"last": 0}
@@ -208,6 +223,8 @@ if __name__ == "__main__":
         default=0.0,
     )
     args = parser.parse_args()
+
+    _limit_detect_threads()
 
     input_dir = Path(args.input.strip())
     output_dir = Path(args.output.strip())

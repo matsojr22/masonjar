@@ -18,7 +18,7 @@ Remove-Item $tempCsv -Force -ErrorAction SilentlyContinue
 
 $t0 = [ordered]@{
   recorded_at_utc = (Get-Date).ToUniversalTime().ToString('o')
-  note = "All-dev retest t0: user killed release 6.0.11 and deleted installer; 3x dev worker fleet only"
+  note = "7-day gate t0: Mason Jar worker release (>=6.0.12); mixed fleet OK"
   TimeUtc = $snap.TimeUtc
   UptimeHours = [double]$snap.UptimeHours
   Proc_MB = [double]$snap.Proc_MB

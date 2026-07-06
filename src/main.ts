@@ -1666,6 +1666,11 @@ ipcMain.on("runAdjust", function (event: any, data: any[]) {
       return;
     }
     resultSent = true;
+    try {
+      job.kill();
+    } catch (_e) {
+      // best effort: ensure GUI python is torn down
+    }
     void job.end().catch(() => undefined);
     let pyFail = describePythonShellFailure(err, code, signal);
     if (cancelled) {
@@ -1815,6 +1820,11 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
       return;
     }
     resultSent = true;
+    try {
+      job.kill();
+    } catch (_e) {
+      // best effort: ensure GUI python is torn down
+    }
     void job.end().catch(() => undefined);
     let pyFail = describePythonShellFailure(err, code, signal);
     if (cancelled) {

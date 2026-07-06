@@ -14,8 +14,9 @@ if (-not (Test-Path $t0Path)) {
 
 $t0 = Get-Content $t0Path -Raw | ConvertFrom-Json
 $t0Utc = [datetime]::Parse($t0.TimeUtc, $null, [Globalization.DateTimeStyles]::RoundtripKind)
+$rows = @()
 
-Write-Host "=== Phase C all-dev retest summary ===" -ForegroundColor Cyan
+Write-Host "=== Proc pool retest summary ===" -ForegroundColor Cyan
 Write-Host "t0: $($t0.TimeUtc)  Proc_MB=$($t0.Proc_MB)  Proc_out=$($t0.Proc_out)  fleet dev=$($t0.MasonJar_dev) release=$($t0.MasonJar_release)"
 
 if (Test-Path $csvPath) {
@@ -63,3 +64,37 @@ if (Test-Path $jobsPath) {
 
 Write-Host ""
 Write-Host "Re-run after more hourly samples accumulate."
+
+# 7-day gate evaluation when t0 includes gate criteria
+if ($t0.gate_pass_criteria) {
+  Write-Host ""
+  Write-Host "=== 7-day gate evaluation ===" -ForegroundColor Cyan
+  $crit = $t0.gate_pass_criteria
+  $rateMax = [double]$crit.proc_hourly_rate_max
+  $mbMax = [double]$crit.proc_mb_at_7d_max
+  $daysMin = [double]$crit.uptime_days
+
+  if ($rows.Count -ge 2) {
+    $last = $rows[-1]
+    $spanDays = ([double]$last.UptimeHours - [double]$t0.UptimeHours) / 24.0
+    $dProc = [int64]$last.Proc_out - [int64]$t0.Proc_out
+    $spanH = [double]$last.UptimeHours - [double]$t0.UptimeHours
+    $rate = if ($spanH -gt 0) { $dProc / $spanH } else { 0 }
+    $rateOk = $rate -lt $rateMax
+    $mbOk = [double]$last.Proc_MB -lt $mbMax
+    $timeOk = $spanDays -ge $daysMin
+
+    Write-Host "  Span since t0: $([math]::Round($spanDays, 1)) days ($([math]::Round($spanH, 1)) h)"
+    Write-Host "  Proc rate: ~$([math]::Round($rate, 0))/h  (pass if < $rateMax)"
+    Write-Host "  Proc_MB: $($last.Proc_MB)  (pass if < $mbMax at day $daysMin)"
+    if ($timeOk -and $rateOk -and $mbOk) {
+      Write-Host "  VERDICT: PASS (preliminary)" -ForegroundColor Green
+    } elseif (-not $timeOk) {
+      Write-Host "  VERDICT: IN PROGRESS (need $daysMin days, have $([math]::Round($spanDays, 1)))" -ForegroundColor Yellow
+    } else {
+      Write-Host "  VERDICT: FAIL - ship Phase F in-app hardening (6.0.13+). Never third-party license software." -ForegroundColor Red
+    }
+  } else {
+    Write-Host "  Not enough CSV samples yet for gate evaluation."
+  }
+}

@@ -6,6 +6,23 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.13
+
+**What's new**
+
+- **Server stability (Phase F):** Cell Detection forces single-threaded torch/OpenMP on the Electron path so detect jobs do not spawn extra worker processes. Align and Adjust now call explicit process cleanup on every exit path.
+- **Lab ops scripts:** `verify_release_worker.ps1` confirms v6.0.12+ uses the Python worker after install; `start_7d_uptime_gate.ps1` starts the 7-day Proc pool measurement gate.
+
+**Commit subject**
+
+Harden detect and GUI tool cleanup for server stability
+
+**Commit body**
+
+Limits torch/OpenMP threads in find_neurons on the Electron path. Ensures Align/Adjust always kill supervised Python shells on finalize. Adds deploy verification and 7-day uptime gate scripts. Documents Mason-Jar-only Proc fix policy (no third-party license software).
+
+---
+
 ## v6.0.12
 
 **What's new**

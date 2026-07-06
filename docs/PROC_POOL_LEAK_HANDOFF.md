@@ -4,6 +4,8 @@
 **Host:** `KIM-SERVER` (Puget Rackstation, Ryzen 9 7950X, 32 logical CPUs, **127 GB RAM**, Windows 11 Pro 10.0.22621)  
 **Constraint:** Lab uses Mason Jar **24/7/365** with **no alternate machine**. A reboot is extremely expensive: operator must **drive ~600 miles** to power the server back on correctly. **Do not plan idle experiments, multi-day downtime, or casual reboots.** Prefer live instrumentation and incremental app fixes; treat reboot as a last-resort, scheduled event.
 
+**Hard rule (Mason Jar-only fix):** The Proc leak remediation is **100% in-app**. **Never** install, bundle, integrate, upgrade, unload, or recommend **Sentinel LDK / HASP / FlexNet** (or any third-party commercial license stack) as part of this project. Kernel filters observed on KIM-SERVER during poolmon are **environmental context only**—not an actionable remediation path for Mason Jar agents. If fixes in Mason Jar are insufficient, the only acceptable follow-up is **more Mason Jar hardening** (see §5 Phase F), not third-party software.
+
 **Related product docs:** [`AGENTS.md`](../AGENTS.md), [`docs/AGENT_HANDOFF.md`](AGENT_HANDOFF.md)  
 **Measurement script (added this session):** [`scripts/pool_leak_watch.ps1`](../scripts/pool_leak_watch.ps1)
 
@@ -37,7 +39,7 @@ Root symptom in the kernel:
 
 Almost every process that has **started and exited since boot** leaves an `EPROCESS` behind. Something still holds a kernel reference/handle. **Signing users out, killing Python jobs, and finishing heavy work do not free `Proc`.** Only a **reboot** clears the stuck pool.
 
-Mason Jar / Bell Jar are the lab’s primary long-running apps and **major process spawners** (one `PythonShell` / `child_process.spawn` per job, plus Electron). They are the leading **workload that feeds** the leak. A third-party **SafeNet HASP filter (`aksdf.sys`, 2020)** on all volumes including `\Device\Mup` is a leading **reference-holder** suspect. Direct Electron handle leaks are also possible and must be fixed in-app regardless.
+Mason Jar / Bell Jar are the lab’s primary long-running apps and **major process spawners** (one `PythonShell` / `child_process.spawn` per job, plus Electron). **Fix the app:** v6.0.12+ routes headless tools through a supervised long-lived Python worker and guarantees job cleanup on quit. Third-party kernel minifilters (e.g. `aksdf.sys` on `\Device\Mup`) were noted during investigation as possible reference-holders on the host—they are **not** something Mason Jar agents may change. Direct Electron / Python lifecycle leaks must still be fixed in-app.
 
 **Acute lag** during investigation was separately dominated by live jobs (`find_neurons.py` on `Z:` at **100k–700k page faults/sec**, `System` process ~120% CPU). That is workload, not the chronic `Proc` leak—but both matter on this host.
 
@@ -55,16 +57,15 @@ Mason Jar / Bell Jar are the lab’s primary long-running apps and **major proce
 - **Local disk / CPU at idle samples:** disk ~idle; CPU often ~8–10% **except** when Python detect was faulting (then `System` + `python` dominated).
 - **Network:** Intel I226-V 1 Gbps; lab data on **`Z:`** (NAS).
 
-### Third-party kernel / filters of interest
+### Host environment (context only — not Mason Jar remediation)
+
+Filters and services present during poolmon on KIM-SERVER (document for correlation; **do not install or upgrade third-party license stacks as a Mason Jar fix**):
 
 | Component | Detail |
 |-----------|--------|
-| **`aksdf.sys`** | SafeNet **Sentinel Data Filter** v1.52, **2020-05-29**; minifilter on **C:, D:, shadows, `\Device\Mup`** |
-| **`aksfridge.sys`**, **`hardlock.sys`** | SafeNet, same vintage |
-| **`hasplms`** | Sentinel LDK License Manager (Running, Automatic) |
-| **FlexNet Licensing Service 64** | Running, Automatic |
+| **`aksdf.sys`** | Third-party minifilter v1.52, **2020-05-29**; on **C:, D:, shadows, `\Device\Mup`** |
 | **`dbx.sys`** | Dropbox filter |
-| **AMD `amdkmdag`** | 31.0.24002.92 (community reports of `Proc` leaks on some AMD stacks) |
+| **AMD `amdkmdag`** | 31.0.24002.92 |
 | **NVIDIA `nvlddmkm`** | 31.0.15.3742 (2023-09) |
 | VirtualBox / VirtualHere drivers | Present |
 
@@ -119,9 +120,9 @@ Architecture (see `AGENTS.md`): Electron main spawns **short-lived Python per to
 
 Lifecycle smell: many handlers finalize primarily on stdout **`"Done!"`** then `pyshell.end(...)`. Newer paths (batch, tissue cleanup, CZI) have `close` safety nets; older ones are inconsistent. **No single process supervisor**; no guaranteed stdio destroy / listener teardown / active-job map on quit.
 
-**Indirect mechanism (likely on this host):** every process create/exit is observed by filters (notably **HASP `aksdf` on Mup**). If the filter (or another driver) fails to `ObDereferenceObject`, **`Proc` never frees**. Mason Jar maximizes intentional Python process churn on a multi-user RDP box.
+**Mechanism we own:** Mason Jar maximized intentional Python process churn on a multi-user RDP box (one OS process per tool). v6.0.12+ reduces that churn via [`src/python_job.ts`](../src/python_job.ts) + [`py/masonjar_worker.py`](../py/masonjar_worker.py). Remaining shells: Align/Adjust GUI only.
 
-**Direct mechanism (must still fix):** leaked `PROCESS` handles / long-lived `PythonShell` / renderer `ChildProcess` references would produce the same `Proc` pattern for **those** children. Cannot explain **300k** objects from tool runs alone unless system-wide process churn (Electron, Chrome, Cursor, etc.) also leaks—which the free rate says it does.
+**Mechanism we do not own:** host kernel filters may also observe process create/exit; Mason Jar agents **must not** modify them. Success is measured by whether **Mason Jar job churn drops** (`python_jobs.ndjson`) and **system** `Proc` slope improves after worker release adoption.
 
 ### 3.4 Hyper-V / WSL
 
@@ -135,9 +136,7 @@ Elevated `Get-VM`: **0 VMs**. Irrelevant to this incident.
 | Process exit (detect finished) | No `Proc` drop |
 | `Stop-Process` on align repro watch | No reclaim of stuck pool |
 | Standby/cache trim (theoretical) | Frees **available** cache only, not `Proc` |
-| HASP stop / `fltmc unload aksdf` | **Not run** (needs explicit approval; may break licenses; unload often fails while busy) |
-
-There is **no** supported API to flush nonpaged `Proc` tags.
+There is **no** supported API to flush nonpaged `Proc` tags. Mason Jar agents **must not** stop, unload, or upgrade third-party license drivers on the host.
 
 ---
 
@@ -194,32 +193,30 @@ Today: one OS process per tool. Target: **one worker per app session**.
 
 **Success:** under normal **multi-user mixed fleet**, `Proc_MB` growth slows materially after worker release adoption (not “stays tens of MB for days” in isolation—other users on old release still contribute). `Proc_free%` not stuck at ~0.01% is the stronger signal when fixes work.
 
-### Phase D — Host / license stack (only with Matt’s approval)
+### Phase D — Shipped: v6.0.12 worker release
 
-1. Inventory what still needs **HASP/Sentinel/FlexNet** (MATLAB, instruments, etc.).
-2. If possible: upgrade to current **Thales Sentinel LDK** (replace 2020 `aksdf`), or remove if unused.
-3. Optional: AMD/NVIDIA driver hygiene (known `Proc` reports for some AMD versions).
-4. Do **not** `fltmc unload aksdf` on the live box without explicit approval and a rollback plan.
+**Status:** Released 2026-07-05 — [v6.0.12](https://github.com/matsojr22/masonjar/releases/tag/v6.0.12).
 
-#### HASP / Sentinel inventory (2026-07-05, KIM-SERVER)
+- Headless tools → long-lived worker (default on; `MASONJAR_PYTHON_WORKER=0` escape hatch).
+- Align/Adjust → supervised one-shot shells (`forceShell`).
+- Job log → `~/.masonjar/python_jobs.ndjson` (`via`, `build`, `gui`).
 
-| Component | Status | Version / notes |
-|-----------|--------|-----------------|
-| **`hasplms`** (Sentinel LDK License Manager) | Running, Automatic | Service active |
-| **FlexNet Licensing Service 64** | Running, Automatic | Service active |
-| **`aksdf.sys`** (Sentinel Data Filter) | Loaded minifilter | **1.52.0**, dated **2020**; on C:, D:, shadows, `\Device\Mup` |
-| **`aksfridge.sys`** | Present | 1.81 |
-| **`hardlock.sys`** | Present | 3.93 |
-| **`dbx.sys`** (Dropbox) | Present | Also on Mup |
+**Deploy verification:** [`scripts/verify_release_worker.ps1`](../scripts/verify_release_worker.ps1) after install.
 
-**Upgrade path (research, not applied):**
+**7-day gate:** [`scripts/start_7d_uptime_gate.ps1`](../scripts/start_7d_uptime_gate.ps1) → hourly CSV → [`scripts/correlate_proc_retest.ps1`](../scripts/correlate_proc_retest.ps1).
 
-1. Download **Sentinel LDK Run-time** from [Thales Sentinel drivers](https://cpl.thalesgroup.com/software-monetization/sentinel-drivers) or [Thales support portal](https://supportportal.thalesgroup.com/).
-2. On a **planned maintenance window** with Matt approval: run `HASPUserSetup.exe` as admin (CLI alternative: `haspdinst.exe -i` after `-fr -kp -purge` if clean reinstall needed).
-3. **Reboot required** after driver swap; verify `aksdf.sys` version post-install.
-4. Do **not** run purge/uninstall on the live 24/7 box without approval and a rollback plan.
+### Phase F — Further in-app hardening (if 7-day gate fails)
 
-**Installed-app inventory (2026-07-05):** Registry scan for Sentinel/HASP/FlexNet/MATLAB DisplayName in standard Uninstall keys returned no matches (services still running). Manual check still needed for dongle-dependent lab tools.
+Only Mason Jar code changes—**never** third-party license/driver installs:
+
+| Source | Hardening |
+|--------|-----------|
+| Align / Adjust | Guaranteed `kill()` on all finalize paths; orphan PID log |
+| Detect / SAHI | `torch.set_num_threads(1)` + no subprocess workers in Electron path |
+| Multiple RDP users | N workers expected; optional future shared worker across instances |
+| Legacy Bell Jar / old release | Mixed fleet permanent; measure system-wide CSV |
+
+Ship fixes as **6.0.13+** releases; re-run 7-day gate after each material change.
 
 ### Phase E — Reboot policy (given 600-mile cost)
 
@@ -233,8 +230,8 @@ Today: one OS process per tool. Target: **one worker per app session**.
 
 1. `pool_leak_watch.ps1` baseline within minutes of login.
 2. Confirm no `scripts/m465_*` watchers auto-started.
-3. Confirm HASP/FlexNet only if required.
-4. Start hourly pool CSV: `scripts/start_pool_leak_watch.ps1`
+3. Deploy latest Mason Jar worker release if not already installed.
+4. Start hourly pool CSV: `scripts/start_pool_leak_watch.ps1` or `scripts/start_7d_uptime_gate.ps1`
 5. Lab resumes immediately.
 
 #### Planned maintenance window (single trip — Matt schedules)
@@ -243,12 +240,11 @@ Combine when UI fails or fixes are ready:
 
 | Step | Action |
 |------|--------|
-| 1 | On-site power cycle (600-mile trip) |
-| 2 | Optional: Sentinel LDK Run-time upgrade (`HASPUserSetup.exe`) if Matt approved |
-| 3 | Deploy Mason Jar with worker build (git dev or packaged zip from agent) |
-| 4 | `record_proc_retest_t0.ps1` or manual baseline CSV row |
-| 5 | `start_pool_leak_watch.ps1` for hourly CSV |
-| 6 | Verify day 1 and day 4: `correlate_proc_retest.ps1` + `Proc_MB` / `Proc_free%` |
+| 1 | On-site power cycle (600-mile trip) when unavoidable |
+| 2 | Deploy Mason Jar worker release (≥6.0.12 zip from GitHub releases) |
+| 3 | `scripts/verify_release_worker.ps1` — confirm `via: worker` in job log |
+| 4 | `scripts/start_7d_uptime_gate.ps1` — t0 marker + hourly CSV |
+| 5 | Day 7: `scripts/correlate_proc_retest.ps1` — pass/fail vs ~2.8k/h baseline |
 
 **Packaged release:** Ship worker in next release; users adopt incrementally from their profiles. Agent cuts `node scripts/build-release.js --windows-only` when ready—mixed fleet during rollout is expected.
 
@@ -281,7 +277,7 @@ Combine when UI fails or fixes are ready:
 ### Do not do
 
 - [ ] Idle-only or “stop Mason Jar for hours” causality tests.
-- [ ] Unload HASP / stop `hasplms` without Matt’s explicit approval.
+- [ ] Install, upgrade, unload, or recommend **Sentinel LDK / HASP / FlexNet** for any reason in this project.
 - [ ] Assume Hyper-V VMs are involved (already verified empty).
 - [ ] Leave `m465_align_repro_watch.py` or similar running on the server.
 - [ ] Claim `Proc` can be cleared without reboot (disproven).
@@ -289,7 +285,7 @@ Combine when UI fails or fixes are ready:
 ### Optional / later
 
 - [ ] Identify pool tags `NxRx`, `cxbm`, `sshl` (never-freed) via `pooltag.txt` / driver string search.
-- [ ] If worker+supervisor do not improve `free%`, prioritize Sentinel LDK upgrade in a **single** planned reboot window.
+- [ ] If worker release does not improve `free%` after 7-day gate: ship **Phase F** in-app hardening (6.0.13+), not third-party software.
 - [ ] Consider scheduled **pool alert** (email/log when `Proc_MB` > 200 or `free%` < 1 after 24 h uptime)—alert only, no auto-reboot.
 
 ---
@@ -318,12 +314,11 @@ Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'electron|masonjar
   Select-Object ProcessId, Name, CommandLine
 ```
 
-Elevated (only when approved):
+Elevated (diagnostics only — **never** modify third-party filters):
 
 ```powershell
 Get-VM   # expect none
 fltmc filters
-Get-Item C:\windows\system32\drivers\aksdf.sys | % VersionInfo
 ```
 
 ---
@@ -336,7 +331,9 @@ Get-Item C:\windows\system32\drivers\aksdf.sys | % VersionInfo
 | `scripts/start_pool_leak_watch.ps1` | Start hourly background watch → `~/.masonjar/pool_leak_watch.csv` |
 | `scripts/proc_churn_sample.ps1` | One-shot fleet + process delta sample → `~/.masonjar/proc_churn_watch.csv` |
 | `scripts/record_proc_retest_t0.ps1` | Optional CSV snapshot marker → `proc_retest_t0.json` |
-| `scripts/correlate_proc_retest.ps1` | Summarize pool + jobs since t0 |
+| `scripts/correlate_proc_retest.ps1` | Summarize pool + jobs since t0; 7-day gate pass/fail |
+| `scripts/verify_release_worker.ps1` | Post-install check: batch jobs use `via: worker` |
+| `scripts/start_7d_uptime_gate.ps1` | Record t0 + start hourly watch for 7-day gate |
 | `scripts/m465_align_repro_watch.py` | Dev only; was running and using ~2 GB private; **do not run on lab server** |
 | `scripts/m465-repro-start.ps1`, `scripts/m465_restore_baseline_ap.py` | Unrelated M465 align repro tooling (pre-existing untracked) |
 | Temp diag scripts under repo root (`pool-leak-diag*.ps1`, etc.) | **Deleted** during session |
@@ -435,4 +432,4 @@ Under normal **24/7 multi-user** lab use (some sessions on prior release, some o
 
 ## 10. Message to the next agent
 
-The user is not asking for a clever reboot workaround—the stuck `Proc` pool **requires** a reboot to clear, and that reboot is **operationally brutal**. Your job is to **make the next uptime last** by shipping supervisor/worker in **release**, measuring **system-wide** `Proc` with `pool_leak_watch.ps1` under **permanent mixed fleet** (other users will stay on older builds), and only involving HASP/driver changes in a **single planned** maintenance window Matt schedules. **Never** block the lab or require all users to upgrade for measurement to count.
+The user is not asking for a clever reboot workaround—the stuck `Proc` pool **requires** a reboot to clear, and that reboot is **operationally brutal**. Your job is to **make the next uptime last** by shipping and hardening supervisor/worker in **release**, measuring **system-wide** `Proc` with `pool_leak_watch.ps1` under **permanent mixed fleet**, and fixing **only Mason Jar** if the 7-day gate fails. **Never** install or recommend Sentinel/HASP/FlexNet. **Never** block the lab or require all users to upgrade for measurement to count.
