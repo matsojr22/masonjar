@@ -433,3 +433,53 @@ Under normal **24/7 multi-user** lab use (some sessions on prior release, some o
 ## 10. Message to the next agent
 
 The user is not asking for a clever reboot workaround—the stuck `Proc` pool **requires** a reboot to clear, and that reboot is **operationally brutal**. Your job is to **make the next uptime last** by shipping and hardening supervisor/worker in **release**, measuring **system-wide** `Proc` with `pool_leak_watch.ps1` under **permanent mixed fleet**, and fixing **only Mason Jar** if the 7-day gate fails. **Never** install or recommend Sentinel/HASP/FlexNet. **Never** block the lab or require all users to upgrade for measurement to count.
+
+---
+
+## 11. Session handoff (2026-07-05 PT — end of agent session)
+
+**Purpose:** Hand off to a new agent. Read [`docs/AGENT_HANDOFF.md`](AGENT_HANDOFF.md) on Matt's machine (gitignored locally; copy below if missing).
+
+### Releases shipped today
+
+| Tag | Commit | Notes |
+|-----|--------|-------|
+| **v6.0.12** | `092c15d` | Worker + supervisor; GitHub release published |
+| **v6.0.13** | `6328e5a` | Detect threads, Align/Adjust kill, gate scripts; GitHub release published |
+
+Download: https://github.com/matsojr22/masonjar/releases/tag/v6.0.13
+
+### KIM-SERVER right now
+
+| Item | State |
+|------|--------|
+| **Matt (session 2)** | Release **6.0.13** from `Downloads\masonjar-win32-x64`; **CZI re-import running normally** — do not kill |
+| **John (session 4)** | ~8 Mason Jar/Python processes; separate profile; mixed fleet OK |
+| **Git dev (`git\masonjar`)** | Force-killed earlier; should stay off server unless Matt asks |
+| **Server uptime** | ~40+ h since last reboot (see CSV `UptimeHours`) |
+
+### Monitors — **leave running**
+
+| Artifact / process | Location / PID |
+|--------------------|----------------|
+| Hourly pool watch | `pool_leak_watch.ps1` background (~PID 514732 Matt session); CSV `%USERPROFILE%\.masonjar\pool_leak_watch.csv` |
+| Gate t0 marker | `%USERPROFILE%\.masonjar\proc_retest_t0.json` (2026-07-06T00:16:26Z, Proc_MB≈408.3) |
+| Job log | `%USERPROFILE%\.masonjar\python_jobs.ndjson` |
+
+**Restart watch if missing:** `scripts/start_pool_leak_watch.ps1`  
+**Gate status:** `scripts/correlate_proc_retest.ps1` (target ~7 days from t0)
+
+### Next agent priorities
+
+1. **Do not disrupt live lab work** (Matt's re-import, John's session).
+2. **Let hourly CSV accumulate**; evaluate gate ~2026-07-12.
+3. If gate **passes** — document success; optional mark GitHub release stable.
+4. If gate **fails** — Phase F in-app hardening only (see §5 Phase F); ship 6.0.14+.
+5. **Never** Sentinel/HASP/FlexNet. **Never** assume `git\masonjar` dev paths cover all Mason Jar processes.
+
+### Agent failure modes to avoid (this session)
+
+- Asserting "nothing running" without checking release path + all RDP sessions.
+- Treating in-progress CZI re-import as stuck.
+- Blocking on all-dev / all-user fleet uniformity.
+- Recommending third-party driver installs as the fix.
