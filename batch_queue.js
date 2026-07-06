@@ -33,7 +33,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.runBatchQueue = exports.killBatchQueue = void 0;
-const io_fairshare_1 = require("./io_fairshare");
+const python_job_1 = require("./python_job");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const batch_paths_1 = require("./batch_paths");
@@ -62,17 +62,17 @@ const DEPENDENCY_GRAPH = {
 };
 const TAIL_LIMIT = 50;
 let batchAbort = false;
-let currentBatchShell = null;
+let currentBatchJob = null;
 function killBatchQueue() {
     batchAbort = true;
-    if (currentBatchShell) {
+    if (currentBatchJob) {
         try {
-            currentBatchShell.kill();
+            currentBatchJob.kill();
         }
         catch (_err) {
             /* ignore */
         }
-        currentBatchShell = null;
+        currentBatchJob = null;
     }
 }
 exports.killBatchQueue = killBatchQueue;
@@ -86,54 +86,94 @@ function runPython(deps, opts) {
             return;
         }
         const baseEnv = deps.pythonShellEnv();
-        const job = (0, io_fairshare_1.createHeavyJobHandle)(deps.ioFairshareDir, deps.homeDir, opts.scriptName.replace(/\.py$/, ""), baseEnv);
-        const pythonOptions = {
-            mode: "text",
-            pythonPath: path.join(deps.envPythonPath, deps.pyCommand),
-            scriptPath: deps.pyScriptsPath,
-            args: opts.args,
-            env: job.env,
-        };
-        const pyshell = new deps.PythonShell(opts.scriptName, pythonOptions);
-        currentBatchShell = pyshell;
-        let released = false;
-        const releaseJob = () => {
-            if (released) {
-                return;
-            }
-            released = true;
-            job.release();
-        };
-        pyshell.on("error", releaseJob);
         let total = 0;
         let current = 0;
         let sawNoPkls = false;
         let resolved = false;
         let resultPayload;
+        let pyJob = (0, python_job_1.runPythonJob)({
+            script: opts.scriptName,
+            args: opts.args,
+            pythonPath: path.join(deps.envPythonPath, deps.pyCommand),
+            scriptPath: deps.pyScriptsPath,
+            label: opts.scriptName.replace(/\.py$/, ""),
+            homeDir: deps.homeDir,
+            ioFairshareDir: deps.ioFairshareDir,
+            baseEnv,
+            onStderr: (stderr) => {
+                opts.onLine(stderr.replace(/\r?\n$/, ""));
+                if (stderr.indexOf("NO_PKLS_WRITTEN") >= 0) {
+                    sawNoPkls = true;
+                }
+            },
+            onMessage: (message) => {
+                if (batchAbort) {
+                    pyJob.kill();
+                    return;
+                }
+                if (message.indexOf("NO_PKLS_WRITTEN") >= 0) {
+                    sawNoPkls = true;
+                }
+                if (message.startsWith("RESULT:")) {
+                    try {
+                        resultPayload = JSON.parse(message.slice("RESULT:".length));
+                    }
+                    catch (_parseErr) {
+                        /* ignore malformed RESULT */
+                    }
+                    return;
+                }
+                if (message.startsWith("LOG:")) {
+                    opts.onLine(message.slice(4));
+                    return;
+                }
+                if (total === 0) {
+                    const n = Number(message);
+                    if (!Number.isNaN(n) && n > 0) {
+                        total = n;
+                        if (opts.onProgress) {
+                            opts.onProgress(0, `Starting: 0/${total}`);
+                        }
+                        return;
+                    }
+                }
+                if (message === "Done!") {
+                    void pyJob.end().then(({ err, code, signal }) => {
+                        const pyFail = deps.describePythonShellFailure(err, code, signal);
+                        finish(pyFail);
+                    });
+                }
+                else {
+                    current++;
+                    opts.onLine(message);
+                    if (opts.onProgress) {
+                        const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+                        opts.onProgress(pct, message);
+                    }
+                }
+            },
+        });
+        currentBatchJob = pyJob;
         function finish(error) {
             if (resolved) {
                 return;
             }
             resolved = true;
-            releaseJob();
-            currentBatchShell = null;
+            currentBatchJob = null;
             resolve({ error, noPklsWritten: sawNoPkls, resultPayload });
         }
-        // Safety net: python-shell emits "close" once the process ends. Without
-        // this, a kill (batch cancel) or a crash/non-zero exit that never printed
-        // "Done!" would leave the promise pending forever and hang the whole batch.
-        pyshell.on("close", () => {
-            releaseJob();
+        void pyJob.wait().then(({ err, code, signal }) => {
             if (resolved) {
                 return;
             }
             if (batchAbort) {
-                // Cancellation is reported by the caller via batchAbort; not an error.
                 finish(null);
                 return;
             }
-            const code = pyshell.exitCode;
-            const signal = pyshell.exitSignal;
+            if (err) {
+                finish(String(err instanceof Error ? err.message : err));
+                return;
+            }
             if ((typeof code === "number" && code !== 0) || signal) {
                 finish(deps.describePythonShellFailure(null, code, signal) ||
                     `Python exited without completing (code ${code}, signal ${signal})`);
@@ -141,66 +181,6 @@ function runPython(deps, opts) {
             else {
                 finish(null);
             }
-        });
-        pyshell.on("stderr", (stderr) => {
-            opts.onLine(stderr.replace(/\r?\n$/, ""));
-            if (stderr.indexOf("NO_PKLS_WRITTEN") >= 0) {
-                sawNoPkls = true;
-            }
-        });
-        pyshell.on("message", (message) => {
-            if (batchAbort) {
-                try {
-                    pyshell.kill();
-                }
-                catch (_err) {
-                    /* ignore */
-                }
-                return;
-            }
-            if (message.indexOf("NO_PKLS_WRITTEN") >= 0) {
-                sawNoPkls = true;
-            }
-            if (message.startsWith("RESULT:")) {
-                try {
-                    resultPayload = JSON.parse(message.slice("RESULT:".length));
-                }
-                catch (_parseErr) {
-                    /* ignore malformed RESULT */
-                }
-                return;
-            }
-            if (message.startsWith("LOG:")) {
-                opts.onLine(message.slice(4));
-                return;
-            }
-            if (total === 0) {
-                const n = Number(message);
-                if (!Number.isNaN(n) && n > 0) {
-                    total = n;
-                    if (opts.onProgress) {
-                        opts.onProgress(0, `Starting: 0/${total}`);
-                    }
-                    return;
-                }
-            }
-            if (message === "Done!") {
-                pyshell.end((err, code, signal) => {
-                    const pyFail = deps.describePythonShellFailure(err, code, signal);
-                    finish(pyFail);
-                });
-            }
-            else {
-                current++;
-                opts.onLine(message);
-                if (opts.onProgress) {
-                    const pct = total > 0 ? Math.round((current / total) * 100) : 0;
-                    opts.onProgress(pct, message);
-                }
-            }
-        });
-        pyshell.on("error", (err) => {
-            finish(String(err instanceof Error ? err.message : err));
         });
     });
 }

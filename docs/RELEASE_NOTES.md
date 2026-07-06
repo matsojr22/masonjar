@@ -6,6 +6,24 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.12
+
+**What's new**
+
+- **Server stability (multi-day uptime):** Mason Jar no longer starts a new Python process for every pipeline task. A single supervised worker runs batch jobs in-process, with proper cleanup when tools finish or the app quits. This reduces process churn on shared lab servers that previously needed a reboot after several days.
+- Align and Adjust still use their own Python windows (required for the interactive viewers); all other tools share the worker.
+- If a job misbehaves, set environment variable `MASONJAR_PYTHON_WORKER=0` to restore the old one-process-per-job behavior.
+
+**Commit subject**
+
+Reduce Python process churn for multi-day server stability
+
+**Commit body**
+
+Adds a main-process job supervisor and long-lived Python worker so max, CZI import, detection, and other headless tools reuse one process per app window instead of spawning hundreds per day. Fixes lifecycle cleanup on quit and removes renderer-side process spawning.
+
+---
+
 ## v6.0.11
 
 **What's new**

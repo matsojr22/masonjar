@@ -2,7 +2,7 @@
 
 var fs = require("fs");
 var path = require("path");
-var childProcess = require("child_process");
+var { ipcRenderer } = require("electron");
 var homeDir = require("./home_dir");
 var pipelineRuns = require("./pipeline_runs");
 
@@ -204,49 +204,32 @@ function orientationFromMeta(meta) {
 
 var METADATA_BATCH_SIZE = 40;
 
-function fetchMetadataBatchChunk(py, script, filePaths) {
+function fetchMetadataBatchChunk(filePaths) {
+	if (!ipcRenderer || typeof ipcRenderer.on !== "function") {
+		return Promise.resolve({});
+	}
 	return new Promise(function (resolve) {
-		var chunks = [];
-		var proc;
-		try {
-			proc = childProcess.spawn(py, [script].concat(filePaths), {
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-		} catch (err) {
-			resolve({});
-			return;
-		}
-		proc.stdout.on("data", function (d) {
-			chunks.push(d);
-		});
-		proc.on("close", function () {
-			try {
-				var parsed = JSON.parse(Buffer.concat(chunks).toString("utf8") || "[]");
-				var map = {};
-				for (var i = 0; i < parsed.length; i++) {
-					var row = parsed[i];
-					if (row.path) {
-						map[row.path] = row.metadata || {};
-					}
-				}
-				resolve(map);
-			} catch (err) {
-				resolve({});
+		var reqId =
+			"meta_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+		function onResult(_event, payload) {
+			if (!payload || payload.reqId !== reqId) {
+				return;
 			}
-		});
-		proc.on("error", function () {
+			ipcRenderer.removeListener("indexMetadataResult", onResult);
+			resolve(payload.map || {});
+		}
+		ipcRenderer.on("indexMetadataResult", onResult);
+		try {
+			ipcRenderer.send("runIndexMetadata", { reqId: reqId, paths: filePaths });
+		} catch (err) {
+			ipcRenderer.removeListener("indexMetadataResult", onResult);
 			resolve({});
-		});
+		}
 	});
 }
 
 function fetchMetadataBatch(filePaths, appRoot) {
 	if (!filePaths.length) {
-		return Promise.resolve({});
-	}
-	var py = resolveEnvPython();
-	var script = path.join(appRoot || path.join(__dirname, ".."), "py", "index_metadata.py");
-	if (!fs.existsSync(py) || !fs.existsSync(script)) {
 		return Promise.resolve({});
 	}
 	var batches = [];
@@ -255,7 +238,7 @@ function fetchMetadataBatch(filePaths, appRoot) {
 	}
 	return batches.reduce(function (chain, batch) {
 		return chain.then(function (map) {
-			return fetchMetadataBatchChunk(py, script, batch).then(function (chunkMap) {
+			return fetchMetadataBatchChunk(batch).then(function (chunkMap) {
 				for (var key in chunkMap) {
 					if (Object.prototype.hasOwnProperty.call(chunkMap, key)) {
 						map[key] = chunkMap[key];

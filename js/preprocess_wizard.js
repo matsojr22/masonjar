@@ -3,7 +3,7 @@
 var fs = require("fs");
 var path = require("path");
 var url = require("url");
-var childProcess = require("child_process");
+var { ipcRenderer } = require("electron");
 var ipc = require("electron").ipcRenderer;
 var branding = require("./branding");
 var project = require("./project");
@@ -523,34 +523,35 @@ function lookupImageDimensionsFromIndex(absPath, bundleRoot) {
 }
 
 function probeImageDimensionsPy(absPath, cb) {
-	var py = resolveEnvPython();
-	var script = path.join(__dirname, "..", "py", "index_metadata.py");
-	if (!fs.existsSync(py) || !fs.existsSync(script)) {
-		cb(0, 0);
-		return;
-	}
-	var chunks = [];
-	var proc;
-	try {
-		proc = childProcess.spawn(py, [script, absPath], {
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-	} catch (_err) {
-		cb(0, 0);
-		return;
-	}
-	proc.stdout.on("data", function (d) {
-		chunks.push(d);
-	});
-	proc.on("close", function () {
+	var reqId =
+		"dim_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+	function onResult(_event, payload) {
+		if (!payload || payload.reqId !== reqId) {
+			return;
+		}
+		ipcRenderer.removeListener("indexMetadataResult", onResult);
 		try {
-			var parsed = JSON.parse(Buffer.concat(chunks).toString("utf8") || "[]");
-			var meta = (parsed[0] && parsed[0].metadata) || {};
+			var map = payload.map || {};
+			var meta = map[absPath] || map[path.normalize(absPath)] || {};
+			// path keys from Python may differ slightly; take first entry
+			if (!meta.width && !meta.height) {
+				var keys = Object.keys(map);
+				if (keys.length === 1) {
+					meta = map[keys[0]] || {};
+				}
+			}
 			cb(meta.width || 0, meta.height || 0);
 		} catch (_e) {
 			cb(0, 0);
 		}
-	});
+	}
+	ipcRenderer.on("indexMetadataResult", onResult);
+	try {
+		ipcRenderer.send("runIndexMetadata", { reqId: reqId, paths: [absPath] });
+	} catch (_err) {
+		ipcRenderer.removeListener("indexMetadataResult", onResult);
+		cb(0, 0);
+	}
 }
 
 function loadFullResDimensions(absPath, cb) {
