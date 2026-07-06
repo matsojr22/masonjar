@@ -223,6 +223,63 @@ function testApplyScriptContent() {
 	}
 }
 
+function testIsMandatoryUpdateRequired() {
+	const stableNewer = updateManager.buildCheckResult("6.0.13", {
+		tag_name: "v6.0.14",
+		html_url: "https://github.com/a/r",
+		body: "",
+		prerelease: false,
+		draft: false,
+		assets: [],
+	});
+	assert(
+		updateManager.isMandatoryUpdateRequired("6.0.13", stableNewer),
+		"stable newer requires mandatory update",
+	);
+	assert(
+		!updateManager.isMandatoryUpdateRequired("6.0.14", stableNewer),
+		"equal version not mandatory",
+	);
+	const prerelease = updateManager.buildCheckResult("6.0.13", {
+		tag_name: "v6.0.14-beta",
+		html_url: "https://github.com/a/r",
+		body: "",
+		prerelease: true,
+		draft: false,
+		assets: [],
+	});
+	assert(
+		!updateManager.isMandatoryUpdateRequired("6.0.13", prerelease),
+		"prerelease not mandatory",
+	);
+	const withError = Object.assign({}, stableNewer, { error: "offline" });
+	assert(
+		!updateManager.isMandatoryUpdateRequired("6.0.13", withError),
+		"error skips mandatory",
+	);
+}
+
+function testCountOtherMasonJarInstancesFromList() {
+	const root = "C:\\Apps\\masonjar-win32-x64";
+	const list = [
+		{ pid: 100, exePath: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe" },
+		{ pid: 200, exePath: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe" },
+		{ pid: 300, exePath: "D:\\Other\\masonjar.exe" },
+	];
+	assert(
+		updateManager.countOtherMasonJarInstancesFromList(list, 100, root) === 1,
+		"counts same-install-root excluding self",
+	);
+	assert(
+		updateManager.countOtherMasonJarInstancesFromList(list, 100, null) === 2,
+		"without install root counts all other pids",
+	);
+	assert(
+		updateManager.countOtherMasonJarInstancesFromList(list, 100, root) === 1,
+		"ignores different install root",
+	);
+}
+
 function run() {
 	testPickWindowsZipAsset();
 	testCompareUpdateAvailable();
@@ -235,6 +292,8 @@ function run() {
 	testAppendUpdateLogLine();
 	testUpdateLockLifecycle();
 	testApplyScriptContent();
+	testIsMandatoryUpdateRequired();
+	testCountOtherMasonJarInstancesFromList();
 	console.log("test-update-manager: ok");
 }
 

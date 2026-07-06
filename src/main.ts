@@ -41,7 +41,7 @@ import {
   describePythonShellFailure,
   type PythonJobHandle,
 } from "./python_job";
-import { UpdateManager, updateLogPath, refreshUpdateLockState } from "./update_manager";
+import { UpdateManager, updateLogPath, refreshUpdateLockState, isMandatoryUpdateRequired, countOtherMasonJarInstances, resolveInstallRoot } from "./update_manager";
 const { promisify } = require("util");
 const tar = require("tar");
 const mv = promisify(fs.rename);
@@ -262,9 +262,14 @@ function loadMenuAndCheckUpdates(targetWin: typeof BrowserWindow) {
   targetWin.loadFile("pages/menu.html");
   targetWin.webContents.once("did-finish-load", () => {
     const url = targetWin.webContents.getURL();
-    if (url.includes("menu.html")) {
-      checkForUpdates(targetWin);
+    if (!url.includes("menu.html")) {
+      return;
     }
+    void enforceMandatoryStableUpdate(targetWin).then((mandatory) => {
+      if (!mandatory) {
+        checkForUpdates(targetWin);
+      }
+    });
   });
 }
 
@@ -305,13 +310,74 @@ function appendFlagPathArg(args: string[], flag: string, value: string) {
 function navigateToUpdatesSettings(
   targetWin: typeof BrowserWindow,
   pending = false,
+  mandatory = false,
 ) {
+  if (mandatory) {
+    targetWin.loadFile("pages/settings_updates.html", {
+      query: { mandatory: "1" },
+    });
+    return;
+  }
   if (pending) {
     targetWin.loadFile("pages/settings_updates.html", {
       query: { pending: "1" },
     });
   } else {
     targetWin.loadFile("pages/settings_updates.html");
+  }
+}
+
+let mandatoryUpdateActive = false;
+
+function guardPipelineRun(event: any): boolean {
+  if (!mandatoryUpdateActive) {
+    return false;
+  }
+  try {
+    queueLogLineForUi(
+      "Required update in progress — pipeline tools are disabled until Mason Jar restarts.",
+    );
+    event.sender.send("updateLoad", [0, "Required update — pipeline blocked"]);
+  } catch (_e) {
+    /* ignore */
+  }
+  return true;
+}
+
+async function enforceMandatoryStableUpdate(
+  parentWin: typeof BrowserWindow,
+): Promise<boolean> {
+  if (!app.isPackaged) {
+    return false;
+  }
+  try {
+    const result = await updateManager.checkLatestStableRelease();
+    if (result.error) {
+      console.warn("Mandatory update check failed:", result.error);
+      return false;
+    }
+    if (!isMandatoryUpdateRequired(CURRENT_VERSION_TAG, result)) {
+      return false;
+    }
+    const installRoot = resolveInstallRoot(app.isPackaged);
+    const others = countOtherMasonJarInstances(installRoot);
+    if (others > 0) {
+      dialog.showMessageBoxSync(parentWin, {
+        type: "warning",
+        title: "Update required",
+        message:
+          "Please close all running instances of Mason Jar for a required update.",
+        buttons: ["OK"],
+      });
+      app.quit();
+      return true;
+    }
+    mandatoryUpdateActive = true;
+    navigateToUpdatesSettings(parentWin, false, true);
+    return true;
+  } catch (error) {
+    console.warn("Mandatory update check failed:", error);
+    return false;
   }
 }
 
@@ -1135,6 +1201,49 @@ app.on("window-all-closed", function () {
   app.quit();
 });
 
+const PIPELINE_RUN_CHANNELS = new Set([
+  "runIndexMetadata",
+  "runMax",
+  "runAdjust",
+  "runAlign",
+  "runIntensity",
+  "runExportDualTif",
+  "runCount",
+  "runCollate",
+  "runAnnotationLabelAudit",
+  "runSharpenPreview",
+  "runTophatPreview",
+  "runTophat",
+  "runSharpen",
+  "runParcellation",
+  "runDapiCleanup",
+  "runTissueCleanupAuto",
+  "runTissueCleanupGuided",
+  "runTissueCleanupApply",
+  "runDetection",
+  "runCziProbe",
+  "runCziImport",
+  "runApplyGeometry",
+  "runGeometryFingerprintProbe",
+  "runBatch",
+]);
+
+const ipcMainOnOrig = ipcMain.on.bind(ipcMain);
+ipcMain.on = function (
+  channel: string,
+  listener: (event: any, ...args: any[]) => void,
+): typeof ipcMain {
+  if (PIPELINE_RUN_CHANNELS.has(channel)) {
+    return ipcMainOnOrig(channel, function (event: any, ...args: any[]) {
+      if (guardPipelineRun(event)) {
+        return;
+      }
+      listener(event, ...args);
+    });
+  }
+  return ipcMainOnOrig(channel, listener);
+};
+
 ipcMain.on("checkForUpdates", (event: any) => {
   const parent = BrowserWindow.fromWebContents(event.sender);
   checkForUpdates(parent || win, { manual: true });
@@ -1162,7 +1271,23 @@ ipcMain.handle("getUpdateStatus", async () => {
     applyInfo: updateManager.getApplyInfo(),
     currentVersion: CURRENT_VERSION_TAG,
     lockCleared: lockState.clearedStale || lockState.clearedOrphan,
+    mandatoryUpdateActive,
   };
+});
+
+ipcMain.handle("checkLatestStableRelease", async () => {
+  const result = await updateManager.checkLatestStableRelease();
+  return {
+    result,
+    applyInfo: updateManager.getApplyInfo(),
+    mandatoryUpdateActive,
+    currentVersion: CURRENT_VERSION_TAG,
+  };
+});
+
+ipcMain.handle("quitApp", async () => {
+  app.quit();
+  return { ok: true };
 });
 
 ipcMain.handle(

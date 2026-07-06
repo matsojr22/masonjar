@@ -11,6 +11,7 @@ var state = {
 	applyInfo: null,
 	currentVersion: "",
 	busy: false,
+	mandatory: false,
 };
 
 function qs(id) {
@@ -54,6 +55,61 @@ function openedFromStartupPrompt() {
 	}
 }
 
+function openedFromMandatoryUpdate() {
+	try {
+		var params = new URLSearchParams(window.location.search || "");
+		return params.get("mandatory") === "1";
+	} catch (_e) {
+		return false;
+	}
+}
+
+function applyMandatoryLockUI() {
+	state.mandatory = true;
+	document.body.classList.add("mandatory-update-locked");
+	var banner = qs("mandatoryUpdateBanner");
+	if (banner) {
+		banner.classList.remove("d-none");
+		var latest = state.cached && state.cached.latest;
+		banner.textContent =
+			"Required update to version " +
+			(latest || "…") +
+			" — Mason Jar will download and install automatically.";
+	}
+	var advanced = qs("updateAdvancedPanel");
+	if (advanced) {
+		advanced.classList.add("d-none");
+	}
+	var footer = qs("updateFooterNav");
+	if (footer) {
+		footer.classList.add("d-none");
+	}
+	var nav = qs("navTrail");
+	if (nav) {
+		nav.classList.add("pe-none", "opacity-50");
+	}
+	var checkBtn = qs("checkAgainBtn");
+	if (checkBtn) {
+		checkBtn.classList.add("d-none");
+	}
+	var releaseBtn = qs("openReleaseBtn");
+	if (releaseBtn) {
+		releaseBtn.classList.add("d-none");
+	}
+	var macBtn = qs("macDownloadBtn");
+	if (macBtn) {
+		macBtn.classList.add("d-none");
+	}
+	var updateNowBtn = qs("updateNowBtn");
+	if (updateNowBtn) {
+		updateNowBtn.classList.add("d-none");
+	}
+	var logBtn = qs("openUpdateLogBtn");
+	if (logBtn) {
+		logBtn.classList.add("d-none");
+	}
+}
+
 function renderVersionLabels() {
 	var currentEl = qs("currentVersionLabel");
 	var latestEl = qs("latestVersionLabel");
@@ -75,7 +131,10 @@ function renderVersionLabels() {
 		badge.classList.toggle("d-none", !(cached && cached.isPrerelease));
 	}
 	if (summary) {
-		if (!cached) {
+		if (state.mandatory) {
+			summary.textContent =
+				"A required update to version " + (latest || "…") + " is installing.";
+		} else if (!cached) {
 			summary.textContent = "Could not load update information.";
 		} else if (cached.error) {
 			summary.textContent = cached.error;
@@ -107,6 +166,9 @@ function renderActionButtons() {
 	var isDarwin = info.platform === "darwin";
 	var hasUpdate = !!cached.updateAvailable;
 
+	if (state.mandatory) {
+		return;
+	}
 	if (checkBtn) {
 		checkBtn.disabled = state.busy;
 	}
@@ -147,6 +209,9 @@ function applyStatusPayload(payload) {
 	state.applyInfo = payload.applyInfo || state.applyInfo;
 	if (payload.currentVersion) {
 		state.currentVersion = payload.currentVersion;
+	}
+	if (payload.mandatoryUpdateActive) {
+		state.mandatory = true;
 	}
 	if (payload.lockCleared) {
 		setFeedback("Cleared a stale update lock from a previous attempt.");
@@ -199,6 +264,40 @@ function confirmUpdateNow() {
 	);
 }
 
+function runUpdateNowWithoutConfirm() {
+	state.busy = true;
+	setFeedback("");
+	setProgress(true, 0, "Preparing required update…");
+	renderActionButtons();
+	return ipc
+		.invoke("runWindowsUpdateNow")
+		.then(function (result) {
+			if (result && result.lockCleared) {
+				setFeedback("Cleared a stale update lock from a previous attempt.");
+			}
+			if (!result || !result.ok) {
+				setFeedback((result && result.error) || "Update failed.", true);
+				setProgress(false, 0, "");
+				state.busy = false;
+				renderActionButtons();
+				return ipc.invoke("getUpdateStatus");
+			}
+			setFeedback("Installing update… Mason Jar will restart.");
+			setProgress(true, 100, "Installing update…");
+		})
+		.then(function (payload) {
+			if (payload) {
+				applyStatusPayload(payload);
+			}
+		})
+		.catch(function (err) {
+			setFeedback(String(err && err.message ? err.message : err), true);
+			setProgress(false, 0, "");
+			state.busy = false;
+			renderActionButtons();
+		});
+}
+
 function onUpdateNowClick() {
 	if (state.busy) {
 		return;
@@ -207,38 +306,31 @@ function onUpdateNowClick() {
 		if (!ok) {
 			return;
 		}
-		state.busy = true;
-		setFeedback("");
-		setProgress(true, 0, "Preparing update…");
-		renderActionButtons();
-		ipc
-			.invoke("runWindowsUpdateNow")
-			.then(function (result) {
-				if (result && result.lockCleared) {
-					setFeedback("Cleared a stale update lock from a previous attempt.");
-				}
-				if (!result || !result.ok) {
-					setFeedback((result && result.error) || "Update failed.", true);
-					setProgress(false, 0, "");
-					state.busy = false;
-					renderActionButtons();
-					return ipc.invoke("getUpdateStatus");
-				}
-				setFeedback("Installing update… Mason Jar will restart.");
-				setProgress(true, 100, "Installing update…");
-			})
-			.then(function (payload) {
-				if (payload) {
-					applyStatusPayload(payload);
-				}
-			})
-			.catch(function (err) {
-				setFeedback(String(err && err.message ? err.message : err), true);
-				setProgress(false, 0, "");
-				state.busy = false;
-				renderActionButtons();
-			});
+		runUpdateNowWithoutConfirm();
 	});
+}
+
+function runMandatoryUpdateFlow() {
+	applyMandatoryLockUI();
+	renderVersionLabels();
+	var info = state.applyInfo || {};
+	if (info.canApplyInApp && state.cached && state.cached.updateAvailable) {
+		runUpdateNowWithoutConfirm();
+		return;
+	}
+	state.busy = true;
+	setProgress(true, 0, "Opening release download…");
+	var url = state.cached && state.cached.releaseUrl;
+	if (url) {
+		ipc.invoke("openExternalUrl", url);
+	}
+	setFeedback(
+		"Download and install the latest Mason Jar from GitHub, then reopen the app.",
+		false,
+	);
+	setTimeout(function () {
+		ipc.invoke("quitApp");
+	}, 4000);
 }
 
 function openReleasePage() {
@@ -250,13 +342,16 @@ function openReleasePage() {
 }
 
 function openUpdateLog() {
-	ipc.invoke("openUpdateLog").then(function (result) {
-		if (result && result.message) {
-			setFeedback(result.message, false);
-		}
-	}).catch(function (err) {
-		setFeedback(String(err && err.message ? err.message : err), true);
-	});
+	ipc
+		.invoke("openUpdateLog")
+		.then(function (result) {
+			if (result && result.message) {
+				setFeedback(result.message, false);
+			}
+		})
+		.catch(function (err) {
+			setFeedback(String(err && err.message ? err.message : err), true);
+		});
 }
 
 function restorePrereleaseToggle(prefs) {
@@ -331,6 +426,9 @@ pageInit.onReady(function () {
 	}
 	if (allowEl) {
 		allowEl.addEventListener("change", function () {
+			if (state.mandatory) {
+				return;
+			}
 			state.busy = true;
 			renderActionButtons();
 			savePreferencesAndRefresh()
@@ -344,19 +442,39 @@ pageInit.onReady(function () {
 		});
 	}
 
-	ipc.invoke("getUpdateStatus").then(function (payload) {
-		restorePrereleaseToggle(payload && payload.preferences);
-		applyStatusPayload(payload);
-		var useCache =
-			openedFromStartupPrompt() &&
-			state.cached &&
-			state.cached.updateAvailable;
-		if (useCache) {
-			setFeedback("Update available — click Update Now when ready.");
-			return null;
-		}
-		return refreshFromMain(false);
-	}).catch(function (err) {
-		setFeedback(String(err && err.message ? err.message : err), true);
-	});
+	ipc
+		.invoke("getUpdateStatus")
+		.then(function (payload) {
+			restorePrereleaseToggle(payload && payload.preferences);
+			applyStatusPayload(payload);
+			if (openedFromMandatoryUpdate() || (payload && payload.mandatoryUpdateActive)) {
+				return ipc.invoke("checkLatestStableRelease").then(function (stablePayload) {
+					applyStatusPayload(stablePayload);
+					if (state.cached && state.cached.updateAvailable) {
+						runMandatoryUpdateFlow();
+					} else {
+						setFeedback(
+							(stablePayload &&
+								stablePayload.result &&
+								stablePayload.result.error) ||
+								"Could not start required update.",
+							true,
+						);
+					}
+					return null;
+				});
+			}
+			var useCache =
+				openedFromStartupPrompt() &&
+				state.cached &&
+				state.cached.updateAvailable;
+			if (useCache) {
+				setFeedback("Update available — click Update Now when ready.");
+				return null;
+			}
+			return refreshFromMain(false);
+		})
+		.catch(function (err) {
+			setFeedback(String(err && err.message ? err.message : err), true);
+		});
 });

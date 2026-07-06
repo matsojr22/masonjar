@@ -12,7 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UpdateManager = exports.buildCheckResult = exports.expectedWindowsZipName = exports.resolveInstallRoot = exports.isUpdateInProgress = exports.buildApplySpawnCommand = exports.refreshUpdateLockState = exports.writeUpdateLock = exports.releaseUpdateLock = exports.clearOrphanUpdateLock = exports.clearStaleUpdateLock = exports.isUpdateLockStale = exports.appendUpdateLogLine = exports.UPDATE_LOCK_STALE_MS = exports.updateFallbackLogPath = exports.updateLogPath = exports.updateLockPath = exports.masonJarTempRoot = exports.compareUpdateAvailable = exports.pickBestRelease = exports.releaseSemver = exports.pickWindowsZipAsset = exports.releaseNotesExcerpt = exports.saveUpdatePreferences = exports.loadUpdatePreferences = exports.updatePreferencesPath = exports.GITHUB_REPO = void 0;
+exports.UpdateManager = exports.buildCheckResult = exports.expectedWindowsZipName = exports.resolveInstallRoot = exports.isUpdateInProgress = exports.buildApplySpawnCommand = exports.refreshUpdateLockState = exports.writeUpdateLock = exports.releaseUpdateLock = exports.clearOrphanUpdateLock = exports.clearStaleUpdateLock = exports.isUpdateLockStale = exports.appendUpdateLogLine = exports.UPDATE_LOCK_STALE_MS = exports.updateFallbackLogPath = exports.updateLogPath = exports.updateLockPath = exports.masonJarTempRoot = exports.countOtherMasonJarInstances = exports.listMasonJarProcesses = exports.countOtherMasonJarInstancesFromList = exports.isMandatoryUpdateRequired = exports.compareUpdateAvailable = exports.pickBestRelease = exports.releaseSemver = exports.pickWindowsZipAsset = exports.releaseNotesExcerpt = exports.saveUpdatePreferences = exports.loadUpdatePreferences = exports.updatePreferencesPath = exports.GITHUB_REPO = void 0;
 const fs_1 = __importDefault(require("fs"));
 const os_1 = __importDefault(require("os"));
 const path_1 = __importDefault(require("path"));
@@ -113,6 +113,116 @@ function compareUpdateAvailable(currentVersion, latestVersion) {
     return semver.gt(latest, current);
 }
 exports.compareUpdateAvailable = compareUpdateAvailable;
+function isMandatoryUpdateRequired(currentVersion, result) {
+    var _a, _b;
+    if (result.error || !result.updateAvailable || !result.latest) {
+        return false;
+    }
+    if (result.isPrerelease || ((_a = result.release) === null || _a === void 0 ? void 0 : _a.prerelease) || ((_b = result.release) === null || _b === void 0 ? void 0 : _b.draft)) {
+        return false;
+    }
+    return compareUpdateAvailable(currentVersion, result.latest);
+}
+exports.isMandatoryUpdateRequired = isMandatoryUpdateRequired;
+function countOtherMasonJarInstancesFromList(processes, myPid, installRoot) {
+    const rootNorm = installRoot
+        ? path_1.default.normalize(installRoot).replace(/\\/g, "/").toLowerCase()
+        : "";
+    let count = 0;
+    for (const proc of processes) {
+        if (proc.pid === myPid) {
+            continue;
+        }
+        if (!rootNorm) {
+            count += 1;
+            continue;
+        }
+        const exeNorm = path_1.default
+            .normalize(proc.exePath || "")
+            .replace(/\\/g, "/")
+            .toLowerCase();
+        if (!exeNorm) {
+            count += 1;
+            continue;
+        }
+        if (exeNorm.startsWith(rootNorm)) {
+            count += 1;
+        }
+    }
+    return count;
+}
+exports.countOtherMasonJarInstancesFromList = countOtherMasonJarInstancesFromList;
+function listMasonJarProcessesWindows() {
+    try {
+        const script = "Get-CimInstance Win32_Process -Filter \"Name='masonjar.exe'\" | " +
+            "Select-Object ProcessId, ExecutablePath | ConvertTo-Json -Compress";
+        const out = (0, child_process_1.execSync)(`powershell -NoProfile -Command "${script}"`, {
+            encoding: "utf8",
+            timeout: 15000,
+            windowsHide: true,
+        }).trim();
+        if (!out) {
+            return [];
+        }
+        const parsed = JSON.parse(out);
+        const rows = Array.isArray(parsed) ? parsed : [parsed];
+        return rows
+            .map((row) => ({
+            pid: Number(row.ProcessId),
+            exePath: String(row.ExecutablePath || ""),
+        }))
+            .filter((row) => Number.isFinite(row.pid) && row.pid > 0);
+    }
+    catch (_a) {
+        try {
+            const out = (0, child_process_1.execSync)('powershell -NoProfile -Command "Get-Process -Name masonjar -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id"', { encoding: "utf8", timeout: 10000, windowsHide: true }).trim();
+            if (!out) {
+                return [];
+            }
+            return out
+                .split(/\r?\n/)
+                .map((line) => Number(line.trim()))
+                .filter((pid) => Number.isFinite(pid) && pid > 0)
+                .map((pid) => ({ pid, exePath: "" }));
+        }
+        catch (_b) {
+            return [];
+        }
+    }
+}
+function listMasonJarProcessesDarwin() {
+    try {
+        const out = (0, child_process_1.execSync)('pgrep -x masonjar || true', {
+            encoding: "utf8",
+            timeout: 5000,
+        }).trim();
+        if (!out) {
+            return [];
+        }
+        return out
+            .split(/\r?\n/)
+            .map((line) => Number(line.trim()))
+            .filter((pid) => Number.isFinite(pid) && pid > 0)
+            .map((pid) => ({ pid, exePath: "" }));
+    }
+    catch (_a) {
+        return [];
+    }
+}
+function listMasonJarProcesses() {
+    if (process.platform === "win32") {
+        return listMasonJarProcessesWindows();
+    }
+    if (process.platform === "darwin") {
+        return listMasonJarProcessesDarwin();
+    }
+    return [];
+}
+exports.listMasonJarProcesses = listMasonJarProcesses;
+function countOtherMasonJarInstances(installRoot, myPid = process.pid, listProcesses = listMasonJarProcesses) {
+    return countOtherMasonJarInstancesFromList(listProcesses(), myPid, installRoot);
+}
+exports.countOtherMasonJarInstances = countOtherMasonJarInstances;
 function masonJarTempRoot() {
     return path_1.default.join(os_1.default.tmpdir(), "MasonJar");
 }
@@ -344,6 +454,34 @@ class UpdateManager {
                     release = res.data;
                 }
                 const result = buildCheckResult(this.currentVersion, release);
+                this.cachedCheck = result;
+                return result;
+            }
+            catch (error) {
+                const msg = error instanceof Error ? error.message : String(error);
+                const err = Object.assign(Object.assign({}, buildCheckResult(this.currentVersion, null)), { error: msg });
+                this.cachedCheck = err;
+                return err;
+            }
+        });
+    }
+    checkLatestStableRelease() {
+        return __awaiter(this, void 0, void 0, function* () {
+            const userAgent = `MasonJar/${this.currentVersion}`;
+            try {
+                const url = `https://api.github.com/repos/${exports.GITHUB_REPO}/releases/latest`;
+                const res = yield fetchJson(url, userAgent);
+                if (res.status === 404) {
+                    const empty = buildCheckResult(this.currentVersion, null);
+                    this.cachedCheck = empty;
+                    return empty;
+                }
+                if (!res.ok || !res.data) {
+                    const err = Object.assign(Object.assign({}, buildCheckResult(this.currentVersion, null)), { error: `GitHub API returned ${res.status}` });
+                    this.cachedCheck = err;
+                    return err;
+                }
+                const result = buildCheckResult(this.currentVersion, res.data);
                 this.cachedCheck = result;
                 return result;
             }

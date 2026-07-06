@@ -11,15 +11,16 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 **What's new**
 
 - **Network fair-share in the title bar:** When NAS fair-share is enabled, the window title (and Windows taskbar) shows active job count, your per-job speed limit, and this instance’s throttled NAS throughput—updated every few seconds so you can see it while pipeline jobs run on other pages.
+- **Required updates:** Packaged Mason Jar now checks GitHub for the latest **stable** release on startup. If your version is behind, the app locks pipeline tools and automatically downloads and installs the update on Windows (no dismiss button). If another copy of Mason Jar is already running, you’ll be asked to close all instances first.
 - **Workspace hub:** The compact network-share line on the Pipeline page uses the same wording as the title bar.
 
 **Commit subject**
 
-Show network fair-share stats in the window title
+Fair-share title bar stats and required stable updates on startup
 
 **Commit body**
 
-Adds throttled NAS byte tracking in the fair-share worker and a main-process title poller. Job count, Mbps limit, and 1-minute NAS rate appear in the native title on Windows and macOS when fair-share is on.
+Shows fair-share job count, Mbps limit, and NAS throughput in the native window title. Adds mandatory auto-update to GitHub Latest stable for packaged builds, with multi-instance guard and a locked update wizard on Windows.
 
 ---
 
