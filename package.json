@@ -1,7 +1,7 @@
 {
   "name": "masonjar",
   "description": "A tool for mouse neurohistology",
-  "version": "6.0.14",
+  "version": "6.0.15",
   "main": "main.js",
   "repository": "matsojr22/masonjar",
   "author": "matsojr22",

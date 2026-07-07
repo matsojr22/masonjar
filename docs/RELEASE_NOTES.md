@@ -6,6 +6,26 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.15
+
+**What's new**
+
+- **Tissue edge cleanup Apply** works again on preview PNGs from CZI import and re-import (including projects where OpenCV reads PNGs as three-channel BGR on disk).
+
+**Changes**
+
+- Tissue cleanup Apply uses the same grayscale conversion as the wizard preview when reading PNG files, fixing a regression from the v4.0.5 streaming Apply refactor.
+
+**Commit subject**
+
+Fix tissue cleanup Apply on BGR-encoded preview PNGs
+
+**Commit body**
+
+Apply now converts BGR/BGRA preview PNG reads to 2D gray before masking, matching the wizard path. Fixes Unsupported ndim=3 failures on 00_dapi and _previews after CZI re-import.
+
+---
+
 ## v6.0.14
 
 **What's new**

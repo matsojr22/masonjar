@@ -124,6 +124,36 @@ def test_apply_masks_batch_2d_max_and_png(tmp_path: Path) -> None:
     assert max_arr.shape == (32, 48)
 
 
+def test_apply_masks_batch_bgr_png_previews(tmp_path: Path) -> None:
+    """CZI/orient previews are often BGR PNG on disk; apply must not fail ndim=3."""
+    import cv2
+
+    slice_id = "M528_s004"
+    bundle = _build_bundle(tmp_path, slice_id, z_planes=1)
+    mask_path = bundle / ".masonjar/tissue_cleanup_draft/masks" / f"{slice_id}.png"
+
+    plane = np.linspace(40, 200, 32 * 48, dtype=np.uint8).reshape(32, 48)
+    bgr = cv2.cvtColor(plane, cv2.COLOR_GRAY2BGR)
+    for rel in (
+        f"data/counting/00_dapi/{slice_id}.png",
+        f"data/counting/_previews/{slice_id}_dapi.png",
+        f"data/counting/_previews/{slice_id}_somata.png",
+    ):
+        path = bundle / rel
+        cv2.imwrite(str(path), bgr)
+
+    config = {
+        "slices": {slice_id: {"mask_path": str(mask_path), "method": "auto"}},
+        "channels": [{"role": "signal_somata", "keep": True}],
+        "resume_apply": False,
+    }
+
+    result = apply_masks_batch(bundle, config)
+    assert result["ok"] is True
+    assert result.get("failed_files", 0) == 0
+    assert result["applied_files"] >= 4
+
+
 def test_apply_resume_skips_completed(tmp_path: Path) -> None:
     slice_id = "M528_s003"
     bundle = _build_bundle(tmp_path, slice_id, z_planes=3)

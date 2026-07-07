@@ -40,14 +40,9 @@ VALID_EXTENSIONS = {".png", ".tif", ".tiff"}
 TRACE_WIDTH = 12
 
 
-def load_grayscale_u8(path: Path) -> np.ndarray:
-    suffix = path.suffix.lower()
-    if suffix in {".tif", ".tiff"}:
-        img = tiff.imread(str(path))
-    else:
-        img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-        if img is None:
-            raise ValueError(f"Could not read {path}")
+def array_to_gray_u8(arr: np.ndarray) -> np.ndarray:
+    """Collapse OpenCV PNG reads (BGR/BGRA) or accidental channel axes to 2D uint8."""
+    img = np.asarray(arr)
     if img.ndim == 3:
         if img.shape[2] >= 3:
             img = cv2.cvtColor(
@@ -58,6 +53,21 @@ def load_grayscale_u8(path: Path) -> np.ndarray:
             img = img[..., 0]
     elif img.ndim > 2:
         img = np.max(img, axis=0)
+    if img.ndim != 2:
+        raise ValueError(f"Unsupported ndim={img.ndim}")
+    return img
+
+
+def load_grayscale_u8(path: Path) -> np.ndarray:
+    suffix = path.suffix.lower()
+    if suffix in {".tif", ".tiff"}:
+        img = tiff.imread(str(path))
+    else:
+        img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise ValueError(f"Could not read {path}")
+    if img.ndim == 3 or img.ndim > 2:
+        img = array_to_gray_u8(img)
     arr = np.asarray(img)
     if np.issubdtype(arr.dtype, np.floating):
         if arr.max() <= 1.0:
@@ -256,9 +266,10 @@ def _apply_mask_to_file(
         arr = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
         if arr is None:
             raise ValueError(f"Could not read {path}")
-        arr = np.asarray(arr)
-        if arr.ndim != 2:
-            raise ValueError(f"Unsupported ndim={arr.ndim} for {path.name}")
+        try:
+            arr = array_to_gray_u8(np.asarray(arr))
+        except ValueError as exc:
+            raise ValueError(f"Unsupported ndim for {path.name}") from exc
         bg = bg_override if bg_override is not None else border_median_bg(arr)
         out = apply_keep_mask_to_plane(arr, keep_mask, bg)
         cv2.imwrite(str(path), out)
