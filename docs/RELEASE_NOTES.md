@@ -6,6 +6,26 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.17
+
+**What's new**
+
+- **Count Brain CSV:** When alignment or Viewer/Editor parcellation is set to cortical layers, the count results CSV includes laminar rows (for example VISp1, VISp4) again. Mixed parcellation across sections is supported: each section’s resolved labels appear in the same CSV (do not sum a parent region with its layer children).
+
+**Changes**
+
+- Count output follows the acronyms actually used after parcellation-aware rollup instead of dropping layer names from the spreadsheet.
+
+**Commit subject**
+
+Include laminar acronyms in Count Brain CSV after layers parcellation
+
+**Commit body**
+
+Count results now emit resolved used region acronyms so cortical-layer parcellation appears in the CSV. Mixed per-section tiers are logged and written without collapsing layers away.
+
+---
+
 ## v6.0.16
 
 **What's new**

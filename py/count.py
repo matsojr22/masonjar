@@ -21,8 +21,24 @@ from annotation_match import (
     count_rollup_log_label,
     load_parcellation_context,
     resolve_count_label_id,
+    summarize_count_rollup_labels,
 )
 from structure_catalog import load_catalog
+
+
+def collect_used_acronyms(sums: dict, region_areas: dict) -> set[str]:
+    """Acronyms present after resolve (detections and/or annotation area).
+
+    Count CSV rows follow this set so laminar (and mixed-tier) labels are not
+    dropped by the legacy ``"layer" in name`` structure-map filter.
+    """
+    acronyms: set[str] = set()
+    for channels in sums.values():
+        for channel_counts in channels.values():
+            acronyms.update(channel_counts.keys())
+    for areas in region_areas.values():
+        acronyms.update(areas.keys())
+    return acronyms
 
 
 def iou(boxA, boxB):
@@ -134,7 +150,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "-l",
         "--layers",
-        help="count layers as well",
+        help=(
+            "keep literal pixel atlas IDs (no parcellation rollup); "
+            "Electron omits this — CSV already emits resolved used acronyms"
+        ),
         action="store_true",
         default=False,
     )
@@ -207,8 +226,6 @@ if __name__ == "__main__":
     structures_path = Path(args.structures.strip())
     graph_path = structures_path.parent / "structure_graph.json"
     catalog = load_catalog(graph_path) if graph_path.is_file() else None
-    count_context = load_parcellation_context(annotation_path)
-    rollup_logged = False
 
     def _resolve_label(atlas_id, slice_context):
         return resolve_count_label_id(
@@ -228,6 +245,7 @@ if __name__ == "__main__":
     sums = {}
     colocalized = {}
     region_areas = {}
+    rollup_labels: list[str] = []
     for pName, aName in paired:
         sums[pName] = {}
         region_areas[pName] = {}
@@ -258,12 +276,9 @@ if __name__ == "__main__":
 
             slice_id = slice_stem_from_annotation_pkl(aName)
             slice_context = load_parcellation_context(annotation_path, slice_id)
-            if not rollup_logged:
-                print(
-                    f"LOG: count_rollup={count_rollup_log_label(slice_context, include_layers=args.layers)}",
-                    flush=True,
-                )
-                rollup_logged = True
+            rollup_labels.append(
+                count_rollup_log_label(slice_context, include_layers=args.layers)
+            )
 
             unique_ids, counts = np.unique(annotation_rescaled, return_counts=True)
             for unique_id, count in zip(unique_ids, counts):
@@ -276,34 +291,8 @@ if __name__ == "__main__":
                 name = region_info["acronym"]
                 region_areas[pName][name] = region_areas[pName].get(name, 0) + int(count)
 
-        # Initialize counts based on args.layers
-        sums[pName] = {}
-        for c in range(len(predictions)):
-            sums[pName][c] = {}
-            if args.layers:
-                # Include all regions (layers included)
-                region_acronyms = set()
-                for region_id in regions.keys():
-                    region_acronyms.add(regions[region_id]["acronym"])
-            else:
-                # Exclude layers; use parent regions
-                region_acronyms = set()
-                for region_id, region_info in regions.items():
-                    area_name = region_info["name"]
-                    if "layer" not in area_name.lower():
-                        region_acronyms.add(region_info["acronym"])
-                    else:
-                        # Get parent acronym
-                        id_path = region_info["id_path"].split("/")
-                        if len(id_path) >= 2:
-                            parent_id = np.uint32(id_path[-2])
-                            parent_acronym = regions[parent_id]["acronym"]
-                            region_acronyms.add(parent_acronym)
-                        else:
-                            region_acronyms.add(region_info["acronym"])
-            # Initialize counts to zero
-            for acronym in region_acronyms:
-                sums[pName][c][acronym] = 0
+        # Counters grow from detections after resolve; CSV emits used acronyms.
+        sums[pName] = {c: {} for c in range(len(predictions))}
 
         all_boxes = {c: [] for c in range(len(predictions))}
         for c, detection in enumerate(predictions):
@@ -333,6 +322,13 @@ if __name__ == "__main__":
             for c2, boxes2 in all_boxes.items():
                 local_colocalized[c][c2] = percent_colocalized(boxes, boxes2)
 
+    print(
+        f"LOG: count_rollup={summarize_count_rollup_labels(rollup_labels)}",
+        flush=True,
+    )
+
+    used_acronyms = collect_used_acronyms(sums, region_areas)
+
     with open(output_path / "count_results.csv", "w", newline="") as resultFile:
         print("Writing output...", flush=True)
         lines = []
@@ -340,38 +336,16 @@ if __name__ == "__main__":
         running_areas = {}
         for file, channels in sums.items():
             lines.append([file])
-            # Collect region acronyms based on args.layers
-            if args.layers:
-                all_region_acronyms = set()
-                for channel_counts in channels.values():
-                    all_region_acronyms.update(channel_counts.keys())
-            else:
-                all_region_acronyms = set()
-                for region_id, region_info in regions.items():
-                    area_name = region_info["name"]
-                    if "layer" not in area_name.lower():
-                        all_region_acronyms.add(region_info["acronym"])
-                    else:
-                        id_path = region_info["id_path"].split("/")
-                        if len(id_path) >= 2:
-                            parent_id = np.uint32(id_path[-2])
-                            parent_acronym = regions[parent_id]["acronym"]
-                            all_region_acronyms.add(parent_acronym)
-                        else:
-                            all_region_acronyms.add(region_info["acronym"])
-
             lines.append(
                 ["Region Acronym", "Region Name", "Area (px)"]
                 + [f"Channel #{c}" for c in range(len(channels))]
             )
-            for region in sorted(all_region_acronyms):
+            for region in sorted(used_acronyms):
                 per_channel_counts = []
                 for channel in channels:
-                    per_channel_counts.append(channels[channel].get(region, 0))
-                    if running_counts.get(region, False):
-                        running_counts[region] += per_channel_counts[-1]
-                    else:
-                        running_counts[region] = per_channel_counts[-1]
+                    n = int(channels[channel].get(region, 0))
+                    per_channel_counts.append(n)
+                    running_counts[region] = running_counts.get(region, 0) + n
 
                 # Find name from acronym
                 region_id = acronym_to_region.get(region)
@@ -380,10 +354,7 @@ if __name__ == "__main__":
                 else:
                     region_name = regions[region_id]["name"]
                 region_area = region_areas[file].get(region, 0)
-                if region in running_areas:
-                    running_areas[region] += region_area
-                else:
-                    running_areas[region] = region_area
+                running_areas[region] = running_areas.get(region, 0) + region_area
                 lines.append(
                     [
                         region,

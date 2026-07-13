@@ -1,10 +1,9 @@
-"""Count Brain parcellation-aware label rollup."""
+"""Count Brain parcellation-aware label rollup and CSV acronym emission."""
 
 import pickle
 import sys
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -16,7 +15,9 @@ from annotation_match import (  # noqa: E402
     ParcellationContext,
     count_rollup_log_label,
     resolve_count_label_id,
+    summarize_count_rollup_labels,
 )
+from count import collect_used_acronyms  # noqa: E402
 from structure_catalog import load_catalog  # noqa: E402
 
 _GRAPH_PATH = _REPO_ROOT / "csv" / "structure_graph.json"
@@ -64,3 +65,35 @@ def test_parcellated_areas_context(catalog, structure_map):
     )
     assert resolved == vis
     assert count_rollup_log_label(ctx, include_layers=False) == "tier:areas"
+
+
+def test_parcellated_layers_context_keeps_layer_id(catalog, structure_map):
+    visp4 = catalog["by_acronym"]["VISp4"]["id"]
+    ctx = ParcellationContext(is_full_detail=False, tier_id="layers")
+    resolved = resolve_count_label_id(
+        visp4, ctx, catalog, structure_map, include_layers=False
+    )
+    assert resolved == visp4
+    assert count_rollup_log_label(ctx, include_layers=False) == "tier:layers"
+
+
+def test_summarize_count_rollup_labels_mixed():
+    assert summarize_count_rollup_labels(["tier:layers"]) == "tier:layers"
+    assert summarize_count_rollup_labels(["areas", "areas"]) == "areas"
+    assert summarize_count_rollup_labels(["tier:layers", "tier:areas"]) == (
+        "mixed tiers={tier:areas,tier:layers}"
+    )
+    assert summarize_count_rollup_labels([]) == "areas"
+
+
+def test_collect_used_acronyms_includes_laminar_keys():
+    sums = {
+        "Predictions_s001.pkl": {0: {"VISp4": 3, "VISp1": 1}},
+        "Predictions_s002.pkl": {0: {"VIS": 2}},
+    }
+    region_areas = {
+        "Predictions_s001.pkl": {"VISp4": 100, "VISp1": 40},
+        "Predictions_s002.pkl": {"VIS": 200, "AUD": 50},
+    }
+    used = collect_used_acronyms(sums, region_areas)
+    assert used == {"VISp4", "VISp1", "VIS", "AUD"}

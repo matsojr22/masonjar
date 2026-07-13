@@ -151,6 +151,16 @@ def count_rollup_log_label(
     return "areas"
 
 
+def summarize_count_rollup_labels(labels: list[str]) -> str:
+    """Collapse per-slice rollup labels into one LOG: count_rollup= value."""
+    unique = sorted({str(x) for x in labels if x})
+    if not unique:
+        return "areas"
+    if len(unique) == 1:
+        return unique[0]
+    return f"mixed tiers={{{','.join(unique)}}}"
+
+
 def resolve_output_targets(
     structure_map: dict,
     selected_region_ids: list[int],
