@@ -81,6 +81,8 @@ const DOM_ASSERTIONS = {
 		"checkAgainBtn",
 		"updateNowBtn",
 		"allowPrerelease",
+		"keepVersionBackups",
+		"deleteVersionBackupsBtn",
 	],
 	"parcellation_wizard.html": [
 		"step1",

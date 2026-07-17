@@ -41,7 +41,19 @@ import {
   describePythonShellFailure,
   type PythonJobHandle,
 } from "./python_job";
-import { UpdateManager, updateLogPath, refreshUpdateLockState, isMandatoryUpdateRequired, countOtherMasonJarInstances, resolveInstallRoot } from "./update_manager";
+import {
+  UpdateManager,
+  updateLogPath,
+  refreshUpdateLockState,
+  isMandatoryUpdateRequired,
+  countOtherMasonJarInstances,
+  resolveInstallRoot,
+  isActiveUpdateLock,
+  listInstallVersionBackups,
+  deleteInstallVersionBackups,
+  CLOSE_OTHER_INSTANCES_MESSAGE,
+  appendUpdateLogLine,
+} from "./update_manager";
 const { promisify } = require("util");
 const tar = require("tar");
 const mv = promisify(fs.rename);
@@ -56,7 +68,53 @@ var win: typeof BrowserWindow = null;
 var logWin: typeof BrowserWindow = null;
 /** When true, log lines queue but the window stays hidden until user opens it or an error forces show. */
 var logDismissedByUser = true;
-var isQuitting = false;
+/** Skip the quit confirmation dialog (update apply / forced update quit). */
+var isQuittingForUpdate = false;
+
+function quitForUpdate() {
+  isQuittingForUpdate = true;
+  app.quit();
+}
+
+// Single-instance + refuse launch while an in-app update is applying.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  const installRootEarly = app.isPackaged
+    ? path.dirname(process.execPath)
+    : null;
+  if (isActiveUpdateLock(installRootEarly)) {
+    try {
+      dialog.showErrorBox(
+        "Update in progress",
+        "Mason Jar is installing an update. Wait for it to finish and reopen automatically.",
+      );
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+  app.exit(0);
+}
+
+app.on("second-instance", () => {
+  const installRoot = resolveInstallRoot(app.isPackaged);
+  if (isActiveUpdateLock(installRoot)) {
+    try {
+      dialog.showErrorBox(
+        "Update in progress",
+        "Mason Jar is installing an update. Wait for it to finish and reopen automatically.",
+      );
+    } catch (_e) {
+      /* ignore */
+    }
+    return;
+  }
+  if (win && !win.isDestroyed()) {
+    if (win.isMinimized()) {
+      win.restore();
+    }
+    win.focus();
+  }
+});
 
 /** Batch console mirroring to the log window to avoid IPC/DOM floods. */
 const LOG_UI_FLUSH_MS = 150;
@@ -365,11 +423,10 @@ async function enforceMandatoryStableUpdate(
       dialog.showMessageBoxSync(parentWin, {
         type: "warning",
         title: "Update required",
-        message:
-          "Please close all running instances of Mason Jar for a required update.",
+        message: CLOSE_OTHER_INSTANCES_MESSAGE,
         buttons: ["OK"],
       });
-      app.quit();
+      quitForUpdate();
       return true;
     }
     mandatoryUpdateActive = true;
@@ -1133,6 +1190,30 @@ function reportPythonFailure(pyFail: string | null) {
 }
 
 app.on("ready", () => {
+  if (!gotSingleInstanceLock) {
+    return;
+  }
+  const installRootAtReady = resolveInstallRoot(app.isPackaged);
+  if (isActiveUpdateLock(installRootAtReady)) {
+    try {
+      dialog.showErrorBox(
+        "Update in progress",
+        "Mason Jar is installing an update. Wait for it to finish and reopen automatically.",
+      );
+    } catch (_e) {
+      /* ignore */
+    }
+    try {
+      appendUpdateLogLine(
+        homeDir,
+        "Startup refused: update.lock active for this install",
+      );
+    } catch (_e) {
+      /* ignore */
+    }
+    app.exit(0);
+    return;
+  }
   logUiQueue = [];
   if (logUiFlushTimer) {
     clearTimeout(logUiFlushTimer);
@@ -1143,6 +1224,16 @@ app.on("ready", () => {
   // Uncomment if you want tools on launch
   // win.webContents.toggleDevTools()
   win.on("close", function (e: any) {
+    if (isQuittingForUpdate) {
+      try {
+        if (logWin && !logWin.isDestroyed()) {
+          logWin.close();
+        }
+      } catch (_error) {
+        // ignore
+      }
+      return;
+    }
     const choice = dialog.showMessageBoxSync(win, {
       type: "question",
       buttons: ["Yes", "Cancel"],
@@ -1255,9 +1346,17 @@ ipcMain.handle("getUpdatePreferences", async () => {
 
 ipcMain.handle(
   "saveUpdatePreferences",
-  async (_event: any, patch: { allowPrerelease?: boolean }) => {
+  async (
+    _event: any,
+    patch: { allowPrerelease?: boolean; keepVersionBackups?: boolean },
+  ) => {
     const saved = updateManager.savePreferences({
-      allow_prerelease: !!patch?.allowPrerelease,
+      allow_prerelease:
+        patch?.allowPrerelease != null ? !!patch.allowPrerelease : undefined,
+      keep_version_backups:
+        patch?.keepVersionBackups != null
+          ? !!patch.keepVersionBackups
+          : undefined,
     });
     return saved;
   },
@@ -1286,7 +1385,7 @@ ipcMain.handle("checkLatestStableRelease", async () => {
 });
 
 ipcMain.handle("quitApp", async () => {
-  app.quit();
+  quitForUpdate();
   return { ok: true };
 });
 
@@ -1319,7 +1418,7 @@ ipcMain.handle("applyWindowsUpdate", async () => {
     prepared.scriptPath!,
     prepared.stagedVersion || "",
     () => {
-      app.quit();
+      quitForUpdate();
     },
   );
 });
@@ -1329,8 +1428,34 @@ ipcMain.handle("runWindowsUpdateNow", async (event: any) => {
   return updateManager.runWindowsUpdateNow((percent, message) => {
     sender.send("updateDownloadProgress", [percent, message]);
   }, () => {
-    app.quit();
+    quitForUpdate();
   });
+});
+
+ipcMain.handle("listVersionBackups", async () => {
+  const installRoot = resolveInstallRoot(app.isPackaged);
+  if (!installRoot) {
+    return { ok: true, backups: [] as string[], installRoot: null };
+  }
+  return {
+    ok: true,
+    backups: listInstallVersionBackups(installRoot),
+    installRoot,
+  };
+});
+
+ipcMain.handle("deleteVersionBackups", async () => {
+  const installRoot = resolveInstallRoot(app.isPackaged);
+  if (!installRoot) {
+    return {
+      ok: false,
+      deleted: [] as string[],
+      errors: ["No packaged install folder."],
+      installRoot: null,
+    };
+  }
+  const result = deleteInstallVersionBackups(installRoot);
+  return { ...result, installRoot };
 });
 
 ipcMain.handle("openUpdateLog", async () => {

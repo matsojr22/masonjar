@@ -99,10 +99,27 @@
             Allow pre-release versions
           </label>
         </div>
-        <p class="small text-muted mb-0">
+        <p class="small text-muted mb-3">
           When enabled, Mason Jar may offer beta builds marked pre-release on GitHub.
           Stable releases are still preferred when they are newer.
         </p>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" id="keepVersionBackups" />
+          <label class="form-check-label" for="keepVersionBackups">
+            Keep version backups
+          </label>
+        </div>
+        <p class="small text-muted mb-2">
+          When enabled, Update Now copies the whole install folder next to itself
+          (name ends with <code>.backup-&lt;oldVersion&gt;</code>) before replacing files.
+          Off by default — backups use a lot of disk.
+        </p>
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="deleteVersionBackupsBtn">
+            Delete old version backups
+          </button>
+          <span id="versionBackupsStatus" class="small text-muted">—</span>
+        </div>
       </section>
 
       <section
@@ -112,9 +129,10 @@
         <h2 class="h6 text-muted">Notes</h2>
         <ul class="mb-0 ps-3">
           <li>On Windows, use <strong>Update Now</strong> to download and install in one step. macOS users can download the DMG from GitHub.</li>
-          <li>Mason Jar must restart to finish installing. Finish or cancel long Python jobs first.</li>
+          <li>Mason Jar must restart to finish installing. Finish or cancel long Python jobs first. Close other copies of Mason Jar first.</li>
+          <li>You can keep the app in any folder name (including Explorer’s versioned unzip folder). Updates replace files in place.</li>
           <li>Installs on read-only or network paths may fail — use <strong>Open release page</strong> and install manually if needed.</li>
-          <li>Pre-releases are off by default; enable them above to receive beta builds.</li>
+          <li>Pre-releases and version backups are off by default.</li>
         </ul>
         <p class="mt-2 mb-0">
           <button type="button" class="btn btn-link btn-sm p-0 align-baseline" id="openUpdateLogBtn">

@@ -11,6 +11,14 @@ export const GITHUB_REPO = "matsojr22/masonjar";
 
 export interface UpdatePreferences {
   allow_prerelease: boolean;
+  keep_version_backups: boolean;
+}
+
+export interface UpdateLockPayload {
+  started: string;
+  version: string;
+  installRoot?: string;
+  applyPid?: number;
 }
 
 export interface ReleaseAsset {
@@ -51,7 +59,10 @@ export interface UpdateApplyInfo {
   updateInProgress: boolean;
 }
 
-const DEFAULT_PREFS: UpdatePreferences = { allow_prerelease: false };
+const DEFAULT_PREFS: UpdatePreferences = {
+  allow_prerelease: false,
+  keep_version_backups: false,
+};
 
 export function updatePreferencesPath(homeDir: string): string {
   return path.join(homeDir, "update_preferences.json");
@@ -66,6 +77,7 @@ export function loadUpdatePreferences(homeDir: string): UpdatePreferences {
     const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<UpdatePreferences>;
     return {
       allow_prerelease: !!raw.allow_prerelease,
+      keep_version_backups: !!raw.keep_version_backups,
     };
   } catch {
     return { ...DEFAULT_PREFS };
@@ -82,6 +94,10 @@ export function saveUpdatePreferences(
       patch.allow_prerelease != null
         ? !!patch.allow_prerelease
         : current.allow_prerelease,
+    keep_version_backups:
+      patch.keep_version_backups != null
+        ? !!patch.keep_version_backups
+        : current.keep_version_backups,
   };
   fs.mkdirSync(homeDir, { recursive: true });
   fs.writeFileSync(updatePreferencesPath(homeDir), JSON.stringify(next, null, 2));
@@ -213,11 +229,14 @@ function listMasonJarProcessesWindows(): MasonJarProcessInfo[] {
     const script =
       "Get-CimInstance Win32_Process -Filter \"Name='masonjar.exe'\" | " +
       "Select-Object ProcessId, ExecutablePath | ConvertTo-Json -Compress";
-    const out = execSync(`powershell -NoProfile -Command "${script}"`, {
-      encoding: "utf8",
-      timeout: 15000,
-      windowsHide: true,
-    }).trim();
+    const out = execSync(
+      `powershell -NoProfile -Command ${JSON.stringify(script)}`,
+      {
+        encoding: "utf8",
+        timeout: 15000,
+        windowsHide: true,
+      },
+    ).trim();
     if (!out) {
       return [];
     }
@@ -233,8 +252,10 @@ function listMasonJarProcessesWindows(): MasonJarProcessInfo[] {
       .filter((row) => Number.isFinite(row.pid) && row.pid > 0);
   } catch {
     try {
+      const fallback =
+        "Get-Process -Name masonjar -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id";
       const out = execSync(
-        'powershell -NoProfile -Command "Get-Process -Name masonjar -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id"',
+        `powershell -NoProfile -Command ${JSON.stringify(fallback)}`,
         { encoding: "utf8", timeout: 10000, windowsHide: true },
       ).trim();
       if (!out) {
@@ -331,35 +352,146 @@ export function isUpdateLockStale(
   }
 }
 
-export function clearStaleUpdateLock(): boolean {
+export function readUpdateLock(): UpdateLockPayload | null {
   const lockPath = updateLockPath();
-  if (fs.existsSync(lockPath) && isUpdateLockStale(lockPath)) {
-    fs.unlinkSync(lockPath);
-    return true;
+  try {
+    if (!fs.existsSync(lockPath)) {
+      return null;
+    }
+    const raw = JSON.parse(fs.readFileSync(lockPath, "utf8")) as Partial<UpdateLockPayload>;
+    if (!raw || typeof raw.version !== "string") {
+      return null;
+    }
+    return {
+      started: String(raw.started || ""),
+      version: String(raw.version),
+      installRoot:
+        raw.installRoot != null ? String(raw.installRoot) : undefined,
+      applyPid:
+        raw.applyPid != null && Number.isFinite(Number(raw.applyPid))
+          ? Number(raw.applyPid)
+          : undefined,
+    };
+  } catch {
+    return null;
   }
-  return false;
 }
 
-/** Lock older than a few seconds while the app UI is running is orphaned (apply waits for quit). */
-export function clearOrphanUpdateLock(
-  minAgeMs: number = 3000,
+export function isProcessAlive(pid: number | undefined | null): boolean {
+  if (pid == null || !Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function lockMatchesInstall(
+  payload: UpdateLockPayload,
+  installRoot?: string | null,
 ): boolean {
+  if (!installRoot || !payload.installRoot) {
+    return true;
+  }
+  return pathsEqualIgnoreCase(payload.installRoot, installRoot);
+}
+
+/** True when a non-stale lock exists and apply may still be running. */
+export function isActiveUpdateLock(
+  installRoot?: string | null,
+): boolean {
+  const lockPath = updateLockPath();
+  if (!fs.existsSync(lockPath) || isUpdateLockStale(lockPath)) {
+    return false;
+  }
+  const payload = readUpdateLock();
+  if (!payload) {
+    return isApplyScriptRunning();
+  }
+  if (!lockMatchesInstall(payload, installRoot)) {
+    return false;
+  }
+  if (payload.applyPid != null && isProcessAlive(payload.applyPid)) {
+    return true;
+  }
+  if (isApplyScriptRunning()) {
+    return true;
+  }
+  if (payload.applyPid != null && !isProcessAlive(payload.applyPid)) {
+    return false;
+  }
+  // Fresh lock without a live apply process: still treat briefly as active
+  // so a relaunch during the quit→apply handoff does not race the script.
+  try {
+    const age = Date.now() - fs.statSync(lockPath).mtimeMs;
+    return age < 60_000;
+  } catch {
+    return true;
+  }
+}
+
+export function pathsEqualIgnoreCase(a: string, b: string): boolean {
+  return (
+    path.normalize(a).replace(/\\/g, "/").toLowerCase() ===
+    path.normalize(b).replace(/\\/g, "/").toLowerCase()
+  );
+}
+
+export function clearStaleUpdateLock(): boolean {
+  const lockPath = updateLockPath();
+  if (!fs.existsSync(lockPath) || !isUpdateLockStale(lockPath)) {
+    return false;
+  }
+  if (isApplyScriptRunning()) {
+    return false;
+  }
+  const payload = readUpdateLock();
+  if (payload?.applyPid != null && isProcessAlive(payload.applyPid)) {
+    return false;
+  }
+  try {
+    fs.unlinkSync(lockPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Clear a lock only when apply is clearly dead: stale age, or applyPid exited
+ * and apply-update.ps1 is not running. Do not clear fresh locks just because
+ * Settings opened.
+ */
+export function clearOrphanUpdateLock(): boolean {
   const lockPath = updateLockPath();
   if (!fs.existsSync(lockPath)) {
     return false;
   }
-  if (isUpdateLockStale(lockPath)) {
-    fs.unlinkSync(lockPath);
-    return true;
+  if (isApplyScriptRunning()) {
+    return false;
   }
-  try {
-    const age = Date.now() - fs.statSync(lockPath).mtimeMs;
-    if (age >= minAgeMs) {
+  const payload = readUpdateLock();
+  if (payload?.applyPid != null && isProcessAlive(payload.applyPid)) {
+    return false;
+  }
+  if (isUpdateLockStale(lockPath)) {
+    try {
       fs.unlinkSync(lockPath);
       return true;
+    } catch {
+      return false;
     }
-  } catch {
+  }
+  if (payload?.applyPid != null && !isProcessAlive(payload.applyPid)) {
     try {
+      const age = Date.now() - fs.statSync(lockPath).mtimeMs;
+      // Allow brief handoff window after spawn before treating as orphan.
+      if (age < 60_000) {
+        return false;
+      }
       fs.unlinkSync(lockPath);
       return true;
     } catch {
@@ -376,16 +508,23 @@ export function releaseUpdateLock(): void {
   }
 }
 
-export function writeUpdateLock(version: string): void {
+export function writeUpdateLock(
+  version: string,
+  opts?: { installRoot?: string | null; applyPid?: number },
+): void {
   const lockPath = updateLockPath();
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-  fs.writeFileSync(
-    lockPath,
-    JSON.stringify({
-      started: new Date().toISOString(),
-      version,
-    }),
-  );
+  const payload: UpdateLockPayload = {
+    started: new Date().toISOString(),
+    version,
+  };
+  if (opts?.installRoot) {
+    payload.installRoot = opts.installRoot;
+  }
+  if (opts?.applyPid != null && Number.isFinite(opts.applyPid)) {
+    payload.applyPid = opts.applyPid;
+  }
+  fs.writeFileSync(lockPath, JSON.stringify(payload));
 }
 
 export function refreshUpdateLockState(): {
@@ -397,31 +536,102 @@ export function refreshUpdateLockState(): {
   return { clearedStale, clearedOrphan };
 }
 
+export function versionBackupDirName(installRoot: string, oldVersion: string): string {
+  return `${installRoot}.backup-${oldVersion}`;
+}
+
+export function listInstallVersionBackups(installRoot: string): string[] {
+  if (!installRoot) {
+    return [];
+  }
+  const parent = path.dirname(installRoot);
+  const base = path.basename(installRoot);
+  const prefix = `${base}.backup-`;
+  try {
+    if (!fs.existsSync(parent)) {
+      return [];
+    }
+    return fs
+      .readdirSync(parent, { withFileTypes: true })
+      .filter((ent) => ent.isDirectory() && ent.name.startsWith(prefix))
+      .map((ent) => path.join(parent, ent.name))
+      .sort((a, b) => a.localeCompare(b));
+  } catch {
+    return [];
+  }
+}
+
+export function deleteInstallVersionBackups(installRoot: string): {
+  ok: boolean;
+  deleted: string[];
+  errors: string[];
+} {
+  const found = listInstallVersionBackups(installRoot);
+  const deleted: string[] = [];
+  const errors: string[] = [];
+  for (const dir of found) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      deleted.push(dir);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      errors.push(`${dir}: ${msg}`);
+    }
+  }
+  return { ok: errors.length === 0, deleted, errors };
+}
+
+export const CLOSE_OTHER_INSTANCES_MESSAGE =
+  "Please close all other running instances of Mason Jar before updating.";
+
 export function buildApplySpawnCommand(scriptPath: string): {
   command: string;
   args: string[];
 } {
+  // Spawn powershell directly (detached) so applyPid in update.lock stays alive
+  // for the full apply, unlike `cmd /c start` which exits immediately.
   return {
-    command: "cmd.exe",
+    command: "powershell.exe",
     args: [
-      "/c",
-      "start",
-      "",
-      "/MIN",
-      "powershell.exe",
       "-NoProfile",
       "-ExecutionPolicy",
       "Bypass",
+      "-WindowStyle",
+      "Hidden",
       "-File",
       scriptPath,
     ],
   };
 }
 
-export function isUpdateInProgress(): boolean {
+/** Best-effort: true if apply-update.ps1 is still running (Windows). */
+export function isApplyScriptRunning(): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  try {
+    // Match `-File …apply-update.ps1` only — not this detection query's own CommandLine.
+    const script =
+      "$p = Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" -ErrorAction SilentlyContinue | " +
+      "Where-Object { $_.CommandLine -and ($_.CommandLine -match '(?i)-File\\s+.*apply-update\\.ps1') }; " +
+      "if ($p) { '1' } else { '0' }";
+    const out = execSync(
+      `powershell -NoProfile -Command ${JSON.stringify(script)}`,
+      {
+        encoding: "utf8",
+        timeout: 10000,
+        windowsHide: true,
+      },
+    ).trim();
+    return out === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function isUpdateInProgress(installRoot?: string | null): boolean {
   refreshUpdateLockState();
-  const lockPath = updateLockPath();
-  return fs.existsSync(lockPath) && !isUpdateLockStale(lockPath);
+  return isActiveUpdateLock(installRoot);
 }
 
 export function resolveInstallRoot(isPackaged: boolean): string | null {
@@ -614,7 +824,8 @@ export class UpdateManager {
       logPath: updateLogPath(this.homeDir),
       stagingReady: !!this.stagedExtractDir && !!this.stagedVersion,
       stagedVersion: this.stagedVersion,
-      updateInProgress: isUpdateInProgress() || this.downloadInFlight,
+      updateInProgress:
+        isUpdateInProgress(installRoot) || this.downloadInFlight,
     };
   }
 
@@ -830,14 +1041,17 @@ export class UpdateManager {
     stagingDir: string,
     oldVersion: string,
     newVersion: string,
+    keepBackup: boolean = false,
   ): string {
     const scriptPath = path.join(masonJarTempRoot(), "apply-update.ps1");
     const logPath = updateLogPath(this.homeDir);
     const fallbackLogPath = updateFallbackLogPath();
-    const backupDir = `${installRoot}.backup-${oldVersion}`;
+    const backupDir = versionBackupDirName(installRoot, oldVersion);
     const exePath = path.join(installRoot, "masonjar.exe");
     const lockPath = updateLockPath();
     const pkgPath = path.join(installRoot, "package.json");
+    const stagingExe = path.join(stagingDir, "masonjar.exe");
+    const keepBackupLiteral = keepBackup ? "$true" : "$false";
 
     const ps1 = `
 $ErrorActionPreference = 'Stop'
@@ -845,11 +1059,13 @@ $LogPath = '${logPath.replace(/'/g, "''")}'
 $FallbackLogPath = '${fallbackLogPath.replace(/'/g, "''")}'
 $InstallRoot = '${installRoot.replace(/'/g, "''")}'
 $StagingDir = '${stagingDir.replace(/'/g, "''")}'
+$StagingExe = '${stagingExe.replace(/'/g, "''")}'
 $BackupDir = '${backupDir.replace(/'/g, "''")}'
 $ExePath = '${exePath.replace(/'/g, "''")}'
 $LockPath = '${lockPath.replace(/'/g, "''")}'
 $PkgPath = '${pkgPath.replace(/'/g, "''")}'
 $TargetVersion = '${newVersion.replace(/'/g, "''")}'
+$KeepBackup = ${keepBackupLiteral}
 $Elevated = $args -contains '-Elevated'
 
 function Write-Log([string]$Message) {
@@ -868,25 +1084,45 @@ function Write-Log([string]$Message) {
   }
 }
 
+function Get-InstallProcesses {
+  $procs = @()
+  try {
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name='masonjar.exe'" -ErrorAction Stop |
+      Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $ExePath) })
+  } catch {
+    Write-Log 'WARN: CIM process query failed; falling back to Get-Process by name'
+    $procs = @(Get-Process -Name masonjar -ErrorAction SilentlyContinue)
+  }
+  return @($procs)
+}
+
 function Wait-InstallProcesses {
   $deadline = (Get-Date).AddMinutes(5)
-  $warnedFallback = $false
   while ((Get-Date) -lt $deadline) {
-    $procs = @()
-    try {
-      $procs = @(Get-CimInstance Win32_Process -Filter "Name='masonjar.exe'" -ErrorAction Stop |
-        Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $ExePath) })
-    } catch {
-      if (-not $warnedFallback) {
-        Write-Log 'WARN: CIM process query failed; waiting on any masonjar process'
-        $warnedFallback = $true
-      }
-      $procs = @(Get-Process -Name masonjar -ErrorAction SilentlyContinue)
+    $procs = Get-InstallProcesses
+    if (-not $procs -or $procs.Count -eq 0) {
+      Start-Sleep -Seconds 2
+      return
     }
-    if (-not $procs -or $procs.Count -eq 0) { break }
     Start-Sleep -Milliseconds 500
   }
+  $still = Get-InstallProcesses
+  if ($still -and $still.Count -gt 0) {
+    throw "Mason Jar is still running after waiting 5 minutes; aborting update to avoid replacing files in use. Close all instances and try again."
+  }
   Start-Sleep -Seconds 2
+}
+
+function Assert-UpdatePaths {
+  if (-not (Test-Path -LiteralPath $InstallRoot)) {
+    throw "Install folder was moved or deleted: $InstallRoot"
+  }
+  if (-not (Test-Path -LiteralPath $StagingDir)) {
+    throw "Staged update folder was moved or deleted: $StagingDir"
+  }
+  if (-not (Test-Path -LiteralPath $StagingExe)) {
+    throw "Staged update is missing masonjar.exe"
+  }
 }
 
 function Invoke-RobocopyChecked([string]$Source, [string]$Dest, [string]$Label) {
@@ -902,6 +1138,7 @@ function Merge-WithRetries {
   param([int]$MaxAttempts = 3)
   for ($i = 1; $i -le $MaxAttempts; $i++) {
     try {
+      Assert-UpdatePaths
       Write-Log "Merge attempt $i from $StagingDir"
       Invoke-RobocopyChecked -Source $StagingDir -Dest $InstallRoot -Label "merge"
       return
@@ -914,8 +1151,9 @@ function Merge-WithRetries {
 }
 
 try {
-  Write-Log "Apply update started (elevated=$Elevated) ${oldVersion} -> ${newVersion}"
+  Write-Log "Apply update started (elevated=$Elevated keepBackup=$KeepBackup) ${oldVersion} -> ${newVersion}"
   Wait-InstallProcesses
+  Assert-UpdatePaths
 
   if (-not $Elevated) {
     $probe = Join-Path $InstallRoot '.masonjar_update_write_probe'
@@ -933,21 +1171,36 @@ try {
     }
   }
 
-  if (Test-Path -LiteralPath $BackupDir) {
-    Remove-Item -LiteralPath $BackupDir -Recurse -Force
+  Assert-UpdatePaths
+  if ($KeepBackup) {
+    if (Test-Path -LiteralPath $BackupDir) {
+      Remove-Item -LiteralPath $BackupDir -Recurse -Force
+    }
+    Write-Log "Backing up to $BackupDir"
+    Invoke-RobocopyChecked -Source $InstallRoot -Dest $BackupDir -Label "backup"
+  } else {
+    Write-Log 'Skipping version backup (keep_version_backups=false)'
   }
-  Write-Log "Backing up to $BackupDir"
-  Invoke-RobocopyChecked -Source $InstallRoot -Dest $BackupDir -Label "backup"
 
   Merge-WithRetries
 
+  $mergeOk = $false
   if (Test-Path -LiteralPath $PkgPath) {
     $pkgText = Get-Content -LiteralPath $PkgPath -Raw
     if ($pkgText -notmatch ('"version"\\s*:\\s*"' + [regex]::Escape($TargetVersion) + '"')) {
-      Write-Log "WARN: package.json after merge does not report version $TargetVersion"
+      Write-Log "ERROR: package.json after merge does not report version $TargetVersion; not relaunching"
+      throw "package.json version mismatch after merge"
     } else {
       Write-Log "Verified package.json version $TargetVersion"
+      $mergeOk = $true
     }
+  } else {
+    Write-Log 'ERROR: package.json missing after merge; not relaunching'
+    throw "package.json missing after merge"
+  }
+
+  if (-not $mergeOk) {
+    throw "Merge verification failed"
   }
 
   Write-Log 'Relaunching Mason Jar'
@@ -962,6 +1215,7 @@ try {
   Write-Log 'Apply update finished successfully'
 } catch {
   Write-Log "Apply update failed: $($_.Exception.Message)"
+  Write-Log "See update log for details. Re-open Mason Jar and try Update Now, or install the zip manually from GitHub."
   exit 1
 } finally {
   if (Test-Path -LiteralPath $LockPath) {
@@ -973,6 +1227,20 @@ try {
     fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
     fs.writeFileSync(scriptPath, ps1, "utf8");
     return scriptPath;
+  }
+
+  refuseIfOtherInstances(installRoot: string | null): {
+    ok: boolean;
+    error?: string;
+  } {
+    if (!installRoot) {
+      return { ok: true };
+    }
+    const others = countOtherMasonJarInstances(installRoot);
+    if (others > 0) {
+      return { ok: false, error: CLOSE_OTHER_INSTANCES_MESSAGE };
+    }
+    return { ok: true };
   }
 
   prepareWindowsApply(): {
@@ -988,23 +1256,34 @@ try {
       };
     }
     refreshUpdateLockState();
-    const lockPath = updateLockPath();
-    if (fs.existsSync(lockPath)) {
+    const installRoot = resolveInstallRoot(this.isPackaged);
+    if (isActiveUpdateLock(installRoot)) {
       return { ok: false, error: "Another update is already in progress." };
     }
-    const installRoot = resolveInstallRoot(this.isPackaged);
+    const peers = this.refuseIfOtherInstances(installRoot);
+    if (!peers.ok) {
+      return peers;
+    }
     if (!installRoot || !this.stagedExtractDir || !this.stagedVersion) {
       return { ok: false, error: "Download and extract an update first." };
+    }
+    if (!fs.existsSync(installRoot)) {
+      return {
+        ok: false,
+        error: "Install folder was moved or deleted.",
+      };
     }
     if (!fs.existsSync(path.join(this.stagedExtractDir, "masonjar.exe"))) {
       return { ok: false, error: "Staged update is missing masonjar.exe." };
     }
 
+    const prefs = this.getPreferences();
     const scriptPath = this.writeApplyScript(
       installRoot,
       this.stagedExtractDir,
       this.currentVersion,
       this.stagedVersion,
+      !!prefs.keep_version_backups,
     );
     return { ok: true, scriptPath, stagedVersion: this.stagedVersion };
   }
@@ -1053,7 +1332,10 @@ try {
           finish({ ok: false, error: "Failed to start updater process" });
           return;
         }
-        writeUpdateLock(stagedVersion);
+        writeUpdateLock(stagedVersion, {
+          installRoot,
+          applyPid: child.pid,
+        });
         appendUpdateLogLine(this.homeDir, `Updater detached pid=${child.pid}`);
         setTimeout(() => {
           if (settled) {
@@ -1076,6 +1358,22 @@ try {
     quit: () => void,
   ): Promise<{ ok: boolean; error?: string; lockCleared?: boolean }> {
     const lockState = refreshUpdateLockState();
+    const installRoot = resolveInstallRoot(this.isPackaged);
+    if (isActiveUpdateLock(installRoot)) {
+      return {
+        ok: false,
+        error: "Another update is already in progress.",
+        lockCleared: lockState.clearedStale || lockState.clearedOrphan,
+      };
+    }
+    const peers = this.refuseIfOtherInstances(installRoot);
+    if (!peers.ok) {
+      return {
+        ...peers,
+        lockCleared: lockState.clearedStale || lockState.clearedOrphan,
+      };
+    }
+
     const latest = this.cachedCheck?.latest;
     if (!this.isStagingReadyForVersion(latest)) {
       this.restoreStagedFromDisk(latest);
@@ -1085,7 +1383,10 @@ try {
       const download = await this.downloadWindowsUpdate(onProgress);
       if (!download.ok) {
         releaseUpdateLock();
-        return download;
+        return {
+          ...download,
+          lockCleared: lockState.clearedStale || lockState.clearedOrphan,
+        };
       }
     } else {
       onProgress(100, "Using downloaded update…");
@@ -1095,7 +1396,10 @@ try {
     const prepared = this.prepareWindowsApply();
     if (!prepared.ok) {
       releaseUpdateLock();
-      return prepared;
+      return {
+        ...prepared,
+        lockCleared: lockState.clearedStale || lockState.clearedOrphan,
+      };
     }
     const applied = await this.launchApplyAndQuit(
       prepared.scriptPath!,

@@ -234,7 +234,9 @@ function refreshFromMain(useCacheOnly) {
 
 function savePreferencesAndRefresh() {
 	var allowEl = qs("allowPrerelease");
+	var keepEl = qs("keepVersionBackups");
 	var allow = allowEl ? !!allowEl.checked : false;
+	var keepBackups = keepEl ? !!keepEl.checked : false;
 	try {
 		localStorage.setItem(LS_ALLOW_PRERELEASE, allow ? "1" : "0");
 	} catch (_e) {
@@ -242,9 +244,119 @@ function savePreferencesAndRefresh() {
 	}
 	setFeedback("");
 	return ipc
-		.invoke("saveUpdatePreferences", { allowPrerelease: allow })
+		.invoke("saveUpdatePreferences", {
+			allowPrerelease: allow,
+			keepVersionBackups: keepBackups,
+		})
 		.then(function () {
 			return refreshFromMain(false);
+		});
+}
+
+function restoreKeepBackupsToggle(prefs) {
+	var keepEl = qs("keepVersionBackups");
+	if (!keepEl) {
+		return;
+	}
+	keepEl.checked = !!(prefs && prefs.keep_version_backups);
+}
+
+function refreshVersionBackupsStatus() {
+	var statusEl = qs("versionBackupsStatus");
+	var deleteBtn = qs("deleteVersionBackupsBtn");
+	return ipc
+		.invoke("listVersionBackups")
+		.then(function (result) {
+			var backups = (result && result.backups) || [];
+			var n = backups.length;
+			if (statusEl) {
+				if (!result || !result.installRoot) {
+					statusEl.textContent =
+						"Backup cleanup is available in the packaged Windows app.";
+				} else if (n === 0) {
+					statusEl.textContent = "No version backup folders found.";
+				} else {
+					statusEl.textContent =
+						n === 1
+							? "1 backup folder found."
+							: n + " backup folders found.";
+				}
+			}
+			if (deleteBtn) {
+				deleteBtn.disabled = !n || state.busy || state.mandatory;
+			}
+			return backups;
+		})
+		.catch(function () {
+			if (statusEl) {
+				statusEl.textContent = "Could not list version backups.";
+			}
+			if (deleteBtn) {
+				deleteBtn.disabled = true;
+			}
+			return [];
+		});
+}
+
+function onDeleteVersionBackupsClick() {
+	if (state.busy || state.mandatory) {
+		return;
+	}
+	ipc
+		.invoke("listVersionBackups")
+		.then(function (result) {
+			var backups = (result && result.backups) || [];
+			if (!backups.length) {
+				setFeedback("No version backup folders to delete.");
+				return refreshVersionBackupsStatus();
+			}
+			var preview = backups
+				.slice(0, 5)
+				.map(function (p) {
+					return p;
+				})
+				.join("\n");
+			var more =
+				backups.length > 5 ? "\n…and " + (backups.length - 5) + " more" : "";
+			var ok = window.confirm(
+				"Delete " +
+					backups.length +
+					" version backup folder(s)?\n\n" +
+					preview +
+					more,
+			);
+			if (!ok) {
+				return null;
+			}
+			state.busy = true;
+			renderActionButtons();
+			return ipc.invoke("deleteVersionBackups").then(function (delResult) {
+				var deleted = (delResult && delResult.deleted) || [];
+				var errors = (delResult && delResult.errors) || [];
+				if (errors.length) {
+					setFeedback(
+						"Deleted " +
+							deleted.length +
+							"; errors: " +
+							errors.join("; "),
+						true,
+					);
+				} else {
+					setFeedback(
+						deleted.length
+							? "Deleted " + deleted.length + " version backup folder(s)."
+							: "No version backup folders to delete.",
+					);
+				}
+				return refreshVersionBackupsStatus();
+			});
+		})
+		.catch(function (err) {
+			setFeedback(String(err && err.message ? err.message : err), true);
+		})
+		.finally(function () {
+			state.busy = false;
+			renderActionButtons();
 		});
 }
 
@@ -395,6 +507,8 @@ pageInit.onReady(function () {
 	var macBtn = qs("macDownloadBtn");
 	var releaseBtn = qs("openReleaseBtn");
 	var allowEl = qs("allowPrerelease");
+	var keepEl = qs("keepVersionBackups");
+	var deleteBackupsBtn = qs("deleteVersionBackupsBtn");
 	var logBtn = qs("openUpdateLogBtn");
 
 	if (checkBtn) {
@@ -409,6 +523,7 @@ pageInit.onReady(function () {
 				.finally(function () {
 					state.busy = false;
 					renderActionButtons();
+					refreshVersionBackupsStatus();
 				});
 		});
 	}
@@ -424,29 +539,38 @@ pageInit.onReady(function () {
 	if (logBtn) {
 		logBtn.addEventListener("click", openUpdateLog);
 	}
+	if (deleteBackupsBtn) {
+		deleteBackupsBtn.addEventListener("click", onDeleteVersionBackupsClick);
+	}
+	function onPrefToggleChange() {
+		if (state.mandatory) {
+			return;
+		}
+		state.busy = true;
+		renderActionButtons();
+		savePreferencesAndRefresh()
+			.catch(function (err) {
+				setFeedback(String(err && err.message ? err.message : err), true);
+			})
+			.finally(function () {
+				state.busy = false;
+				renderActionButtons();
+			});
+	}
 	if (allowEl) {
-		allowEl.addEventListener("change", function () {
-			if (state.mandatory) {
-				return;
-			}
-			state.busy = true;
-			renderActionButtons();
-			savePreferencesAndRefresh()
-				.catch(function (err) {
-					setFeedback(String(err && err.message ? err.message : err), true);
-				})
-				.finally(function () {
-					state.busy = false;
-					renderActionButtons();
-				});
-		});
+		allowEl.addEventListener("change", onPrefToggleChange);
+	}
+	if (keepEl) {
+		keepEl.addEventListener("change", onPrefToggleChange);
 	}
 
 	ipc
 		.invoke("getUpdateStatus")
 		.then(function (payload) {
 			restorePrereleaseToggle(payload && payload.preferences);
+			restoreKeepBackupsToggle(payload && payload.preferences);
 			applyStatusPayload(payload);
+			refreshVersionBackupsStatus();
 			if (openedFromMandatoryUpdate() || (payload && payload.mandatoryUpdateActive)) {
 				return ipc.invoke("checkLatestStableRelease").then(function (stablePayload) {
 					applyStatusPayload(stablePayload);

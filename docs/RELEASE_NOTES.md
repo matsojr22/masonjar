@@ -6,6 +6,25 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.19
+
+**What's new**
+
+- **Windows Update Now restart:** Installing an update no longer asks “Quit Mason Jar?” in the middle of the install. Canceling that prompt could leave the updater waiting while the app stayed open, so Mason Jar did not reopen until you quit manually.
+- **Safer updates:** Only one Mason Jar window runs at a time. If another copy is open from the same install folder, Update Now asks you to close it first. A second launch while an update is installing is blocked. If Mason Jar is still running after the updater waits, the install aborts instead of replacing files in use.
+- **Version backups optional:** Updates no longer copy a full backup of the install folder by default. Settings → Updates has **Keep version backups** (off by default) and **Delete old version backups** to remove prior `….backup-<version>` folders.
+- Portable installs may live in any folder name (including Explorer’s versioned unzip folder such as `masonjar-win32-x64-6.0.16`); updates still replace files in place.
+
+**Commit subject**
+
+Harden Windows updater quit, instances, and optional backups
+
+**Commit body**
+
+Skip quit confirmation during update apply, enforce single-instance and fail-closed process wait, and make version backups opt-in with cleanup on Settings → Updates.
+
+---
+
 ## v6.0.18
 
 **What's new**

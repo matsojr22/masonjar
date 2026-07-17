@@ -119,13 +119,22 @@ function testUpdatePreferencesRoundTrip() {
 	const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "mj-update-prefs-"));
 	try {
 		const loaded = updateManager.loadUpdatePreferences(tmpHome);
-		assert(!loaded.allow_prerelease, "default off");
+		assert(!loaded.allow_prerelease, "default prerelease off");
+		assert(!loaded.keep_version_backups, "default backups off");
 		const saved = updateManager.saveUpdatePreferences(tmpHome, {
 			allow_prerelease: true,
+			keep_version_backups: true,
 		});
-		assert(saved.allow_prerelease, "saved on");
+		assert(saved.allow_prerelease, "saved prerelease on");
+		assert(saved.keep_version_backups, "saved backups on");
 		const again = updateManager.loadUpdatePreferences(tmpHome);
-		assert(again.allow_prerelease, "read back on");
+		assert(again.allow_prerelease, "read back prerelease on");
+		assert(again.keep_version_backups, "read back backups on");
+		const partial = updateManager.saveUpdatePreferences(tmpHome, {
+			allow_prerelease: false,
+		});
+		assert(!partial.allow_prerelease, "prerelease cleared");
+		assert(partial.keep_version_backups, "backups preserved on partial save");
 	} finally {
 		fs.rmSync(tmpHome, { recursive: true, force: true });
 	}
@@ -133,13 +142,14 @@ function testUpdatePreferencesRoundTrip() {
 
 function testBuildApplySpawnCommand() {
 	const spec = updateManager.buildApplySpawnCommand("C:\\Temp\\apply-update.ps1");
-	assert(spec.command === "cmd.exe", "cmd spawn");
-	assert(spec.args.includes("start"), "start via cmd");
-	assert(spec.args.includes("powershell.exe"), "powershell in chain");
+	assert(spec.command === "powershell.exe", "powershell spawn");
+	assert(spec.args.includes("-File"), "file arg");
+	assert(spec.args.includes("-WindowStyle"), "hidden window");
 	assert(
 		spec.args[spec.args.length - 1] === "C:\\Temp\\apply-update.ps1",
 		"script path last arg",
 	);
+	assert(!spec.args.includes("cmd.exe"), "no cmd wrapper");
 }
 
 function testAppendUpdateLogLine() {
@@ -170,12 +180,22 @@ function testUpdateLockLifecycle() {
 		const mgr = new updateManager.UpdateManager(tmpHome, "6.0.3", true);
 		mgr.stagedExtractDir = staging;
 		mgr.stagedVersion = "6.0.4";
-		const prepared = mgr.prepareWindowsApply();
-		assert(prepared.ok, "prepare without pre-write lock");
-		assert(!fs.existsSync(lockPath), "prepare does not write lock");
+		if (process.platform === "win32") {
+			const prepared = mgr.prepareWindowsApply();
+			assert(prepared.ok, "prepare without pre-write lock");
+			assert(!fs.existsSync(lockPath), "prepare does not write lock");
+		}
 
-		updateManager.writeUpdateLock("6.0.4");
+		updateManager.writeUpdateLock("6.0.4", {
+			installRoot: "C:\\Apps\\masonjar",
+		});
 		assert(fs.existsSync(lockPath), "writeUpdateLock creates lock");
+		const payload = updateManager.readUpdateLock();
+		assert(payload && payload.version === "6.0.4", "readUpdateLock version");
+		assert(
+			payload.installRoot === "C:\\Apps\\masonjar",
+			"readUpdateLock installRoot",
+		);
 		updateManager.releaseUpdateLock();
 		assert(!fs.existsSync(lockPath), "releaseUpdateLock clears lock");
 
@@ -185,10 +205,24 @@ function testUpdateLockLifecycle() {
 		assert(updateManager.clearStaleUpdateLock(), "clearStaleUpdateLock");
 		assert(!fs.existsSync(lockPath), "stale lock removed");
 
+		// Fresh lock without applyPid must NOT be cleared as orphan (Settings open).
 		updateManager.writeUpdateLock("6.0.4");
-		const orphanTime = Date.now() - 5000;
+		const freshTime = Date.now() - 5000;
+		fs.utimesSync(lockPath, freshTime / 1000, freshTime / 1000);
+		assert(
+			!updateManager.clearOrphanUpdateLock(),
+			"fresh lock without dead applyPid is not orphan-cleared",
+		);
+		assert(fs.existsSync(lockPath), "fresh lock still present");
+
+		// Dead applyPid + age past handoff window → clear orphan.
+		updateManager.writeUpdateLock("6.0.4", { applyPid: 2147483000 });
+		const orphanTime = Date.now() - 120_000;
 		fs.utimesSync(lockPath, orphanTime / 1000, orphanTime / 1000);
-		assert(updateManager.clearOrphanUpdateLock(), "clearOrphanUpdateLock");
+		assert(
+			updateManager.clearOrphanUpdateLock(),
+			"clearOrphanUpdateLock for dead applyPid",
+		);
 		assert(!fs.existsSync(lockPath), "orphan lock removed");
 	} finally {
 		updateManager.releaseUpdateLock();
@@ -212,14 +246,70 @@ function testApplyScriptContent() {
 			staging,
 			"6.0.0",
 			"6.0.2",
+			false,
 		);
 		const ps1 = fs.readFileSync(scriptPath, "utf8");
 		assert(ps1.indexOf("Win32_Process") >= 0, "CIM process wait");
 		assert(ps1.indexOf("Merge-WithRetries") >= 0, "merge retries");
 		assert(ps1.indexOf(".Path -eq") < 0, "no Get-Process Path filter");
 		assert(ps1.indexOf("FallbackLogPath") >= 0, "fallback log");
+		assert(ps1.indexOf("Assert-UpdatePaths") >= 0, "path preflight");
+		assert(
+			ps1.indexOf("still running after waiting 5 minutes") >= 0,
+			"fail-closed wait",
+		);
+		assert(ps1.indexOf("$KeepBackup = $false") >= 0, "backup off by default");
+		assert(
+			ps1.indexOf("Skipping version backup") >= 0,
+			"skip backup log when off",
+		);
+
+		const withBackup = mgr.writeApplyScript(
+			installRoot,
+			staging,
+			"6.0.0",
+			"6.0.2",
+			true,
+		);
+		const ps1b = fs.readFileSync(withBackup, "utf8");
+		assert(ps1b.indexOf("$KeepBackup = $true") >= 0, "backup on when requested");
+		assert(ps1b.indexOf("Backing up to") >= 0, "backup robocopy path");
 	} finally {
 		fs.rmSync(tmpHome, { recursive: true, force: true });
+	}
+}
+
+function testVersionBackupHelpers() {
+	const os = require("os");
+	const fs = require("fs");
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mj-update-bak-"));
+	const installRoot = path.join(tmp, "masonjar-win32-x64-6.0.16");
+	fs.mkdirSync(installRoot, { recursive: true });
+	const bak1 = `${installRoot}.backup-6.0.15`;
+	const bak2 = `${installRoot}.backup-6.0.14`;
+	const decoy = path.join(tmp, "other.backup-6.0.15");
+	fs.mkdirSync(bak1, { recursive: true });
+	fs.mkdirSync(bak2, { recursive: true });
+	fs.mkdirSync(decoy, { recursive: true });
+	try {
+		const listed = updateManager.listInstallVersionBackups(installRoot);
+		assert(listed.length === 2, "lists two matching backups");
+		assert(
+			listed.every(function (p) {
+				return p.indexOf("masonjar-win32-x64-6.0.16.backup-") >= 0;
+			}),
+			"only same install basename backups",
+		);
+		const del = updateManager.deleteInstallVersionBackups(installRoot);
+		assert(del.ok, "delete ok");
+		assert(del.deleted.length === 2, "deleted both");
+		assert(
+			updateManager.listInstallVersionBackups(installRoot).length === 0,
+			"none left",
+		);
+		assert(fs.existsSync(decoy), "unrelated decoy kept");
+	} finally {
+		fs.rmSync(tmp, { recursive: true, force: true });
 	}
 }
 
@@ -292,6 +382,7 @@ function run() {
 	testAppendUpdateLogLine();
 	testUpdateLockLifecycle();
 	testApplyScriptContent();
+	testVersionBackupHelpers();
 	testIsMandatoryUpdateRequired();
 	testCountOtherMasonJarInstancesFromList();
 	console.log("test-update-manager: ok");
