@@ -64,6 +64,22 @@ function buildTag() {
     }
     return cachedBuildTag;
 }
+/** Terminate the long-lived worker process so in-process runpy jobs cannot continue. */
+function hardStopWorker() {
+    const shell = workerShell;
+    workerShell = null;
+    workerReady = false;
+    workerStartPromise = null;
+    if (!shell) {
+        return;
+    }
+    try {
+        shell.kill();
+    }
+    catch (_err) {
+        // ignore
+    }
+}
 function invokeKill(record) {
     var _a;
     try {
@@ -73,7 +89,16 @@ function invokeKill(record) {
         // ignore
     }
     if (record.via === "worker") {
+        // Cooperative flag first (harmless if script ignores it).
         sendWorker({ cmd: "cancel", id: record.jobId });
+        const pending = workerPending.get(record.jobId);
+        if (pending) {
+            workerPending.delete(record.jobId);
+            finalizeJob(record, { err: new Error("cancelled"), code: 1, signal: "SIGTERM" }, pending.homeDir);
+        }
+        // Hard-stop: masonjar_worker runs scripts in-process via runpy; cancel alone
+        // cannot preempt blocked CZI/IO. Kill the worker so writes stop promptly.
+        hardStopWorker();
         return;
     }
     const shell = record.pyshell;

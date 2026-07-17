@@ -6,6 +6,29 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.18
+
+**What's new**
+
+- **CZI Cancel extraction:** Cancel now stops a running CZI import promptly (including long mosaic reads). Previously the Cancel button could appear to do nothing while Python kept writing files.
+- **Orient after Repair previews:** After repairing missing previews from the Orient step, the wizard returns to Orient instead of leaving you stuck on Extract with no Next button. A **Continue to Orient** control is also available on Extract if needed.
+- **Pending orientation saved as you edit:** Rotate/flip choices on Orient are written to the project as you click, so they survive closing the wizard before Confirm geometry.
+- **Safer re-Extract:** If this project already finished a CZI extract, starting Extract again skips to Orient when outputs look complete, or asks for confirmation before overwriting.
+
+**Changes**
+
+- Worker kill for CZI jobs terminates the Python worker process so in-progress extract cannot continue after Cancel.
+
+**Commit subject**
+
+Stop CZI Cancel hanging and return Orient after preview repair
+
+**Commit body**
+
+Cancel now hard-stops the Python worker so CZI extract stops writing. Orient repair returns to Orient; pending geometry persists; full re-extract is guarded when import is already complete.
+
+---
+
 ## v6.0.17
 
 **What's new**

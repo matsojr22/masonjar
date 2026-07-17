@@ -44,6 +44,7 @@ const DOM_ASSERTIONS = {
 		"renamingTableBody",
 		"channelTableBody",
 		"step3Next",
+		"step4Continue",
 		"reextractSliceList",
 		"reextractChannelList",
 		"reextractConfirmTable",

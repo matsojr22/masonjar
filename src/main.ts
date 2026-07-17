@@ -3211,6 +3211,14 @@ function runCziPythonScript(
       return;
     }
     if (err) {
+      const errMsg =
+        err instanceof Error
+          ? err.message
+          : String((err as { message?: string })?.message ?? err);
+      if (/^cancelled$/i.test(errMsg.trim())) {
+        sendCziResult({ ok: false, error: "cancelled" });
+        return;
+      }
       log(err);
       sendCziResult({ ok: false, error: String(err) });
       return;

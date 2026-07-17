@@ -2718,6 +2718,7 @@ function runCziPythonScript(event, scriptName, args, killChannel, resultChannel)
         }
     }
     void job.wait().then(({ err, code, signal }) => {
+        var _a;
         if (resultSent) {
             releaseActiveCziShell();
             cleanupPythonKillListener(killChannel);
@@ -2727,6 +2728,13 @@ function runCziPythonScript(event, scriptName, args, killChannel, resultChannel)
             return;
         }
         if (err) {
+            const errMsg = err instanceof Error
+                ? err.message
+                : String((_a = err === null || err === void 0 ? void 0 : err.message) !== null && _a !== void 0 ? _a : err);
+            if (/^cancelled$/i.test(errMsg.trim())) {
+                sendCziResult({ ok: false, error: "cancelled" });
+                return;
+            }
             log(err);
             sendCziResult({ ok: false, error: String(err) });
             return;

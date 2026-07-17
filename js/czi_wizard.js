@@ -227,6 +227,9 @@ function setStep(step) {
 	window.scrollTo(0, 0);
 	updateWizardCancelVisibility();
 	updateOrientStepChrome();
+	if (step !== 4) {
+		setStep4ContinueVisible(false);
+	}
 	if (step === 5) {
 		hydrateReextractOrientFromSettings();
 		populateOrientDisplayChannelSelect();
@@ -527,6 +530,13 @@ function setExtractNavDisabled(disabled) {
 	}
 	if (!disabled) {
 		setStep(wizardState.step);
+	}
+}
+
+function setStep4ContinueVisible(visible) {
+	var btn = qs("step4Continue");
+	if (btn) {
+		btn.classList.toggle("d-none", !visible);
 	}
 }
 
@@ -1659,8 +1669,8 @@ async function runOrientPreviewRepair() {
 	);
 	try {
 		await runExtract({ repairOnly: true });
-		updateOrientPreviewBanner();
-		renderOrientationGrid();
+		// runExtract shows step 4 while the job runs; return to Orient afterward.
+		setStep(5);
 	} finally {
 		wizardState.repairMode = false;
 		wizardState.repairTargets = [];
@@ -1753,6 +1763,7 @@ function renderOrientationGrid() {
 		function () {
 			updateOrientStepChrome();
 			updateOrientPreviewBanner();
+			persistCziSettings();
 		},
 		isReextractPartialOrient()
 			? function (sliceId, geom) {
@@ -2281,8 +2292,62 @@ async function ensureBundleCreated() {
 	project.openProject(wizardState.bundleRoot);
 }
 
+/**
+ * Prevent accidental full re-extract that overwrites an already-complete import.
+ * Returns a skip payload, delegates to preview repair, or null to proceed.
+ */
+function guardAgainstAccidentalFullExtract(options) {
+	options = options || {};
+	if (options.repairOnly || options.forceFullExtract || options.mode === "reextract") {
+		return null;
+	}
+	if (!wizardState.bundleRoot || !fs.existsSync(wizardState.bundleRoot)) {
+		return null;
+	}
+	var audit = cziImport.auditCziImportCompletion(wizardState.bundleRoot, wizardState.cziImport, {
+		importResult: wizardState.importResult,
+	});
+	if (audit.canSkipToOrient) {
+		verboseExtractLog(
+			"Extract already complete on disk — skipping full re-import and opening Orient.",
+		);
+		setStep(5);
+		return { ok: true, skipped: true, reason: "already_complete" };
+	}
+	if (audit.extractComplete && audit.needsPreviewRepair) {
+		verboseExtractLog(
+			"Extract already complete; running preview repair instead of full re-import.",
+		);
+		wizardState.repairMode = "previews";
+		wizardState.repairTargets = cziImport.buildRepairTargetsFromAudit(
+			audit,
+			wizardState.cziImport,
+		);
+		return { redirectRepair: true };
+	}
+	if (audit.extractComplete) {
+		var msg =
+			"This project already has a completed CZI extract.\n\n" +
+			"Running Extract again will overwrite z-stacks, previews, and max projections.\n\n" +
+			"Click OK only if you intend to re-import everything. Click Cancel to keep existing files.";
+		if (!confirm(msg)) {
+			verboseExtractLog("Full re-import cancelled — existing extract left unchanged.");
+			throw new Error("Extract cancelled — existing import left unchanged.");
+		}
+		verboseExtractLog("User confirmed full re-import over existing extract outputs.");
+	}
+	return null;
+}
+
 async function runExtract(options) {
 	options = options || {};
+	var guard = guardAgainstAccidentalFullExtract(options);
+	if (guard && guard.skipped) {
+		return guard;
+	}
+	if (guard && guard.redirectRepair) {
+		return runExtract({ repairOnly: true });
+	}
 	extractRunning = true;
 	if (!options.repairOnly) {
 		wizardState.repairMode = false;
@@ -2301,6 +2366,7 @@ async function runExtract(options) {
 	if (cancelBtn) {
 		cancelBtn.classList.remove("d-none");
 	}
+	setStep4ContinueVisible(false);
 	setExtractNavDisabled(true);
 	updateWizardCancelVisibility();
 	var startLabel = "Starting CZI extraction…";
@@ -2354,7 +2420,7 @@ async function runExtract(options) {
 			var displayPct = mapExtractDisplayPct(rawPct, message);
 			setExtractActivity(formatExtractStatus(rawPct, message), displayPct);
 		}
-		function finishExtractNav() {
+		function finishExtractNav(showContinue) {
 			extractRunning = false;
 			clearExtractWaitTimers();
 			setExtractNavDisabled(false);
@@ -2362,19 +2428,28 @@ async function runExtract(options) {
 			if (cancelBtn) {
 				cancelBtn.classList.add("d-none");
 			}
+			if (showContinue && wizardState.step === 4) {
+				setStep4ContinueVisible(true);
+			}
 		}
 		function onResult(ev, payload) {
 			ipc.removeListener("updateLoad", onProgress);
 			ipc.removeListener("cziJobLog", onJobLog);
 			ipc.removeListener("cziImportResult", onResult);
-			finishExtractNav();
 			if (!payload || payload.ok === false) {
+				finishExtractNav(false);
 				var errMsg = (payload && payload.error) || "Import failed";
-				setExtractActivity("Extract failed: " + errMsg, 0);
+				setExtractActivity(
+					/^cancelled$/i.test(String(errMsg))
+						? "Extraction cancelled."
+						: "Extract failed: " + errMsg,
+					0,
+				);
 				verboseExtractLog("ERROR: " + errMsg);
 				reject(new Error(errMsg));
 				return;
 			}
+			finishExtractNav(true);
 			wizardState.importResult = payload;
 			if (payload.max_runs) {
 				wizardState.cziImport.max_runs = payload.max_runs;
@@ -2833,6 +2908,13 @@ function bindStep3() {
 			})
 			.catch(function (err) {
 				console.error("[CziWizard]", err);
+				if (
+					err &&
+					(/Extract cancelled/.test(String(err.message || err)) ||
+						/^cancelled$/i.test(String(err.message || err)))
+				) {
+					return;
+				}
 				if (err && err.stack) {
 					verboseExtractLog(err.stack);
 				}
@@ -2848,6 +2930,16 @@ function bindStep4() {
 			verboseExtractLog("Cancelling extraction…");
 			setExtractActivity("Cancelling extraction…", null);
 			ipc.send("killCziImport");
+		});
+	}
+	var continueBtn = qs("step4Continue");
+	if (continueBtn) {
+		continueBtn.addEventListener("click", function () {
+			if (extractRunning) {
+				return;
+			}
+			setStep4ContinueVisible(false);
+			setStep(5);
 		});
 	}
 }
@@ -2888,6 +2980,7 @@ function bindStep5() {
 		updateOrientStepChrome();
 		renderOrientationGrid();
 		updateOrientPreviewBanner();
+		persistCziSettings();
 	});
 	qs("step5Next").addEventListener("click", function () {
 		runApplyGeometry().catch(function (err) {
