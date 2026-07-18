@@ -399,7 +399,7 @@ function lockMatchesInstall(
   return pathsEqualIgnoreCase(payload.installRoot, installRoot);
 }
 
-/** True when a non-stale lock exists and apply may still be running. */
+/** True when a non-stale lock exists and apply is actually running. */
 export function isActiveUpdateLock(
   installRoot?: string | null,
 ): boolean {
@@ -420,17 +420,7 @@ export function isActiveUpdateLock(
   if (isApplyScriptRunning()) {
     return true;
   }
-  if (payload.applyPid != null && !isProcessAlive(payload.applyPid)) {
-    return false;
-  }
-  // Fresh lock without a live apply process: still treat briefly as active
-  // so a relaunch during the quit→apply handoff does not race the script.
-  try {
-    const age = Date.now() - fs.statSync(lockPath).mtimeMs;
-    return age < 60_000;
-  } catch {
-    return true;
-  }
+  return false;
 }
 
 export function pathsEqualIgnoreCase(a: string, b: string): boolean {
@@ -1201,6 +1191,11 @@ try {
 
   if (-not $mergeOk) {
     throw "Merge verification failed"
+  }
+
+  if (Test-Path -LiteralPath $LockPath) {
+    Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+    Write-Log 'Released update.lock before relaunch'
   }
 
   Write-Log 'Relaunching Mason Jar'

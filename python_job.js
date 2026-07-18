@@ -132,7 +132,10 @@ exports.WORKER_ALLOWLIST = new Set([
     "annotation_label_audit.py",
 ]);
 /** GUI / interactive — always one-shot shell. */
-exports.FORCE_SHELL_SCRIPTS = new Set(["map.py", "adjust.py"]);
+exports.FORCE_SHELL_SCRIPTS = new Set([
+    "map.py",
+    "adjust.py",
+]);
 function envForWorker(env) {
     const out = {};
     for (const [k, v] of Object.entries(env)) {

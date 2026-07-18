@@ -45,6 +45,7 @@ import {
   UpdateManager,
   updateLogPath,
   refreshUpdateLockState,
+  releaseUpdateLock,
   isMandatoryUpdateRequired,
   countOtherMasonJarInstances,
   resolveInstallRoot,
@@ -75,46 +76,6 @@ function quitForUpdate() {
   isQuittingForUpdate = true;
   app.quit();
 }
-
-// Single-instance + refuse launch while an in-app update is applying.
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
-if (!gotSingleInstanceLock) {
-  const installRootEarly = app.isPackaged
-    ? path.dirname(process.execPath)
-    : null;
-  if (isActiveUpdateLock(installRootEarly)) {
-    try {
-      dialog.showErrorBox(
-        "Update in progress",
-        "Mason Jar is installing an update. Wait for it to finish and reopen automatically.",
-      );
-    } catch (_e) {
-      /* ignore */
-    }
-  }
-  app.exit(0);
-}
-
-app.on("second-instance", () => {
-  const installRoot = resolveInstallRoot(app.isPackaged);
-  if (isActiveUpdateLock(installRoot)) {
-    try {
-      dialog.showErrorBox(
-        "Update in progress",
-        "Mason Jar is installing an update. Wait for it to finish and reopen automatically.",
-      );
-    } catch (_e) {
-      /* ignore */
-    }
-    return;
-  }
-  if (win && !win.isDestroyed()) {
-    if (win.isMinimized()) {
-      win.restore();
-    }
-    win.focus();
-  }
-});
 
 /** Batch console mirroring to the log window to avoid IPC/DOM floods. */
 const LOG_UI_FLUSH_MS = 150;
@@ -1189,31 +1150,100 @@ function reportPythonFailure(pyFail: string | null) {
   console.error(pyFail);
 }
 
+function sendLoadingStatus(targetWin: typeof BrowserWindow | null, message: string) {
+  if (!targetWin || targetWin.isDestroyed()) {
+    return;
+  }
+  try {
+    targetWin.webContents.send("updateStatus", message);
+  } catch (_e) {
+    /* ignore */
+  }
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * If an in-app update apply is running, show the normal loading splash and wait
+ * until the lock clears — then continue bootstrap. No silent timer lock.
+ */
+async function waitForUpdateApplyIfNeeded(
+  targetWin: typeof BrowserWindow,
+): Promise<void> {
+  const installRoot = resolveInstallRoot(app.isPackaged);
+  refreshUpdateLockState();
+  if (!isActiveUpdateLock(installRoot)) {
+    releaseUpdateLock();
+    return;
+  }
+
+  try {
+    appendUpdateLogLine(
+      homeDir,
+      "Startup waiting: update.lock active — showing loading splash",
+    );
+  } catch (_e) {
+    /* ignore */
+  }
+
+  const started = Date.now();
+  let tick = 0;
+  while (isActiveUpdateLock(installRoot)) {
+    tick += 1;
+    const elapsedSec = Math.floor((Date.now() - started) / 1000);
+    const suffix =
+      elapsedSec > 0 ? ` (${elapsedSec}s)` : "";
+    sendLoadingStatus(
+      targetWin,
+      "Installing update — please wait…" + suffix,
+    );
+    if (tick % 6 === 0) {
+      refreshUpdateLockState();
+    }
+    await sleepMs(1000);
+    if (targetWin.isDestroyed()) {
+      return;
+    }
+  }
+
+  releaseUpdateLock();
+  sendLoadingStatus(targetWin, "Starting up…");
+  try {
+    appendUpdateLogLine(homeDir, "Startup: update.lock cleared — continuing");
+  } catch (_e) {
+    /* ignore */
+  }
+}
+
+function beginAppBootstrap(targetWin: typeof BrowserWindow) {
+  checkLocalDir();
+  ensureCoordinatorDir(ioFairshareDir);
+  void detectLinkMbps();
+  void maybeMigrateLegacyHome(targetWin).then((ok) => {
+    if (!ok) {
+      return;
+    }
+    setupPython(targetWin)
+      .then((installed) => {
+        if (installed) {
+          setupEnvironment(targetWin);
+        } else {
+          updatePythonDependencies(targetWin).then(() => {
+            fixMissingDirectories(targetWin).then(() => {
+              loadMenuAndCheckUpdates(targetWin);
+            });
+          });
+        }
+      })
+      .catch((error) => {
+        console.log(error);
+      });
+  });
+}
+
 app.on("ready", () => {
-  if (!gotSingleInstanceLock) {
-    return;
-  }
-  const installRootAtReady = resolveInstallRoot(app.isPackaged);
-  if (isActiveUpdateLock(installRootAtReady)) {
-    try {
-      dialog.showErrorBox(
-        "Update in progress",
-        "Mason Jar is installing an update. Wait for it to finish and reopen automatically.",
-      );
-    } catch (_e) {
-      /* ignore */
-    }
-    try {
-      appendUpdateLogLine(
-        homeDir,
-        "Startup refused: update.lock active for this install",
-      );
-    } catch (_e) {
-      /* ignore */
-    }
-    app.exit(0);
-    return;
-  }
   logUiQueue = [];
   if (logUiFlushTimer) {
     clearTimeout(logUiFlushTimer);
@@ -1256,28 +1286,11 @@ app.on("ready", () => {
   });
 
   win.webContents.once("did-finish-load", () => {
-    checkLocalDir();
-    ensureCoordinatorDir(ioFairshareDir);
-    void detectLinkMbps();
-    void maybeMigrateLegacyHome(win).then((ok) => {
-      if (!ok) {
+    void waitForUpdateApplyIfNeeded(win).then(() => {
+      if (!win || win.isDestroyed()) {
         return;
       }
-      setupPython(win)
-        .then((installed) => {
-          if (installed) {
-            setupEnvironment(win);
-          } else {
-            updatePythonDependencies(win).then(() => {
-              fixMissingDirectories(win).then(() => {
-                loadMenuAndCheckUpdates(win);
-              });
-            });
-          }
-        })
-        .catch((error) => {
-          console.log(error);
-        });
+      beginAppBootstrap(win);
     });
   });
 });

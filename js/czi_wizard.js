@@ -45,6 +45,8 @@ var extractLastPythonActivityAt = 0;
 var extractGapEmitted = false;
 var EXTRACT_LOG_MAX_LINES = 2000;
 var PROBE_TIMEOUT_MS = 60 * 60 * 1000;
+/** Full-folder retries when the shared Python worker dies mid-probe. */
+var PROBE_MAX_ATTEMPTS = 3;
 var PROBE_LOG_MAX_LINES = 1500;
 
 function sourceDirMatches(a, b) {
@@ -1957,9 +1959,13 @@ function updateExtractIndexNote(info) {
 	detail.textContent = note;
 }
 
-function probeSingleDir(dir, scanIndex, folderProgress) {
+function isWorkerExitedProbeError(err) {
+	var msg = String((err && err.message) || err || "").toLowerCase();
+	return msg.indexOf("worker exited") !== -1;
+}
+
+function probeSingleDirAttempt(dir, scanIndex, folderProgress) {
 	var status = qs("probeStatus");
-	dir = cziImport.canonicalSourceDir(dir);
 	return new Promise(function (resolve, reject) {
 		var settled = false;
 		var timeoutId = setTimeout(function () {
@@ -2033,6 +2039,39 @@ function probeSingleDir(dir, scanIndex, folderProgress) {
 		verboseProbeLog("Starting probe: " + dir);
 		ipc.send("runCziProbe", [dir]);
 	});
+}
+
+async function probeSingleDir(dir, scanIndex, folderProgress) {
+	dir = cziImport.canonicalSourceDir(dir);
+	var lastErr = null;
+	for (var attempt = 1; attempt <= PROBE_MAX_ATTEMPTS; attempt++) {
+		try {
+			return await probeSingleDirAttempt(dir, scanIndex, folderProgress);
+		} catch (err) {
+			lastErr = err;
+			if (!isWorkerExitedProbeError(err) || attempt >= PROBE_MAX_ATTEMPTS) {
+				throw err;
+			}
+			var nextAttempt = attempt + 1;
+			verboseProbeLog(
+				"Probe worker exited; retrying (" +
+					nextAttempt +
+					"/" +
+					PROBE_MAX_ATTEMPTS +
+					")…",
+			);
+			var status = qs("probeStatus");
+			if (status) {
+				status.textContent =
+					"Probe worker exited; retrying (" +
+					nextAttempt +
+					"/" +
+					PROBE_MAX_ATTEMPTS +
+					")…";
+			}
+		}
+	}
+	throw lastErr;
 }
 
 function warnZeroFilesAfterProbe(dir, folderNum, status) {

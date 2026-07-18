@@ -199,6 +199,13 @@ function testUpdateLockLifecycle() {
 		updateManager.releaseUpdateLock();
 		assert(!fs.existsSync(lockPath), "releaseUpdateLock clears lock");
 
+		// Fresh lock with no live apply is not "active" (no invisible timer).
+		updateManager.writeUpdateLock("6.0.4");
+		assert(
+			!updateManager.isActiveUpdateLock("C:\\Apps\\masonjar"),
+			"fresh lock without apply is not active",
+		);
+
 		updateManager.writeUpdateLock("6.0.4");
 		const staleTime = Date.now() - updateManager.UPDATE_LOCK_STALE_MS - 1000;
 		fs.utimesSync(lockPath, staleTime / 1000, staleTime / 1000);
@@ -257,6 +264,10 @@ function testApplyScriptContent() {
 		assert(
 			ps1.indexOf("still running after waiting 5 minutes") >= 0,
 			"fail-closed wait",
+		);
+		assert(
+			ps1.indexOf("Released update.lock before relaunch") >= 0,
+			"clears lock before relaunch",
 		);
 		assert(ps1.indexOf("$KeepBackup = $false") >= 0, "backup off by default");
 		assert(

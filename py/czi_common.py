@@ -1123,6 +1123,11 @@ def _read_mosaic_plane_primary(
     return plane
 
 
+def _is_unsupported_pixel_type_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "pixel type" in msg or "pixeltype" in msg or "unknown type" in msg
+
+
 def probe_channels_read(czi, scene: int = 0) -> tuple[list[dict[str, Any]], list[str]]:
     """Per-channel sparse-Z + sample read for CZI probe."""
     warnings: list[str] = []
@@ -1131,6 +1136,7 @@ def probe_channels_read(czi, scene: int = 0) -> tuple[list[dict[str, Any]], list
         pixel_type = str(getattr(czi, "pixel_type", "") or "")
     except Exception:
         pass
+    skip_sample = False
     z_total = len(z_indices_from_czi(czi))
     channel_pixel_probe: list[dict[str, Any]] = []
     for cidx in channel_indices_from_czi(czi):
@@ -1151,12 +1157,23 @@ def probe_channels_read(czi, scene: int = 0) -> tuple[list[dict[str, Any]], list
                 f"Channel {cidx}: {len(z_with_data)}/{z_total} Z plane(s) with data "
                 "(single-plane counterstain is normal)."
             )
+        if skip_sample:
+            entry["ok"] = False
+            entry["error"] = "sample read skipped (unsupported pixel type)"
+            channel_pixel_probe.append(entry)
+            continue
         try:
             read_czi_plane(czi, scene, sample_z, cidx, sample_scale=0.05)
         except Exception as exc:
             entry["ok"] = False
             entry["error"] = str(exc)
             warnings.append(f"Channel {cidx}: sample read failed — {exc}")
+            if _is_unsupported_pixel_type_error(exc):
+                skip_sample = True
+                warnings.append(
+                    "Pixel type unsupported by libCZI — skipping further sample "
+                    "reads for remaining channels."
+                )
         channel_pixel_probe.append(entry)
     return channel_pixel_probe, warnings
 
@@ -1186,7 +1203,14 @@ def read_czi_plane(
                 emit_log(
                     f"LOG: read_image fallback failed ({exc2}); trying tile composite"
                 )
-                plane = _read_mosaic_plane_from_tiles(czi, scene, z, channel)
+                try:
+                    plane = _read_mosaic_plane_from_tiles(czi, scene, z, channel)
+                except Exception as exc3:
+                    emit_log(f"LOG: tile composite failed ({exc3})")
+                    raise RuntimeError(
+                        f"all mosaic read paths failed: mosaic={exc}; "
+                        f"read_image={exc2}; tiles={exc3}"
+                    ) from exc3
     else:
         plane = _read_plane_from_read_image(
             czi, scene, z, channel, is_mosaic=False

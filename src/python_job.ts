@@ -186,7 +186,10 @@ export const WORKER_ALLOWLIST = new Set([
 ]);
 
 /** GUI / interactive — always one-shot shell. */
-export const FORCE_SHELL_SCRIPTS = new Set(["map.py", "adjust.py"]);
+export const FORCE_SHELL_SCRIPTS = new Set([
+  "map.py",
+  "adjust.py",
+]);
 
 function envForWorker(env: NodeJS.ProcessEnv): Record<string, string> {
   const out: Record<string, string> = {};

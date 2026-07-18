@@ -6,6 +6,24 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.21
+
+**What's new**
+
+- **Multiple windows:** You can open more than one Mason Jar at a time again (useful on shared lab machines). Updating still asks you to close other copies from the same install folder before Update Now runs.
+- **Update wait screen:** If you open Mason Jar while an update is installing, you see the usual startup screen with “Installing update — please wait…” until it is safe to continue — not a quit dialog or a silent wait.
+- **CZI import probe:** When a Zeiss file uses a pixel type libCZI cannot sample-read, probe records a warning and skips further sample reads for that file so the rest of the folder can finish. If the shared Python worker dies mid-probe (rare), Mason Jar automatically retries that folder up to two more times so you usually do not need to click Re-probe.
+
+**Commit subject**
+
+Restore multi-instance Mason Jar and harden update wait UX
+
+**Commit body**
+
+Allow multiple Mason Jar windows again, keep update.lock only while apply runs, and show the normal loading splash while an update installs. Also soft-fail CZI probe sample reads after unsupported PixelType errors and auto-retry folder probe when the shared worker exits.
+
+---
+
 ## v6.0.20
 
 **What's new**
