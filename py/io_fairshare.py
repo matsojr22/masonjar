@@ -466,6 +466,12 @@ def _install_patches() -> None:
 
 
 def deactivate() -> None:
+    """Stop heartbeat and remove this process's registry entry.
+
+    The long-lived masonjar_worker calls this after each runpy job so the next
+    script can activate() with a fresh MASONJAR_IO_JOB_ID. Also registered with
+    atexit for one-shot PythonShell processes.
+    """
     global _activated, _heartbeat_stop, _heartbeat_thread
     with _state_lock:
         if not _activated:
@@ -481,7 +487,12 @@ def deactivate() -> None:
 
 
 def activate() -> bool:
-    """Enable fair-share I/O patches for this Python process."""
+    """Enable fair-share I/O patches and register this job.
+
+    Reads MASONJAR_IO_JOB_ID / MASONJAR_IO_JOB_LABEL from the environment.
+    Idempotent while already activated (early return) — worker must
+    deactivate() between jobs so the next script can rebind id/label.
+    """
     global _activated, _job_id, _job_label, _coordinator_dir
     global _heartbeat_stop, _heartbeat_thread
     if not _env_enabled():

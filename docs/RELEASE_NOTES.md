@@ -6,6 +6,22 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.20
+
+**What's new**
+
+- **Network fair-share:** Finished pipeline jobs no longer keep counting toward the shared NAS bandwidth limit after they complete. Previously a finished tool could leave a “ghost” job in the fair-share list until you fully quit Mason Jar, which made active work look more throttled than it should.
+
+**Commit subject**
+
+Clear finished jobs from network fair-share when tools complete
+
+**Commit body**
+
+The long-lived Python worker now tears down fair-share registration after each tool so ghost jobs stop limiting bandwidth for everyone else.
+
+---
+
 ## v6.0.19
 
 **What's new**

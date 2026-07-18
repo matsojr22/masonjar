@@ -105,3 +105,29 @@ def test_throttled_tiff_imwrite_roundtrip(tmp_path: Path, coordinator: Path, mon
     loaded = tifffile.imread(path)
     np.testing.assert_array_equal(loaded, arr)
     io_fairshare.deactivate()
+
+
+def test_activate_deactivate_rebind_job_id(coordinator: Path, monkeypatch):
+    """Worker reuse: deactivate then activate with a new job id replaces registry."""
+    reg = coordinator / "registry"
+    monkeypatch.setenv("MASONJAR_IO_FAIRSHARE", "1")
+    monkeypatch.setenv("MASONJAR_IO_JOB_ID", "job-a")
+    monkeypatch.setenv("MASONJAR_IO_JOB_LABEL", "apply_geometry")
+    io_fairshare.deactivate()
+    assert io_fairshare.activate()
+    assert (reg / "job-a.json").is_file()
+    assert not (reg / "job-b.json").is_file()
+
+    io_fairshare.deactivate()
+    assert not (reg / "job-a.json").is_file()
+    assert io_fairshare._activated is False
+
+    monkeypatch.setenv("MASONJAR_IO_JOB_ID", "job-b")
+    monkeypatch.setenv("MASONJAR_IO_JOB_LABEL", "tissue_cleanup")
+    assert io_fairshare.activate()
+    assert (reg / "job-b.json").is_file()
+    assert not (reg / "job-a.json").is_file()
+    payload = json.loads((reg / "job-b.json").read_text(encoding="utf-8"))
+    assert payload["job_id"] == "job-b"
+    assert payload["label"] == "tissue_cleanup"
+    io_fairshare.deactivate()

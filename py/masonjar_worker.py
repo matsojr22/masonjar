@@ -144,6 +144,14 @@ def _run_script(job_id: str, script: str, args: list, env: Optional[Dict[str, st
         with _lock:
             _current_id = None
             _cancel.clear()
+        # Worker-hosted scripts must finish fair-share I/O before __main__ returns.
+        # Tear down registry/heartbeat so the next job can activate() with a fresh id.
+        try:
+            import io_fairshare
+
+            io_fairshare.deactivate()
+        except Exception:
+            pass
     return code
 
 
