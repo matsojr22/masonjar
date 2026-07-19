@@ -363,9 +363,21 @@ function testIsMandatoryUpdateRequired() {
 function testCountOtherMasonJarInstancesFromList() {
 	const root = "C:\\Apps\\masonjar-win32-x64";
 	const list = [
-		{ pid: 100, exePath: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe" },
-		{ pid: 200, exePath: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe" },
-		{ pid: 300, exePath: "D:\\Other\\masonjar.exe" },
+		{
+			pid: 100,
+			exePath: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe",
+			commandLine: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe",
+		},
+		{
+			pid: 200,
+			exePath: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe",
+			commandLine: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe",
+		},
+		{
+			pid: 300,
+			exePath: "D:\\Other\\masonjar.exe",
+			commandLine: "D:\\Other\\masonjar.exe",
+		},
 	];
 	assert(
 		updateManager.countOtherMasonJarInstancesFromList(list, 100, root) === 1,
@@ -373,11 +385,64 @@ function testCountOtherMasonJarInstancesFromList() {
 	);
 	assert(
 		updateManager.countOtherMasonJarInstancesFromList(list, 100, null) === 2,
-		"without install root counts all other pids",
+		"without install root counts all other mains",
 	);
 	assert(
 		updateManager.countOtherMasonJarInstancesFromList(list, 100, root) === 1,
 		"ignores different install root",
+	);
+
+	const withHelpers = [
+		{
+			pid: 100,
+			exePath: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe",
+			commandLine: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe",
+		},
+		{
+			pid: 101,
+			exePath: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe",
+			commandLine:
+				"C:\\Apps\\masonjar-win32-x64\\masonjar.exe --type=renderer --foo",
+		},
+		{
+			pid: 102,
+			exePath: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe",
+			commandLine:
+				"C:\\Apps\\masonjar-win32-x64\\masonjar.exe --type=gpu-process",
+		},
+		{
+			pid: 200,
+			exePath: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe",
+			commandLine: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe",
+		},
+	];
+	assert(
+		updateManager.countOtherMasonJarInstancesFromList(withHelpers, 100, root) ===
+			1,
+		"ignores Electron --type= helpers; counts second main",
+	);
+	assert(
+		updateManager.countOtherMasonJarInstancesFromList(
+			[
+				{
+					pid: 100,
+					exePath: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe",
+					commandLine: "C:\\Apps\\masonjar-win32-x64\\masonjar.exe",
+				},
+				{ pid: 101, exePath: "", commandLine: "" },
+			],
+			100,
+			root,
+		) === 0,
+		"empty path/cmdline does not count as peer",
+	);
+	assert(
+		updateManager.isElectronHelperProcess({
+			pid: 1,
+			exePath: "x",
+			commandLine: "masonjar.exe --type=utility",
+		}),
+		"detects --type= helper",
 	);
 }
 

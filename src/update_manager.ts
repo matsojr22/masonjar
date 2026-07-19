@@ -190,7 +190,15 @@ export function isMandatoryUpdateRequired(
 export type MasonJarProcessInfo = {
   pid: number;
   exePath: string;
+  /** Full command line when available (used to skip Electron --type= helpers). */
+  commandLine?: string;
 };
+
+/** Chromium/Electron child processes always carry --type=… on the command line. */
+export function isElectronHelperProcess(proc: MasonJarProcessInfo): boolean {
+  const cmd = String(proc.commandLine || "");
+  return /\s--type=/i.test(cmd);
+}
 
 export function countOtherMasonJarInstancesFromList(
   processes: MasonJarProcessInfo[],
@@ -205,19 +213,30 @@ export function countOtherMasonJarInstancesFromList(
     if (proc.pid === myPid) {
       continue;
     }
-    if (!rootNorm) {
-      count += 1;
+    if (isElectronHelperProcess(proc)) {
       continue;
     }
     const exeNorm = path
       .normalize(proc.exePath || "")
       .replace(/\\/g, "/")
       .toLowerCase();
-    if (!exeNorm) {
+    const cmdNorm = String(proc.commandLine || "")
+      .replace(/\\/g, "/")
+      .toLowerCase();
+    // Without path/cmdline we cannot tell main vs helper — do not block Update Now.
+    if (!exeNorm && !cmdNorm.trim()) {
+      continue;
+    }
+    if (!rootNorm) {
       count += 1;
       continue;
     }
-    if (exeNorm.startsWith(rootNorm)) {
+    if (exeNorm && exeNorm.startsWith(rootNorm)) {
+      count += 1;
+      continue;
+    }
+    // Darwin / incomplete path: match install root in the command line.
+    if (!exeNorm && cmdNorm.includes(rootNorm)) {
       count += 1;
     }
   }
@@ -228,7 +247,7 @@ function listMasonJarProcessesWindows(): MasonJarProcessInfo[] {
   try {
     const script =
       "Get-CimInstance Win32_Process -Filter \"Name='masonjar.exe'\" | " +
-      "Select-Object ProcessId, ExecutablePath | ConvertTo-Json -Compress";
+      "Select-Object ProcessId, ExecutablePath, CommandLine | ConvertTo-Json -Compress";
     const out = execSync(
       `powershell -NoProfile -Command ${JSON.stringify(script)}`,
       {
@@ -241,51 +260,69 @@ function listMasonJarProcessesWindows(): MasonJarProcessInfo[] {
       return [];
     }
     const parsed = JSON.parse(out) as
-      | { ProcessId?: number; ExecutablePath?: string }
-      | Array<{ ProcessId?: number; ExecutablePath?: string }>;
+      | {
+          ProcessId?: number;
+          ExecutablePath?: string;
+          CommandLine?: string;
+        }
+      | Array<{
+          ProcessId?: number;
+          ExecutablePath?: string;
+          CommandLine?: string;
+        }>;
     const rows = Array.isArray(parsed) ? parsed : [parsed];
     return rows
       .map((row) => ({
         pid: Number(row.ProcessId),
         exePath: String(row.ExecutablePath || ""),
+        commandLine: String(row.CommandLine || ""),
       }))
       .filter((row) => Number.isFinite(row.pid) && row.pid > 0);
   } catch {
-    try {
-      const fallback =
-        "Get-Process -Name masonjar -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id";
-      const out = execSync(
-        `powershell -NoProfile -Command ${JSON.stringify(fallback)}`,
-        { encoding: "utf8", timeout: 10000, windowsHide: true },
-      ).trim();
-      if (!out) {
-        return [];
-      }
-      return out
-        .split(/\r?\n/)
-        .map((line) => Number(line.trim()))
-        .filter((pid) => Number.isFinite(pid) && pid > 0)
-        .map((pid) => ({ pid, exePath: "" }));
-    } catch {
-      return [];
-    }
+    // No CommandLine/path — return empty so we fail open rather than false-block update.
+    return [];
   }
 }
 
 function listMasonJarProcessesDarwin(): MasonJarProcessInfo[] {
   try {
-    const out = execSync('pgrep -x masonjar || true', {
-      encoding: "utf8",
-      timeout: 5000,
-    }).trim();
+    // PID + full args so we can skip Electron --type= helpers.
+    const out = execSync(
+      "ps -axo pid=,command= | grep -i '[m]asonjar' || true",
+      {
+        encoding: "utf8",
+        timeout: 5000,
+      },
+    ).trim();
     if (!out) {
       return [];
     }
-    return out
-      .split(/\r?\n/)
-      .map((line) => Number(line.trim()))
-      .filter((pid) => Number.isFinite(pid) && pid > 0)
-      .map((pid) => ({ pid, exePath: "" }));
+    const rows: MasonJarProcessInfo[] = [];
+    for (const line of out.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const match = /^(\d+)\s+(.*)$/.exec(trimmed);
+      if (!match) {
+        continue;
+      }
+      const pid = Number(match[1]);
+      const commandLine = match[2] || "";
+      if (!Number.isFinite(pid) || pid <= 0) {
+        continue;
+      }
+      // Skip grep/ps noise if any slipped through.
+      if (/\bgrep\b/i.test(commandLine) && !/masonjar/i.test(commandLine)) {
+        continue;
+      }
+      rows.push({
+        pid,
+        exePath: "",
+        commandLine,
+      });
+    }
+    return rows;
   } catch {
     return [];
   }

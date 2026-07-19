@@ -12,7 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UpdateManager = exports.buildCheckResult = exports.expectedWindowsZipName = exports.resolveInstallRoot = exports.isUpdateInProgress = exports.isApplyScriptRunning = exports.buildApplySpawnCommand = exports.CLOSE_OTHER_INSTANCES_MESSAGE = exports.deleteInstallVersionBackups = exports.listInstallVersionBackups = exports.versionBackupDirName = exports.refreshUpdateLockState = exports.writeUpdateLock = exports.releaseUpdateLock = exports.clearOrphanUpdateLock = exports.clearStaleUpdateLock = exports.pathsEqualIgnoreCase = exports.isActiveUpdateLock = exports.isProcessAlive = exports.readUpdateLock = exports.isUpdateLockStale = exports.appendUpdateLogLine = exports.UPDATE_LOCK_STALE_MS = exports.updateFallbackLogPath = exports.updateLogPath = exports.updateLockPath = exports.masonJarTempRoot = exports.countOtherMasonJarInstances = exports.listMasonJarProcesses = exports.countOtherMasonJarInstancesFromList = exports.isMandatoryUpdateRequired = exports.compareUpdateAvailable = exports.pickBestRelease = exports.releaseSemver = exports.pickWindowsZipAsset = exports.releaseNotesExcerpt = exports.saveUpdatePreferences = exports.loadUpdatePreferences = exports.updatePreferencesPath = exports.GITHUB_REPO = void 0;
+exports.UpdateManager = exports.buildCheckResult = exports.expectedWindowsZipName = exports.resolveInstallRoot = exports.isUpdateInProgress = exports.isApplyScriptRunning = exports.buildApplySpawnCommand = exports.CLOSE_OTHER_INSTANCES_MESSAGE = exports.deleteInstallVersionBackups = exports.listInstallVersionBackups = exports.versionBackupDirName = exports.refreshUpdateLockState = exports.writeUpdateLock = exports.releaseUpdateLock = exports.clearOrphanUpdateLock = exports.clearStaleUpdateLock = exports.pathsEqualIgnoreCase = exports.isActiveUpdateLock = exports.isProcessAlive = exports.readUpdateLock = exports.isUpdateLockStale = exports.appendUpdateLogLine = exports.UPDATE_LOCK_STALE_MS = exports.updateFallbackLogPath = exports.updateLogPath = exports.updateLockPath = exports.masonJarTempRoot = exports.countOtherMasonJarInstances = exports.listMasonJarProcesses = exports.countOtherMasonJarInstancesFromList = exports.isElectronHelperProcess = exports.isMandatoryUpdateRequired = exports.compareUpdateAvailable = exports.pickBestRelease = exports.releaseSemver = exports.pickWindowsZipAsset = exports.releaseNotesExcerpt = exports.saveUpdatePreferences = exports.loadUpdatePreferences = exports.updatePreferencesPath = exports.GITHUB_REPO = void 0;
 const fs_1 = __importDefault(require("fs"));
 const os_1 = __importDefault(require("os"));
 const path_1 = __importDefault(require("path"));
@@ -131,6 +131,12 @@ function isMandatoryUpdateRequired(currentVersion, result) {
     return compareUpdateAvailable(currentVersion, result.latest);
 }
 exports.isMandatoryUpdateRequired = isMandatoryUpdateRequired;
+/** Chromium/Electron child processes always carry --type=… on the command line. */
+function isElectronHelperProcess(proc) {
+    const cmd = String(proc.commandLine || "");
+    return /\s--type=/i.test(cmd);
+}
+exports.isElectronHelperProcess = isElectronHelperProcess;
 function countOtherMasonJarInstancesFromList(processes, myPid, installRoot) {
     const rootNorm = installRoot
         ? path_1.default.normalize(installRoot).replace(/\\/g, "/").toLowerCase()
@@ -140,19 +146,30 @@ function countOtherMasonJarInstancesFromList(processes, myPid, installRoot) {
         if (proc.pid === myPid) {
             continue;
         }
-        if (!rootNorm) {
-            count += 1;
+        if (isElectronHelperProcess(proc)) {
             continue;
         }
         const exeNorm = path_1.default
             .normalize(proc.exePath || "")
             .replace(/\\/g, "/")
             .toLowerCase();
-        if (!exeNorm) {
+        const cmdNorm = String(proc.commandLine || "")
+            .replace(/\\/g, "/")
+            .toLowerCase();
+        // Without path/cmdline we cannot tell main vs helper — do not block Update Now.
+        if (!exeNorm && !cmdNorm.trim()) {
+            continue;
+        }
+        if (!rootNorm) {
             count += 1;
             continue;
         }
-        if (exeNorm.startsWith(rootNorm)) {
+        if (exeNorm && exeNorm.startsWith(rootNorm)) {
+            count += 1;
+            continue;
+        }
+        // Darwin / incomplete path: match install root in the command line.
+        if (!exeNorm && cmdNorm.includes(rootNorm)) {
             count += 1;
         }
     }
@@ -162,7 +179,7 @@ exports.countOtherMasonJarInstancesFromList = countOtherMasonJarInstancesFromLis
 function listMasonJarProcessesWindows() {
     try {
         const script = "Get-CimInstance Win32_Process -Filter \"Name='masonjar.exe'\" | " +
-            "Select-Object ProcessId, ExecutablePath | ConvertTo-Json -Compress";
+            "Select-Object ProcessId, ExecutablePath, CommandLine | ConvertTo-Json -Compress";
         const out = (0, child_process_1.execSync)(`powershell -NoProfile -Command ${JSON.stringify(script)}`, {
             encoding: "utf8",
             timeout: 15000,
@@ -177,41 +194,51 @@ function listMasonJarProcessesWindows() {
             .map((row) => ({
             pid: Number(row.ProcessId),
             exePath: String(row.ExecutablePath || ""),
+            commandLine: String(row.CommandLine || ""),
         }))
             .filter((row) => Number.isFinite(row.pid) && row.pid > 0);
     }
     catch (_a) {
-        try {
-            const fallback = "Get-Process -Name masonjar -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id";
-            const out = (0, child_process_1.execSync)(`powershell -NoProfile -Command ${JSON.stringify(fallback)}`, { encoding: "utf8", timeout: 10000, windowsHide: true }).trim();
-            if (!out) {
-                return [];
-            }
-            return out
-                .split(/\r?\n/)
-                .map((line) => Number(line.trim()))
-                .filter((pid) => Number.isFinite(pid) && pid > 0)
-                .map((pid) => ({ pid, exePath: "" }));
-        }
-        catch (_b) {
-            return [];
-        }
+        // No CommandLine/path — return empty so we fail open rather than false-block update.
+        return [];
     }
 }
 function listMasonJarProcessesDarwin() {
     try {
-        const out = (0, child_process_1.execSync)('pgrep -x masonjar || true', {
+        // PID + full args so we can skip Electron --type= helpers.
+        const out = (0, child_process_1.execSync)("ps -axo pid=,command= | grep -i '[m]asonjar' || true", {
             encoding: "utf8",
             timeout: 5000,
         }).trim();
         if (!out) {
             return [];
         }
-        return out
-            .split(/\r?\n/)
-            .map((line) => Number(line.trim()))
-            .filter((pid) => Number.isFinite(pid) && pid > 0)
-            .map((pid) => ({ pid, exePath: "" }));
+        const rows = [];
+        for (const line of out.split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (!trimmed) {
+                continue;
+            }
+            const match = /^(\d+)\s+(.*)$/.exec(trimmed);
+            if (!match) {
+                continue;
+            }
+            const pid = Number(match[1]);
+            const commandLine = match[2] || "";
+            if (!Number.isFinite(pid) || pid <= 0) {
+                continue;
+            }
+            // Skip grep/ps noise if any slipped through.
+            if (/\bgrep\b/i.test(commandLine) && !/masonjar/i.test(commandLine)) {
+                continue;
+            }
+            rows.push({
+                pid,
+                exePath: "",
+                commandLine,
+            });
+        }
+        return rows;
     }
     catch (_a) {
         return [];

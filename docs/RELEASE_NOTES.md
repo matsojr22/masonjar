@@ -6,6 +6,22 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.22
+
+**What's new**
+
+- **Update Now:** With only one Mason Jar window open, Update Now no longer asks you to close “other instances.” Previously the updater mistook Electron’s background helper processes for extra copies of the app, so the update could not start.
+
+**Commit subject**
+
+Fix Update Now false other-instance detection
+
+**Commit body**
+
+Count only Mason Jar main processes when checking peers before Update Now; ignore Electron helper processes that share masonjar.exe.
+
+---
+
 ## v6.0.21
 
 **What's new**
