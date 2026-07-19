@@ -311,6 +311,83 @@ body.wizard-busy .btn-primary:not(:disabled)::after,
 	}
 }
 
+/* Project index load overlay (inter-menu populate only) */
+.project-index-busy-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 2000;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(45, 42, 36, 0.45);
+	pointer-events: all;
+}
+
+.project-index-busy-overlay[hidden] {
+	display: none !important;
+}
+
+.project-index-busy-panel {
+	min-width: 280px;
+	max-width: min(420px, 92vw);
+	padding: 1.25rem 1.5rem;
+	border-radius: 0.5rem;
+	background: var(--mj-bg, #f7f4ef);
+	border: 1px solid rgba(184, 115, 51, 0.35);
+	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+	text-align: center;
+	color: var(--mj-text, #333);
+}
+
+.project-index-busy-spinner {
+	font-size: 1.75rem;
+	color: var(--mj-primary, #b87333);
+	margin-bottom: 0.65rem;
+}
+
+.project-index-busy-title {
+	font-weight: 600;
+	margin-bottom: 0.75rem;
+	color: var(--mj-text, #333);
+}
+
+.project-index-busy-console {
+	text-align: left;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 0.78rem;
+	line-height: 1.35;
+	min-height: calc(1.35em * 4);
+	color: var(--mj-secondary, #6b8e6b);
+}
+
+.project-index-busy-line {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	transition: opacity 0.25s ease;
+	min-height: 1.35em;
+}
+
+body.project-index-busy {
+	cursor: wait;
+}
+
+body.project-index-busy a,
+body.project-index-busy button,
+body.project-index-busy .menu-card,
+body.project-index-busy .btn,
+body.project-index-busy input,
+body.project-index-busy select,
+body.project-index-busy textarea {
+	pointer-events: none;
+}
+
+body.project-index-busy .project-index-busy-overlay,
+body.project-index-busy .project-index-busy-overlay * {
+	pointer-events: auto;
+	cursor: wait;
+}
+
 .nav-trail-wrap .nav-trail a {
 	text-decoration: none;
 }

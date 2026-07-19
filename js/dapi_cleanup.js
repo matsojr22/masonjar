@@ -5,8 +5,7 @@ var workspace = require("./workspace");
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
-project.tryRestoreActiveProject();
-pipelineGate.assertPipelineAccess();
+var projectIndexBusy = require("./project_index_busy");
 
 var run = document.getElementById("run");
 var indir = document.getElementById("indir");
@@ -214,7 +213,11 @@ ipc.on("updateLoad", function (event, response) {
 	loadmessage.innerHTML = response[1];
 });
 
-workspace.applyPreset("dapi_cleanup");
-workspace.bindPathPicker(indir, "indir", "dapi");
-workspace.bindPathPicker(outdir, "outdir", "dapi");
-syncOutputModeUi();
+projectIndexBusy.populatePage(function () {
+	project.tryRestoreActiveProject();
+	pipelineGate.assertPipelineAccess();
+	workspace.applyPreset("dapi_cleanup");
+	workspace.bindPathPicker(indir, "indir", "dapi");
+	workspace.bindPathPicker(outdir, "outdir", "dapi");
+	syncOutputModeUi();
+});

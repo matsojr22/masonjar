@@ -10,6 +10,7 @@ var structureCatalog = require("./structure_catalog");
 var atlasStyle = require("./atlas_region_style");
 var wizardBusy = require("./wizard_busy");
 var regionDualList = require("./region_dual_list");
+var projectIndexBusy = require("./project_index_busy");
 
 var PLAN_KEY = "masonjar.parcellationPlan";
 var CONFIG_FILENAME = "parcellation_run_config.json";
@@ -28,9 +29,6 @@ var running = false;
 var summary = { ok: 0, failed: 0, total: 0 };
 var runHeartbeatTimer = null;
 var lastProgressAt = 0;
-
-project.tryRestoreActiveProject();
-pipelineGate.assertPipelineAccess();
 
 function qs(id) {
 	return document.getElementById(id);
@@ -557,18 +555,22 @@ ipc.on("parcellationResult", function () {
 	finishRun(summary.failed === 0);
 });
 
-loadPlan();
-initStep1();
-bindUi();
-setStep(1);
+projectIndexBusy.populatePage(function () {
+	project.tryRestoreActiveProject();
+	pipelineGate.assertPipelineAccess();
+	loadPlan();
+	initStep1();
+	bindUi();
+	setStep(1);
 
-var annodir = annotationDirAbs();
-if (!annodir || !sliceIds.length) {
-	var info = qs("slicesLeafInfo");
-	if (info) {
-		info.classList.add("text-danger");
-		info.textContent =
-			"No annotation PKLs in the active align run. Run Align first, then return here.";
+	var annodir = annotationDirAbs();
+	if (!annodir || !sliceIds.length) {
+		var info = qs("slicesLeafInfo");
+		if (info) {
+			info.classList.add("text-danger");
+			info.textContent =
+				"No annotation PKLs in the active align run. Run Align first, then return here.";
+		}
+		if (qs("step1Next")) qs("step1Next").disabled = true;
 	}
-	if (qs("step1Next")) qs("step1Next").disabled = true;
-}
+});

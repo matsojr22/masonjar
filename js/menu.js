@@ -217,6 +217,8 @@ pageInit.onReady(function () {
 				return;
 			}
 			rescanHubBtn.disabled = true;
+			var projectIndexBusy = require("./project_index_busy");
+			projectIndexBusy.show();
 			project
 				.refreshProjectIndex()
 				.then(function () {
@@ -226,6 +228,7 @@ pageInit.onReady(function () {
 					alert(String(err.message || err));
 				})
 				.finally(function () {
+					projectIndexBusy.hide();
 					rescanHubBtn.disabled = false;
 				});
 		});

@@ -5,8 +5,7 @@ var workspace = require("./workspace");
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRuns = require("./pipeline_runs");
-project.tryRestoreActiveProject();
-pipelineGate.assertPipelineAccess();
+var projectIndexBusy = require("./project_index_busy");
 var run = document.getElementById("run");
 var indir = document.getElementById("indir");
 var outdir = document.getElementById("outdir");
@@ -91,6 +90,10 @@ ipc.on("updateLoad", function (event, response) {
 	loadmessage.innerHTML = response[1];
 });
 
-workspace.applyPreset("dual");
-workspace.bindPathPicker(indir, "indir", "pkls");
-workspace.bindPathPicker(outdir, "outdir", "dual");
+projectIndexBusy.populatePage(function () {
+	project.tryRestoreActiveProject();
+	pipelineGate.assertPipelineAccess();
+	workspace.applyPreset("dual");
+	workspace.bindPathPicker(indir, "indir", "pkls");
+	workspace.bindPathPicker(outdir, "outdir", "dual");
+});

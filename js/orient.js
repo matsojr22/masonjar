@@ -14,9 +14,7 @@ var orientGeometry = require("./orient_geometry");
 var orientSlicePlan = require("./orient_slice_plan");
 var geometryState = require("./geometry_state");
 var branding = require("./branding");
-
-project.tryRestoreActiveProject();
-pipelineGate.assertPipelineAccess();
+var projectIndexBusy = require("./project_index_busy");
 
 var geometryRunning = false;
 var previewRepairRunning = false;
@@ -773,5 +771,9 @@ function init() {
 
 pageInit.onReady(function () {
 	pageInit.installGlobalErrorHandler();
-	init();
+	projectIndexBusy.populatePage(function () {
+		project.tryRestoreActiveProject();
+		pipelineGate.assertPipelineAccess();
+		init();
+	});
 });

@@ -12,9 +12,7 @@ var pipelineRuns = require("./pipeline_runs");
 var maxDatasets = require("./max_datasets");
 var maxDatasetPicker = require("./max_dataset_picker");
 var detectCommon = require("./detect_common");
-
-project.tryRestoreActiveProject();
-pipelineGate.assertPipelineAccess();
+var projectIndexBusy = require("./project_index_busy");
 
 var LAST_RUN_KEY = "masonjar.detect.lastRun";
 var PER_SLICE_QC_KEY = "masonjar.detect.perSliceQc";
@@ -421,19 +419,22 @@ ipc.on("updateLoad", function (_event, response) {
 	setProcessProgress(response[0], response[1]);
 });
 
-workspace.applyPreset("detect");
-datasetPicker = maxDatasetPicker.wireMaxDatasetPicker({
-	storageKey: "masonjar.detect.maxDataset",
-	indirInput: qs("indir"),
-	sectionId: "detectDatasetSection",
-	branchSelectId: "detectSignalBranch",
-	datasetSelectId: "detectMaxDataset",
-	defaultBranch: function () {
-		return maxDatasets.defaultBranchForDetectMethod(detectionMethod);
-	},
+projectIndexBusy.populatePage(function () {
+	project.tryRestoreActiveProject();
+	pipelineGate.assertPipelineAccess();
+	workspace.applyPreset("detect");
+	datasetPicker = maxDatasetPicker.wireMaxDatasetPicker({
+		storageKey: "masonjar.detect.maxDataset",
+		indirInput: qs("indir"),
+		sectionId: "detectDatasetSection",
+		branchSelectId: "detectSignalBranch",
+		datasetSelectId: "detectMaxDataset",
+		defaultBranch: function () {
+			return maxDatasets.defaultBranchForDetectMethod(detectionMethod);
+		},
+	});
+	workspace.bindPathPicker(qs("indir"), "indir", "max");
+	workspace.bindPathPicker(qs("outdir"), "outdir", "predictions");
+	workspace.bindPathPicker(qs("model"), "model", null, true);
+	setStep(1);
 });
-workspace.bindPathPicker(qs("indir"), "indir", "max");
-workspace.bindPathPicker(qs("outdir"), "outdir", "predictions");
-workspace.bindPathPicker(qs("model"), "model", null, true);
-
-setStep(1);

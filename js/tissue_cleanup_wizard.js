@@ -9,8 +9,7 @@ var fileIndex = require("./file_index");
 var cziImport = require("./czi_import");
 var tissuePaths = require("../js/bundle_slice_paths");
 var canvasMod = require("./tissue_cleanup_canvas");
-
-project.tryRestoreActiveProject();
+var projectIndexBusy = require("./project_index_busy");
 
 var VERSION = "1";
 var DRAFT_DIR = "tissue_cleanup_draft";
@@ -713,4 +712,7 @@ window.addEventListener("resize", function () {
 	canvas.fitToViewport();
 });
 
-init();
+projectIndexBusy.populatePage(function () {
+	project.tryRestoreActiveProject();
+	init();
+});

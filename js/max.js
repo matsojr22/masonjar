@@ -7,8 +7,7 @@ var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
 var importHandoff = require("./import_handoff");
-project.tryRestoreActiveProject();
-pipelineGate.assertPipelineAccess();
+var projectIndexBusy = require("./project_index_busy");
 var run = document.getElementById("run");
 var indir = document.getElementById("indir");
 var outdir = document.getElementById("outdir");
@@ -122,7 +121,11 @@ function renderMaxImportHandoffAlert() {
 		'If alignment is difficult, try <a href="./menu_category.html?cat=preprocess">counterstain cleanup tools</a>.';
 }
 
-workspace.applyPreset("max");
-workspace.bindPathPicker(indir, "indir", "originalScans");
-workspace.bindPathPicker(outdir, "outdir", "max");
-renderMaxImportHandoffAlert();
+projectIndexBusy.populatePage(function () {
+	project.tryRestoreActiveProject();
+	pipelineGate.assertPipelineAccess();
+	workspace.applyPreset("max");
+	workspace.bindPathPicker(indir, "indir", "originalScans");
+	workspace.bindPathPicker(outdir, "outdir", "max");
+	renderMaxImportHandoffAlert();
+});

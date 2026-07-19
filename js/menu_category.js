@@ -129,49 +129,52 @@ function appendToolGroup(container, groupDef, groupIndex, legacyContext) {
 }
 
 if (typeof window !== "undefined" && typeof document !== "undefined") {
-	project.tryRestoreActiveProject();
-	pipelineGate.assertPipelineAccess();
+	var projectIndexBusy = require("./project_index_busy");
+	projectIndexBusy.populatePage(function () {
+		project.tryRestoreActiveProject();
+		pipelineGate.assertPipelineAccess();
 
-	var isLegacyContext =
-		!project.isActive() && pipelineGate.hasValidLegacyWorkspace();
+		var isLegacyContext =
+			!project.isActive() && pipelineGate.hasValidLegacyWorkspace();
 
-	var params = new URLSearchParams(window.location.search);
-	var cat = params.get("cat") || "preprocess";
-	var config = CATEGORIES[cat] || CATEGORIES.preprocess;
+		var params = new URLSearchParams(window.location.search);
+		var cat = params.get("cat") || "preprocess";
+		var config = CATEGORIES[cat] || CATEGORIES.preprocess;
 
-	var categoryTitle = document.getElementById("categoryTitle");
-	var toolLinks = document.getElementById("toolLinks");
-	var legacyBanner = document.getElementById("legacyModeCategoryBanner");
+		var categoryTitle = document.getElementById("categoryTitle");
+		var toolLinks = document.getElementById("toolLinks");
+		var legacyBanner = document.getElementById("legacyModeCategoryBanner");
 
-	navTrail.renderTrail(
-		[
-			{ label: "Start", href: "./menu.html" },
-			{ label: "Workspace", href: "./workspace_menu.html" },
-			{ label: config.title },
-		],
-		"navTrail",
-	);
+		navTrail.renderTrail(
+			[
+				{ label: "Start", href: "./menu.html" },
+				{ label: "Workspace", href: "./workspace_menu.html" },
+				{ label: config.title },
+			],
+			"navTrail",
+		);
 
-	if (legacyBanner) {
-		legacyBanner.classList.toggle("d-none", !isLegacyContext);
-	}
+		if (legacyBanner) {
+			legacyBanner.classList.toggle("d-none", !isLegacyContext);
+		}
 
-	if (categoryTitle) {
-		categoryTitle.textContent = config.title;
-	}
-	if (toolLinks) {
-		toolLinks.innerHTML = "";
-		var groupIndex = 0;
-		for (var i = 0; i < config.tools.length; i++) {
-			var tool = config.tools[i];
-			if (tool.group && tool.tools && tool.tools.length) {
-				appendToolGroup(toolLinks, tool, groupIndex, isLegacyContext);
-				groupIndex++;
-			} else if (tool.href) {
-				appendToolLink(toolLinks, tool, isLegacyContext);
+		if (categoryTitle) {
+			categoryTitle.textContent = config.title;
+		}
+		if (toolLinks) {
+			toolLinks.innerHTML = "";
+			var groupIndex = 0;
+			for (var i = 0; i < config.tools.length; i++) {
+				var tool = config.tools[i];
+				if (tool.group && tool.tools && tool.tools.length) {
+					appendToolGroup(toolLinks, tool, groupIndex, isLegacyContext);
+					groupIndex++;
+				} else if (tool.href) {
+					appendToolLink(toolLinks, tool, isLegacyContext);
+				}
 			}
 		}
-	}
+	});
 }
 
 module.exports = { CATEGORIES: CATEGORIES };

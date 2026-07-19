@@ -3,9 +3,7 @@
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var preprocessWizard = require("./preprocess_wizard");
-
-project.tryRestoreActiveProject();
-pipelineGate.assertPipelineAccess();
+var projectIndexBusy = require("./project_index_busy");
 
 function getToolParams() {
 	var radiusEl = document.getElementById("sharpenRadius");
@@ -18,26 +16,30 @@ function getToolParams() {
 	};
 }
 
-preprocessWizard.wirePreprocessWizard({
-	stepId: "sharpen",
-	sourceStorageKey: "masonjar.sharpen.sourceDataset",
-	configFileName: "sharpen_run_config.json",
-	runIpc: "runSharpen",
-	previewIpc: "runSharpenPreview",
-	previewResultIpc: "sharpenPreviewResult",
-	resultIpc: "sharpenResult",
-	killRunIpc: "killSharpen",
-	killPreviewIpc: "killSharpenPreview",
-	getToolParams: getToolParams,
-	buildSlugContext: function (base, params) {
-		return {
-			sortedStems: base.sortedStems,
-			subsetCount: base.subsetCount,
-			sourceKind: base.sourceKind,
-			sourceRunRel: base.sourceRunRel,
-			radius: params.radius,
-			amount: params.amount,
-			equalize: params.equalize,
-		};
-	},
+projectIndexBusy.populatePage(function () {
+	project.tryRestoreActiveProject();
+	pipelineGate.assertPipelineAccess();
+	preprocessWizard.wirePreprocessWizard({
+		stepId: "sharpen",
+		sourceStorageKey: "masonjar.sharpen.sourceDataset",
+		configFileName: "sharpen_run_config.json",
+		runIpc: "runSharpen",
+		previewIpc: "runSharpenPreview",
+		previewResultIpc: "sharpenPreviewResult",
+		resultIpc: "sharpenResult",
+		killRunIpc: "killSharpen",
+		killPreviewIpc: "killSharpenPreview",
+		getToolParams: getToolParams,
+		buildSlugContext: function (base, params) {
+			return {
+				sortedStems: base.sortedStems,
+				subsetCount: base.subsetCount,
+				sourceKind: base.sourceKind,
+				sourceRunRel: base.sourceRunRel,
+				radius: params.radius,
+				amount: params.amount,
+				equalize: params.equalize,
+			};
+		},
+	});
 });

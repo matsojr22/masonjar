@@ -6,6 +6,22 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.23
+
+**What's new**
+
+- **Loading project index:** When you open the workspace or a pipeline tool and Mason Jar is scanning the project’s files, a floating “Loading project index…” panel appears with a short spinning console of lighthearted status lines so the window no longer looks frozen. It clears once banners and tools are ready. Long-running job consoles (CZI extract, batch, Isolate Regions, and similar) are unchanged.
+
+**Commit subject**
+
+Show a loading overlay while the project index builds
+
+**Commit body**
+
+Opening the workspace or tool setup pages now shows a floating spinner with a fading funny-message console until the project file index and run lists finish populating, so the UI no longer looks hung with no feedback.
+
+---
+
 ## v6.0.22
 
 **What's new**

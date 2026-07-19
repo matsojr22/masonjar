@@ -9,8 +9,7 @@ var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
 var activeRunControls = require("./active_run_controls");
-project.tryRestoreActiveProject();
-pipelineGate.assertPipelineAccess();
+var projectIndexBusy = require("./project_index_busy");
 var run = document.getElementById("run");
 var preddir = document.getElementById("preddir");
 var annodir = document.getElementById("annodir");
@@ -201,8 +200,12 @@ ipc.on("updateLoad", function (event, response) {
 	loadmessage.innerHTML = response[1];
 });
 
-workspace.applyPreset("count");
-workspace.bindPathPicker(preddir, "preddir", "predictions");
-workspace.bindPathPicker(annodir, "annodir", "slices");
-workspace.bindPathPicker(outdir, "outdir", "quantification");
-refreshPredictionRunUi();
+projectIndexBusy.populatePage(function () {
+	project.tryRestoreActiveProject();
+	pipelineGate.assertPipelineAccess();
+	workspace.applyPreset("count");
+	workspace.bindPathPicker(preddir, "preddir", "predictions");
+	workspace.bindPathPicker(annodir, "annodir", "slices");
+	workspace.bindPathPicker(outdir, "outdir", "quantification");
+	refreshPredictionRunUi();
+});

@@ -7,8 +7,7 @@ var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
 var alignIpc = require("./align_ipc");
-project.tryRestoreActiveProject();
-pipelineGate.assertPipelineAccess();
+var projectIndexBusy = require("./project_index_busy");
 var run = document.getElementById("run");
 var indir = document.getElementById("indir");
 var outdir = document.getElementById("outdir");
@@ -233,9 +232,13 @@ ipc.on("updateLoad", function (event, response) {
 	}
 });
 
-workspace.applyPreset("align");
-workspace.bindPathPicker(indir, "indir", "dapi");
-workspace.bindPathPicker(outdir, "outdir", "slices");
-if (indir && indir.value && restoreAlignmentMethodFromSession(indir.value)) {
-	setAlignSessionRestoreBannerVisible(true);
-}
+projectIndexBusy.populatePage(function () {
+	project.tryRestoreActiveProject();
+	pipelineGate.assertPipelineAccess();
+	workspace.applyPreset("align");
+	workspace.bindPathPicker(indir, "indir", "dapi");
+	workspace.bindPathPicker(outdir, "outdir", "slices");
+	if (indir && indir.value && restoreAlignmentMethodFromSession(indir.value)) {
+		setAlignSessionRestoreBannerVisible(true);
+	}
+});

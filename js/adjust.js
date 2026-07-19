@@ -5,8 +5,7 @@ var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
 var alignIpc = require("./align_ipc");
-project.tryRestoreActiveProject();
-pipelineGate.assertPipelineAccess();
+var projectIndexBusy = require("./project_index_busy");
 var run = document.getElementById("run");
 var imdir = document.getElementById("imdir");
 var annodir = document.getElementById("annodir");
@@ -84,6 +83,10 @@ ipc.on("updateLoad", function (event, response) {
 	loadmessage.innerHTML = response[1];
 });
 
-workspace.applyPreset("adjust");
-workspace.bindPathPicker(imdir, "imdir", "dapi");
-workspace.bindPathPicker(annodir, "annodir", "slices");
+projectIndexBusy.populatePage(function () {
+	project.tryRestoreActiveProject();
+	pipelineGate.assertPipelineAccess();
+	workspace.applyPreset("adjust");
+	workspace.bindPathPicker(imdir, "imdir", "dapi");
+	workspace.bindPathPicker(annodir, "annodir", "slices");
+});

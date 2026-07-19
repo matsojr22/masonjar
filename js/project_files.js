@@ -435,6 +435,8 @@ function bindProjectFileControls(options) {
 	if (rescanBtn) {
 		rescanBtn.addEventListener("click", function () {
 			rescanBtn.disabled = true;
+			var projectIndexBusy = require("./project_index_busy");
+			projectIndexBusy.show();
 			project
 				.refreshProjectIndex()
 				.then(function () {
@@ -451,6 +453,7 @@ function bindProjectFileControls(options) {
 					alert(String(err.message || err));
 				})
 				.finally(function () {
+					projectIndexBusy.hide();
 					rescanBtn.disabled = false;
 				});
 		});

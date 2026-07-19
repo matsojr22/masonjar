@@ -606,11 +606,29 @@ function readProjectFileIndex(bundleRoot) {
 	return fileIndex.readFileIndex(bundleRoot, metaDir(bundleRoot));
 }
 
+var _indexRefreshPromise = null;
+var _indexRefreshBundleRoot = null;
+
+function getIndexRefreshPromise() {
+	return _indexRefreshPromise;
+}
+
+function isIndexRefreshing() {
+	return !!_indexRefreshPromise;
+}
+
 function refreshProjectIndex(bundleRoot, options) {
 	options = options || {};
 	bundleRoot = bundleRoot || state.bundleRoot;
 	if (!bundleRoot) {
 		return Promise.reject(new Error("no bundle root"));
+	}
+	if (
+		_indexRefreshPromise &&
+		_indexRefreshBundleRoot === bundleRoot &&
+		!options.force
+	) {
+		return _indexRefreshPromise;
 	}
 	var roles;
 	if (state.project && state.bundleRoot === bundleRoot) {
@@ -623,7 +641,7 @@ function refreshProjectIndex(bundleRoot, options) {
 		}
 	}
 	var onProgress = options.onProgress;
-	return fileIndex
+	var promise = fileIndex
 		.buildFileIndex(bundleRoot, roles, {
 			appRoot: options.appRoot,
 			activeRuns:
@@ -660,7 +678,16 @@ function refreshProjectIndex(bundleRoot, options) {
 				onProgress(100, "Index complete (" + report.matchedSliceIds.length + " matched)");
 			}
 			return { index: index, report: report, manifestPath: manifestPath };
+		})
+		.finally(function () {
+			if (_indexRefreshPromise === promise) {
+				_indexRefreshPromise = null;
+				_indexRefreshBundleRoot = null;
+			}
 		});
+	_indexRefreshPromise = promise;
+	_indexRefreshBundleRoot = bundleRoot;
+	return promise;
 }
 
 function tryRestoreActiveProject() {
@@ -1460,6 +1487,8 @@ module.exports = {
 	writeImportLog: writeImportLog,
 	buildManifest: buildManifest,
 	refreshProjectIndex: refreshProjectIndex,
+	getIndexRefreshPromise: getIndexRefreshPromise,
+	isIndexRefreshing: isIndexRefreshing,
 	readProjectFileIndex: readProjectFileIndex,
 	defaultProcessing: defaultProcessing,
 	recordStepFailure: recordStepFailure,

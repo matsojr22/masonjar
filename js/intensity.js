@@ -14,9 +14,7 @@ var labelAudit = require("./annotation_label_audit");
 var maxDatasetPicker = require("./max_dataset_picker");
 
 var SETUP_KEY = "masonjar.intensity.setup";
-
-project.tryRestoreActiveProject();
-pipelineGate.assertPipelineAccess();
+var projectIndexBusy = require("./project_index_busy");
 
 var configureBtn = document.getElementById("run");
 var back = document.getElementById("back");
@@ -133,39 +131,6 @@ configureBtn.addEventListener("click", function () {
 	}
 });
 
-workspace.applyPreset("intensity");
-if (project.isActive()) {
-	if (outdir) {
-		var pklsBase = pipelineRuns.resolveRoleBaseAbs("pkls");
-		if (pklsBase) {
-			outdir.value = pklsBase;
-		}
-	}
-	if (annodir) {
-		var slicesLeafPreset = pipelineRuns.resolveActiveRunLeafAbs("slices");
-		if (slicesLeafPreset) {
-			annodir.value = slicesLeafPreset;
-		}
-	}
-}
-workspace.bindPathPicker(indir, "indir", "max");
-workspace.bindPathPicker(outdir, "outdir", "pkls");
-workspace.bindPathPicker(annodir, "annodir", "slices");
-if (dapidir) {
-	workspace.bindPathPicker(dapidir, "dapidir", "dapi");
-}
-
-maxDatasetPicker.wireMaxDatasetPicker({
-	storageKey: "masonjar.intensity.maxDataset",
-	indirInput: indir,
-	sectionId: "intensityDatasetSection",
-	branchSelectId: "intensitySignalBranch",
-	datasetSelectId: "intensityMaxDataset",
-	defaultBranch: function () {
-		return "somata";
-	},
-});
-
 function updateLabelResolutionBanner(audit) {
 	var banner = document.getElementById("labelResolutionBanner");
 	if (!banner) return;
@@ -254,5 +219,41 @@ if (annodir) {
 		refreshLabelAuditBanners();
 	});
 }
-updateParcellationBanner();
-refreshLabelAuditBanners();
+
+projectIndexBusy.populatePage(function () {
+	project.tryRestoreActiveProject();
+	pipelineGate.assertPipelineAccess();
+	workspace.applyPreset("intensity");
+	if (project.isActive()) {
+		if (outdir) {
+			var pklsBase = pipelineRuns.resolveRoleBaseAbs("pkls");
+			if (pklsBase) {
+				outdir.value = pklsBase;
+			}
+		}
+		if (annodir) {
+			var slicesLeafPreset = pipelineRuns.resolveActiveRunLeafAbs("slices");
+			if (slicesLeafPreset) {
+				annodir.value = slicesLeafPreset;
+			}
+		}
+	}
+	workspace.bindPathPicker(indir, "indir", "max");
+	workspace.bindPathPicker(outdir, "outdir", "pkls");
+	workspace.bindPathPicker(annodir, "annodir", "slices");
+	if (dapidir) {
+		workspace.bindPathPicker(dapidir, "dapidir", "dapi");
+	}
+	maxDatasetPicker.wireMaxDatasetPicker({
+		storageKey: "masonjar.intensity.maxDataset",
+		indirInput: indir,
+		sectionId: "intensityDatasetSection",
+		branchSelectId: "intensitySignalBranch",
+		datasetSelectId: "intensityMaxDataset",
+		defaultBranch: function () {
+			return "somata";
+		},
+	});
+	updateParcellationBanner();
+	refreshLabelAuditBanners();
+});

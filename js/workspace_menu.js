@@ -6,6 +6,7 @@ var navTrail = require("./nav_trail");
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var projectFiles = require("./project_files");
+var projectIndexBusy = require("./project_index_busy");
 var appLogToggle = require("./app_log_toggle");
 var ioFairshareSettings = require("./io_fairshare_settings");
 var legacyMode = require("./legacy_mode");
@@ -86,35 +87,36 @@ function bindLegacyLimitationsButton() {
 
 pageInit.onReady(function () {
 	pageInit.installGlobalErrorHandler();
-	project.tryRestoreActiveProject();
-	pipelineGate.assertPipelineAccess();
-	appLogToggle.bindAppLogToggle(document.getElementById("toggleAppLog"));
-	navTrail.renderTrail(
-		[
-			{ label: "Start", href: "./menu.html" },
-			{ label: "Workspace" },
-		],
-		"navTrail",
-	);
-	refreshProjectChip();
-	refreshLegacyBanner();
-	refreshLegacyPipelineCardSubs();
-	bindLegacyLimitationsButton();
-	project.addProcessingStateListener(function () {
-		projectFiles.renderStepFailures();
-	});
-	projectFiles.bindProjectFileControls();
-	var compact = document.getElementById("ioFairshareStatusCompact");
-	if (compact) {
-		var ipc = require("electron").ipcRenderer;
-		var ioFairshare = require("../io_fairshare");
-		ipc.on("ioFairshareStatus", function (_event, status) {
-			if (!status || !status.enabled) {
-				compact.textContent = "";
-				return;
-			}
-			compact.textContent = ioFairshare.formatFairshareCompactLine(status);
+	projectIndexBusy.populatePage(function () {
+		project.tryRestoreActiveProject();
+		pipelineGate.assertPipelineAccess();
+		appLogToggle.bindAppLogToggle(document.getElementById("toggleAppLog"));
+		navTrail.renderTrail(
+			[
+				{ label: "Start", href: "./menu.html" },
+				{ label: "Workspace" },
+			],
+			"navTrail",
+		);
+		refreshProjectChip();
+		refreshLegacyBanner();
+		refreshLegacyPipelineCardSubs();
+		bindLegacyLimitationsButton();
+		project.addProcessingStateListener(function () {
+			projectFiles.renderStepFailures();
 		});
-		ioFairshareSettings.refreshStatus();
-	}
+		projectFiles.bindProjectFileControls();
+		var compact = document.getElementById("ioFairshareStatusCompact");
+		if (compact) {
+			var ioFairshare = require("../io_fairshare");
+			ipc.on("ioFairshareStatus", function (_event, status) {
+				if (!status || !status.enabled) {
+					compact.textContent = "";
+					return;
+				}
+				compact.textContent = ioFairshare.formatFairshareCompactLine(status);
+			});
+			ioFairshareSettings.refreshStatus();
+		}
+	});
 });
