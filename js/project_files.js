@@ -1,5 +1,7 @@
 "use strict";
 
+var fs = require("fs");
+var ipc = require("electron").ipcRenderer;
 var project = require("./project");
 var fileIndex = require("./file_index");
 var pipelineRuns = require("./pipeline_runs");
@@ -337,9 +339,58 @@ function bindActiveRunControls(containerId) {
 	}
 
 	renderImportInputRows(container, bundleRoot, proj);
+	renderDetectQcScoutRow(container, bundleRoot, proj);
 	if (!hasRows && !(proj.settings && proj.settings.czi_import)) {
-		container.classList.add("d-none");
+		var hasQc =
+			proj.processing &&
+			proj.processing.detect_qc &&
+			proj.processing.detect_qc.output_rel;
+		if (!hasQc) {
+			container.classList.add("d-none");
+		}
 	}
+}
+
+function renderDetectQcScoutRow(container, bundleRoot, proj) {
+	var detectQcScout = require("./detect_qc_scout");
+	var qc = detectQcScout.readDetectQc(proj);
+	if (!qc || !qc.output_rel) {
+		return;
+	}
+	var abs = detectQcScout.resolveScoutOutputAbs(
+		bundleRoot,
+		(proj && proj.roles) || null,
+		qc,
+	);
+	if (!abs || !fs.existsSync(abs)) {
+		return;
+	}
+	var row = document.createElement("div");
+	row.className = "row align-items-center mb-2";
+	var labelCol = document.createElement("div");
+	labelCol.className = "col-4 col-sm-3 text-start small";
+	labelCol.textContent = "Detect QC scout";
+	var selectCol = document.createElement("div");
+	selectCol.className = "col d-flex align-items-center flex-wrap gap-1";
+	var status = document.createElement("span");
+	status.className = "small text-success me-2";
+	var sug = detectQcScout.suggestionIntensityMin(qc);
+	status.textContent =
+		"QC available" +
+		(sug != null ? " · suggested intensity " + String(sug) : "");
+	selectCol.appendChild(status);
+	var browse = document.createElement("button");
+	browse.type = "button";
+	browse.className = "btn btn-sm btn-outline-secondary";
+	browse.textContent = "Browse";
+	browse.title = "Open Detect QC scout folder";
+	browse.addEventListener("click", function () {
+		ipc.send("openPathInShell", abs);
+	});
+	selectCol.appendChild(browse);
+	row.appendChild(labelCol);
+	row.appendChild(selectCol);
+	container.appendChild(row);
 }
 
 function bindProjectFileControls(options) {

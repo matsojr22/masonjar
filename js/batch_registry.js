@@ -12,11 +12,12 @@ var BATCH_DEFAULTS_KEY = "masonjar.batchDefaults";
  */
 var BATCH_STEP_ORDER = [
 	"apply_geometry",
-	"dapi_cleanup",
 	"parcellation",
 	"max",
 	"sharpen",
+	"tophat",
 	"detect",
+	"detect_qc",
 	"intensity",
 	"count",
 	"dual",
@@ -34,21 +35,12 @@ var STEP_META = {
 		requiresAnnotations: false,
 		bundleWide: true,
 	},
-	dapi_cleanup: {
-		id: "dapi_cleanup",
-		label: "DAPI cleanup",
-		description:
-			"Polish DAPI previews (isolate tissue, CLAHE, saturation stretch) in-place with backup.",
-		order: 1,
-		roles: { indir: "dapi", outdir: "dapi" },
-		requiresAnnotations: false,
-	},
 	parcellation: {
 		id: "parcellation",
 		label: "Parcellation (CCF rollup)",
 		description:
 			"Roll annotation borders to a chosen CCF tier on every slice in the active align run (in-place).",
-		order: 2,
+		order: 1,
 		roles: { annodir: "slices" },
 		requiresAnnotations: true,
 		dependsOn: [],
@@ -57,31 +49,53 @@ var STEP_META = {
 		id: "max",
 		label: "Max projection",
 		description: "Collapse z-stacks under `original_scans/` into a single max projection per slice.",
-		order: 3,
+		order: 2,
 		roles: { indir: "original_scans", outdir: "max" },
 	},
 	sharpen: {
 		id: "sharpen",
 		label: "Sharpen",
-		description: "Unsharp-mask sharpen the active max projections.",
+		description: "Unsharp-mask sharpen the selected max-family dataset.",
 		order: 3,
 		roles: { indir: "max", outdir: "max" },
 		dependsOn: ["max"],
+		needsSignalDataset: true,
+	},
+	tophat: {
+		id: "tophat",
+		label: "Top-hat filter",
+		description: "Top-hat filter the selected max-family dataset (same tool as Top-hat wizard).",
+		order: 4,
+		roles: { indir: "max", outdir: "max" },
+		dependsOn: ["max"],
+		needsSignalDataset: true,
 	},
 	detect: {
 		id: "detect",
 		label: "Cell detection (SAHI)",
-		description: "Run cell/nuclei detection on the active max branch.",
-		order: 4,
+		description: "Run cell/nuclei detection on the selected signal dataset and write prediction PKLs.",
+		order: 5,
 		roles: { indir: "max", outdir: "predictions" },
 		dependsOn: ["max"],
+		needsSignalDataset: true,
+	},
+	detect_qc: {
+		id: "detect_qc",
+		label: "Detect QC scout",
+		description:
+			"Run detection only to gather the full QC package (graphs, summary, threshold suggestions) under predictions/…/qc_scout/ — no Predictions_*.pkl.",
+		order: 6,
+		roles: { indir: "max", outdir: "predictions" },
+		dependsOn: ["max"],
+		needsSignalDataset: true,
+		qcOnly: true,
 	},
 	intensity: {
 		id: "intensity",
 		label: "Isolate regions",
 		description:
 			"Export ROI PKLs (and optional DAPI ROI) for selected CCF regions.",
-		order: 5,
+		order: 7,
 		roles: {
 			indir: "max",
 			annodir: "slices",
@@ -90,12 +104,13 @@ var STEP_META = {
 		},
 		requiresAnnotations: true,
 		dependsOn: ["max"],
+		needsSignalDataset: true,
 	},
 	count: {
 		id: "count",
 		label: "Count brain",
 		description: "Aggregate per-region cell counts from prediction PKLs + alignment.",
-		order: 6,
+		order: 8,
 		roles: {
 			preddir: "predictions",
 			annodir: "slices",
@@ -108,7 +123,7 @@ var STEP_META = {
 		id: "dual",
 		label: "Dual-channel ROI TIFs",
 		description: "Export DAPI + signal ROIs as hyperstacked TIFFs (requires Isolate Regions).",
-		order: 7,
+		order: 9,
 		roles: { indir: "pkls", outdir: "dual" },
 		dependsOn: ["intensity"],
 	},
@@ -117,7 +132,7 @@ var STEP_META = {
 		label: "Collate counts (whole batch)",
 		description:
 			"Combine the count_results.csv from every project into one collated report (runs once at the end).",
-		order: 8,
+		order: 10,
 		roles: { indir: "quantification", outdir: "quantification" },
 		dependsOn: ["count"],
 		singleRun: true,
@@ -126,21 +141,23 @@ var STEP_META = {
 
 var DEPENDENCY_GRAPH = {
 	apply_geometry: [
-		"dapi_cleanup",
 		"parcellation",
 		"max",
 		"sharpen",
+		"tophat",
 		"detect",
+		"detect_qc",
 		"count",
 		"intensity",
 		"dual",
 		"collate",
 	],
-	dapi_cleanup: ["parcellation", "intensity", "dual"],
 	parcellation: ["count", "intensity", "dual", "collate"],
-	max: ["sharpen", "detect", "intensity", "count", "collate", "dual"],
-	sharpen: ["detect", "intensity", "count", "collate", "dual"],
+	max: ["sharpen", "tophat", "detect", "detect_qc", "intensity", "count", "collate", "dual"],
+	sharpen: ["detect", "detect_qc", "intensity", "count", "collate", "dual"],
+	tophat: ["detect", "detect_qc", "intensity", "count", "collate", "dual"],
 	detect: ["count", "collate"],
+	detect_qc: [],
 	count: ["collate"],
 	intensity: ["dual"],
 	dual: [],
@@ -149,21 +166,24 @@ var DEPENDENCY_GRAPH = {
 
 var DEFAULT_PARAMS = {
 	apply_geometry: {},
-	dapi_cleanup: {
-		isolate: true,
-		clahe: false,
-		saturation: 5,
-		inPlace: true,
-		bgValue: "",
-	},
 	parcellation: {
 		tierId: "areas",
 		stLevel: null,
 		ccfAdvanced: false,
 		includedRegionIds: [],
 	},
-	max: { dendrites: false, cells: false },
-	sharpen: { radius: 1, amount: 1, equalize: false },
+	max: { dendrites: false },
+	sharpen: {
+		radius: 1,
+		amount: 1,
+		equalize: false,
+		signalDatasetKind: "max",
+	},
+	tophat: {
+		radius: 10,
+		gamma: 1.25,
+		signalDatasetKind: "max",
+	},
 	detect: {
 		confidence: 0.5,
 		tile: 640,
@@ -174,12 +194,26 @@ var DEFAULT_PARAMS = {
 		multichannel: false,
 		customModel: "",
 		perSliceQc: false,
+		signalDatasetKind: "max",
+	},
+	detect_qc: {
+		confidence: 0.5,
+		tile: 640,
+		method: "somata",
+		area: 200,
+		eccentricity: 0.2,
+		intensityMin: 0,
+		multichannel: false,
+		customModel: "",
+		perSliceQc: false,
+		signalDatasetKind: "max",
 	},
 	intensity: {
 		wholeSlice: true,
 		useDapi: false,
 		selectedRegionIds: [],
 		includeLayers: false,
+		signalDatasetKind: "max",
 	},
 	count: {},
 	dual: {},
@@ -301,6 +335,14 @@ function validateBatchPlan(plan) {
 			if (!STEP_META[plan.steps[i]]) {
 				errors.push("Unknown step: " + plan.steps[i]);
 			}
+		}
+		if (
+			plan.steps.indexOf("detect") >= 0 &&
+			plan.steps.indexOf("detect_qc") >= 0
+		) {
+			errors.push(
+				"Choose either Cell detection or Detect QC scout, not both in one plan.",
+			);
 		}
 		if (plan.steps.indexOf("intensity") >= 0) {
 			if (

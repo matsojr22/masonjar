@@ -9,12 +9,14 @@ var registry = require("../js/batch_registry");
 
 function testStepOrderIncludesNewSteps() {
 	assert.ok(registry.BATCH_STEP_ORDER.indexOf("apply_geometry") >= 0);
-	assert.ok(registry.BATCH_STEP_ORDER.indexOf("dapi_cleanup") >= 0);
 	assert.ok(registry.BATCH_STEP_ORDER.indexOf("parcellation") >= 0);
 	assert.ok(registry.BATCH_STEP_ORDER.indexOf("collate") >= 0);
 	assert.ok(registry.BATCH_STEP_ORDER.indexOf("max") >= 0);
 	assert.ok(registry.BATCH_STEP_ORDER.indexOf("sharpen") >= 0);
+	assert.ok(registry.BATCH_STEP_ORDER.indexOf("tophat") >= 0);
 	assert.ok(registry.BATCH_STEP_ORDER.indexOf("detect") >= 0);
+	assert.ok(registry.BATCH_STEP_ORDER.indexOf("detect_qc") >= 0);
+	assert.ok(registry.BATCH_STEP_ORDER.indexOf("dapi_cleanup") < 0);
 }
 
 function testStepMetaShape() {
@@ -33,11 +35,15 @@ function testSortSteps() {
 		"detect",
 		"apply_geometry",
 		"max",
+		"tophat",
+		"detect_qc",
 	]);
 	assert.deepStrictEqual(sorted, [
 		"apply_geometry",
 		"max",
+		"tophat",
 		"detect",
+		"detect_qc",
 		"collate",
 	]);
 }
@@ -45,7 +51,9 @@ function testSortSteps() {
 function testDependencyGraphMaxFanout() {
 	var downstream = registry.DEPENDENCY_GRAPH.max || [];
 	assert.ok(downstream.indexOf("sharpen") >= 0);
+	assert.ok(downstream.indexOf("tophat") >= 0);
 	assert.ok(downstream.indexOf("detect") >= 0);
+	assert.ok(downstream.indexOf("detect_qc") >= 0);
 	assert.ok(downstream.indexOf("intensity") >= 0);
 	assert.ok(downstream.indexOf("count") >= 0);
 	assert.ok(downstream.indexOf("collate") >= 0);
@@ -56,10 +64,8 @@ function testGetDownstreamSteps() {
 	var downstream = registry.getDownstreamSteps("max");
 	assert.ok(downstream.length > 0);
 	assert.ok(downstream.indexOf("sharpen") >= 0);
-	assert.deepStrictEqual(
-		registry.getDownstreamSteps("dual"),
-		[],
-	);
+	assert.deepStrictEqual(registry.getDownstreamSteps("dual"), []);
+	assert.deepStrictEqual(registry.getDownstreamSteps("detect_qc"), []);
 }
 
 function testComputeSkipDownstream() {
@@ -67,7 +73,6 @@ function testComputeSkipDownstream() {
 		projects: [{ path: "/tmp/p1", name: "p1" }],
 		steps: ["max", "sharpen", "detect", "count", "collate"],
 	};
-	// Failure of max for p1 should cascade to all downstream steps for p1.
 	var failures = { "/tmp/p1": { max: true } };
 	var skipped = registry.computeSkipDownstream(plan, failures);
 	assert.ok(skipped["/tmp/p1"], "skip map should have entry for the failed project");
@@ -117,6 +122,18 @@ function testValidateBatchPlanCollateNeedsTwo() {
 	);
 }
 
+function testValidateDetectAndDetectQcExclusive() {
+	var errors = registry.validateBatchPlan({
+		projects: [{ path: "/tmp/p1", name: "p1" }],
+		steps: ["detect", "detect_qc"],
+	});
+	assert.ok(
+		errors.some(function (e) {
+			return e.toLowerCase().indexOf("qc scout") >= 0 || e.toLowerCase().indexOf("either") >= 0;
+		}),
+	);
+}
+
 function testDependencyGraphParcellationFanout() {
 	var downstream = registry.DEPENDENCY_GRAPH.parcellation || [];
 	assert.ok(downstream.indexOf("count") >= 0);
@@ -128,12 +145,16 @@ function testDependencyGraphParcellationFanout() {
 function testDefaultParamsExist() {
 	assert.ok(registry.DEFAULT_PARAMS.max);
 	assert.ok(registry.DEFAULT_PARAMS.sharpen);
+	assert.ok(registry.DEFAULT_PARAMS.tophat);
 	assert.ok(registry.DEFAULT_PARAMS.detect);
+	assert.ok(registry.DEFAULT_PARAMS.detect_qc);
 	assert.ok(registry.DEFAULT_PARAMS.intensity);
-	assert.ok(registry.DEFAULT_PARAMS.dapi_cleanup);
 	assert.ok(registry.DEFAULT_PARAMS.apply_geometry);
 	assert.ok(registry.DEFAULT_PARAMS.parcellation);
 	assert.ok(registry.DEFAULT_PARAMS.collate);
+	assert.ok(!registry.DEFAULT_PARAMS.dapi_cleanup);
+	assert.strictEqual(registry.DEFAULT_PARAMS.tophat.radius, 10);
+	assert.strictEqual(registry.DEFAULT_PARAMS.detect.signalDatasetKind, "max");
 }
 
 function run() {
@@ -148,6 +169,7 @@ function run() {
 	testValidateBatchPlanRequiresSteps();
 	testValidateBatchPlanIntensityNeedsRegions();
 	testValidateBatchPlanCollateNeedsTwo();
+	testValidateDetectAndDetectQcExclusive();
 	testDefaultParamsExist();
 	console.log("test-batch-plan: PASS");
 }

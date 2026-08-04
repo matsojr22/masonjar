@@ -222,6 +222,15 @@ if __name__ == "__main__":
         type=float,
         default=0.0,
     )
+    parser.add_argument(
+        "--qc-only",
+        help=(
+            "write full Detect QC package (histograms, summary, suggestions) "
+            "without Predictions_*.pkl or bbox PNGs"
+        ),
+        action="store_true",
+        default=False,
+    )
     args = parser.parse_args()
 
     _limit_detect_threads()
@@ -431,8 +440,9 @@ if __name__ == "__main__":
                         image_dimensions=(height, width),
                     )
                 )
-                bbox_path = Path(output_dir) / f"BBoxes_{stripped}_{i}.png"
-                export_bboxes(chan_img, bboxes, bbox_path)
+                if not args.qc_only:
+                    bbox_path = Path(output_dir) / f"BBoxes_{stripped}_{i}.png"
+                    export_bboxes(chan_img, bboxes, bbox_path)
         else:
             # Check data type
             if img.dtype == np.uint16:
@@ -494,12 +504,16 @@ if __name__ == "__main__":
                     image_dimensions=(height, width),
                 )
             ]
-            bbox_path = Path(output_dir) / f"BBoxes_{stripped}.png"
-            export_bboxes(img, bboxes, bbox_path)
+            if not args.qc_only:
+                bbox_path = Path(output_dir) / f"BBoxes_{stripped}.png"
+                export_bboxes(img, bboxes, bbox_path)
 
-        with open(output_dir / f"Predictions_{stripped}.pkl", "wb") as f:
-            pickle.dump(predictions, f)
-        written += 1
+        if args.qc_only:
+            written += 1
+        else:
+            with open(output_dir / f"Predictions_{stripped}.pkl", "wb") as f:
+                pickle.dump(predictions, f)
+            written += 1
         print(
             f"SLICE_DONE:{file_index + 1}/{n_files}:{file}",
             flush=True,
@@ -511,6 +525,7 @@ if __name__ == "__main__":
         qc_thresholds,
         per_slice_enabled=bool(args.per_slice_qc),
     )
+    manifest["qc_only"] = bool(args.qc_only)
     manifest["qc_artifacts"] = {
         "run": qc_result["run_files"],
         "summary_json": qc_result["summary_json"],
@@ -518,13 +533,20 @@ if __name__ == "__main__":
         "per_slice_dir": "detect_qc_slices" if args.per_slice_qc else None,
         "per_slice": qc_result["slice_files"],
     }
-    with open(output_dir / "run_manifest.json", "w", encoding="utf-8") as mf:
-        json.dump(manifest, mf, indent=2)
+    if not args.qc_only:
+        with open(output_dir / "run_manifest.json", "w", encoding="utf-8") as mf:
+            json.dump(manifest, mf, indent=2)
+    else:
+        # Lightweight scout marker (not a detection run_manifest)
+        with open(output_dir / "qc_scout_manifest.json", "w", encoding="utf-8") as mf:
+            json.dump(manifest, mf, indent=2)
     print(
         "LOG: detect_qc_wrote run_histograms="
         + str(len(qc_result["run_files"]))
         + " per_slice="
-        + ("true" if args.per_slice_qc else "false"),
+        + ("true" if args.per_slice_qc else "false")
+        + " qc_only="
+        + ("true" if args.qc_only else "false"),
         flush=True,
     )
 
@@ -532,8 +554,13 @@ if __name__ == "__main__":
         # Inputs existed but nothing was detected/written: a failed run, not a
         # silent success (downstream Count would otherwise fail opaquely).
         print(
-            f"DETECTION_NO_OUTPUT: 0 of {len(files)} images produced a "
-            f"Predictions PKL ({failed_reads} read failure(s)).",
+            f"DETECTION_NO_OUTPUT: 0 of {len(files)} images produced "
+            + (
+                "QC progress"
+                if args.qc_only
+                else "a Predictions PKL"
+            )
+            + f" ({failed_reads} read failure(s)).",
             flush=True,
         )
         print("Done!", flush=True)

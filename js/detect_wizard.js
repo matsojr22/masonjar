@@ -12,7 +12,9 @@ var pipelineRuns = require("./pipeline_runs");
 var maxDatasets = require("./max_datasets");
 var maxDatasetPicker = require("./max_dataset_picker");
 var detectCommon = require("./detect_common");
+var detectQcScout = require("./detect_qc_scout");
 var projectIndexBusy = require("./project_index_busy");
+var dialogs = require("./dialogs");
 
 var LAST_RUN_KEY = "masonjar.detect.lastRun";
 var PER_SLICE_QC_KEY = "masonjar.detect.perSliceQc";
@@ -244,10 +246,15 @@ function applyIntensityCutoff() {
 	if (intensitySug == null || intensitySug <= 0) {
 		return;
 	}
+	applyScoutIntensityValue(intensitySug);
+}
+
+function applyScoutIntensityValue(intensitySug) {
 	var form = formRefs();
 	if (form.intensityMin) {
 		form.intensityMin.value = String(intensitySug);
 	}
+	persistAppliedScoutIntensity(intensitySug);
 	var collapse = document.getElementById("collapseAdvanced");
 	var advance = qs("advance");
 	if (collapse && !collapse.classList.contains("show")) {
@@ -261,6 +268,80 @@ function applyIntensityCutoff() {
 		}
 	}
 	setStep(1);
+	renderDetectScoutBanner();
+}
+
+function persistAppliedScoutIntensity(intensitySug) {
+	if (!project.isActive()) {
+		return;
+	}
+	try {
+		var proj = project.getProject();
+		detectQcScout.markSuggestionApplied(proj, intensitySug);
+		project.saveProjectJson();
+	} catch (_err) {
+		/* ignore */
+	}
+}
+
+function renderDetectScoutBanner() {
+	var banner = qs("detectScoutBanner");
+	if (!banner) {
+		return;
+	}
+	if (!project.isActive()) {
+		banner.classList.add("d-none");
+		banner.innerHTML = "";
+		return;
+	}
+	var qc = detectQcScout.readDetectQc(project.getProject());
+	var sug = detectQcScout.suggestionIntensityMin(qc);
+	if (!qc || !qc.output_rel) {
+		banner.classList.add("d-none");
+		banner.innerHTML = "";
+		return;
+	}
+	var abs = detectQcScout.resolveScoutOutputAbs(
+		project.getBundleRoot(),
+		project.getProject().roles,
+		qc,
+	);
+	var lines =
+		"<strong>Detect QC scout available</strong> — full QC graphs and summary were gathered for this project.";
+	if (sug != null) {
+		lines +=
+			" Suggested intensity cutoff: <strong>" +
+			String(sug) +
+			"</strong>.";
+	}
+	if (detectQcScout.isSuggestionApplied(qc)) {
+		lines += " (threshold already applied.)";
+	}
+	banner.innerHTML =
+		'<div class="d-flex flex-wrap align-items-center gap-2">' +
+		'<div class="flex-grow-1">' +
+		lines +
+		"</div>" +
+		(sug != null && !detectQcScout.isSuggestionApplied(qc)
+			? '<button type="button" class="btn btn-sm btn-primary" id="applyScoutThreshold">Apply threshold</button>'
+			: "") +
+		(abs
+			? '<button type="button" class="btn btn-sm btn-outline-secondary" id="browseScoutQc">Browse QC</button>'
+			: "") +
+		"</div>";
+	banner.classList.remove("d-none");
+	var applyBtn = qs("applyScoutThreshold");
+	if (applyBtn) {
+		applyBtn.addEventListener("click", function () {
+			applyScoutIntensityValue(sug);
+		});
+	}
+	var browseBtn = qs("browseScoutQc");
+	if (browseBtn && abs) {
+		browseBtn.addEventListener("click", function () {
+			ipc.send("openPathInShell", abs);
+		});
+	}
 }
 
 function startDetection() {
@@ -270,6 +351,48 @@ function startDetection() {
 		return;
 	}
 
+	var qc = project.isActive()
+		? detectQcScout.readDetectQc(project.getProject())
+		: null;
+	var formIntensity = form.intensityMin ? form.intensityMin.value : 0;
+	if (detectQcScout.shouldPromptBeforeDetect(qc, formIntensity)) {
+		var sug = detectQcScout.suggestionIntensityMin(qc);
+		dialogs
+			.confirmThreeWay({
+				title: "Detect QC scout",
+				message:
+					"Would you like to apply the intensity threshold discovered in the scouting run?" +
+					(sug != null ? " (suggested: " + String(sug) + ")" : ""),
+				buttons: [
+					{ id: "apply", label: "Apply and run", primary: true },
+					{ id: "skip", label: "Skip and run" },
+					{ id: "cancel", label: "Cancel" },
+				],
+			})
+			.then(function (choice) {
+				if (choice === "cancel" || choice == null) {
+					return;
+				}
+				if (choice === "apply" && sug != null) {
+					if (form.intensityMin) {
+						form.intensityMin.value = String(sug);
+					}
+					persistAppliedScoutIntensity(sug);
+					renderDetectScoutBanner();
+				}
+				launchDetectionRun();
+			})
+			.catch(function () {
+				/* dialog cancelled */
+			});
+		return;
+	}
+
+	launchDetectionRun();
+}
+
+function launchDetectionRun() {
+	var form = formRefs();
 	var payload = detectCommon.buildRunPayload({
 		form: form,
 		detectionMethod: detectionMethod,
@@ -423,6 +546,7 @@ projectIndexBusy.populatePage(function () {
 	project.tryRestoreActiveProject();
 	pipelineGate.assertPipelineAccess();
 	workspace.applyPreset("detect");
+	renderDetectScoutBanner();
 	datasetPicker = maxDatasetPicker.wireMaxDatasetPicker({
 		storageKey: "masonjar.detect.maxDataset",
 		indirInput: qs("indir"),

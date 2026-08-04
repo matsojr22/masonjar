@@ -97,12 +97,32 @@ function testApplyGeometryHasNoScriptRoles() {
 	}
 }
 
-function testDapiCleanupReadsAndWritesDapi() {
-	var bundle = makeBundle({});
+function testTophatStepReadsMaxBranchLeaf() {
+	var bundle = makeBundle({
+		activeRuns: { max: "max/M528_max1" },
+	});
 	try {
-		var paths = project.resolvePathsForBundle(bundle, "dapi_cleanup");
-		assert.ok(paths.indir.endsWith(path.join("00_dapi")));
-		assert.ok(paths.outdir.endsWith(path.join("00_dapi")));
+		var paths = project.resolvePathsForBundle(bundle, "tophat");
+		assert.ok(
+			paths.indir.indexOf(path.join("03_max", "max", "M528_max1")) >= 0,
+			"tophat should read from active max/<slug> leaf, got: " + paths.indir,
+		);
+		assert.ok(paths.outdir.indexOf(path.join("data", "counting", "03_max")) >= 0);
+	} finally {
+		helpers.rmDir(bundle);
+	}
+}
+
+function testDetectQcResolvesLikeDetect() {
+	var bundle = makeBundle({
+		activeRuns: { max: "max/M528_max1" },
+	});
+	try {
+		var detectPaths = project.resolvePathsForBundle(bundle, "detect");
+		// detect_qc is not in RUN_STEP_CONFIG; callers map to detect
+		assert.ok(detectPaths.indir);
+		assert.ok(detectPaths.outdir);
+		assert.ok(detectPaths.outdir.indexOf("05_predictions") >= 0);
 	} finally {
 		helpers.rmDir(bundle);
 	}
@@ -175,7 +195,8 @@ function run() {
 	testSharpenStepReadsMaxBranchLeaf();
 	testIntensityStepHasInputOutputAnnotations();
 	testApplyGeometryHasNoScriptRoles();
-	testDapiCleanupReadsAndWritesDapi();
+	testTophatStepReadsMaxBranchLeaf();
+	testDetectQcResolvesLikeDetect();
 	testCollateUsesQuantificationRoleBase();
 	testResolveRoleBaseAbsForBundle();
 	testStepIdFanoutCovered();

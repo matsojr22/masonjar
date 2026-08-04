@@ -918,6 +918,10 @@ function discoverOutputRuns(roleDir, stepId, maxDepth) {
 			if (name === ".masonjar" || name === ".belljar") {
 				continue;
 			}
+			// Detect QC scout leaves must not appear as Cell detection runs
+			if (name === "qc_scout" || (relParts && relParts.indexOf("qc_scout") >= 0)) {
+				continue;
+			}
 			walk(path.join(dir, name), depth + 1, relParts.concat(name));
 		}
 	}

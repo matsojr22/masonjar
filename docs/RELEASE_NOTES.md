@@ -6,6 +6,25 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.25
+
+**What's new**
+
+- **Batch modernization:** Batch runs the same main tools as the workspace (where they can run without interaction). Deprecated DAPI cleanup is removed from Batch. Top-hat is available as a first-class Batch step. Max / sharpen / detect outputs follow the same signal-branch folders as the single-tool wizards.
+- **Detect QC scout (Batch):** Run cell detection across projects to gather the full QC package (histogram graphs, summary, threshold suggestions) under the predictions tree without writing detection PKLs or changing the active detection run.
+- **QC scout in the project:** Completed tasks shows Detect QC scout with Browse. Cell Detection shows a banner when scout data exists, can apply the suggested intensity cutoff, and asks before a full Detect run if that threshold has not been applied yet (Apply and run / Skip and run / Cancel).
+- **Batch signal datasets:** Sharpen, Top-hat, Detect, Detect QC scout, and Isolate Regions let you pick Max / Sharpen / Top-hat as the per-project input kind, matching the Cell Detection dataset families.
+
+**Commit subject**
+
+Modernize Batch with Top-hat and Detect QC scout
+
+**Commit body**
+
+Align Batch with current main tools (path/branch parity, Top-hat, drop DAPI cleanup), add Detect QC scout that writes full QC under predictions without PKLs, and surface scout results in Completed tasks and the Cell Detection wizard with an apply/skip pre-run prompt.
+
+---
+
 ## v6.0.24
 
 **What's new**

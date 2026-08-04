@@ -161,9 +161,88 @@ function pickProjectRole(canonicalRoles, defaultRole) {
 	});
 }
 
+/**
+ * Three-button confirm modal.
+ * @param {{ title?: string, message: string, buttons: Array<{id:string,label:string,primary?:boolean}> }} opts
+ * @returns {Promise<string|null>} Selected button id, or null if dismissed.
+ */
+function confirmThreeWay(opts) {
+	opts = opts || {};
+	var title = opts.title || "Confirm";
+	var message = opts.message || "";
+	var buttons = opts.buttons || [];
+	return new Promise(function (resolve) {
+		if (!window.bootstrap || !window.bootstrap.Modal) {
+			// Fallback: Apply = OK, Skip = second confirm, Cancel = dismiss
+			if (window.confirm(message + "\n\nOK = Apply and run, Cancel = cancel.")) {
+				resolve(buttons[0] ? buttons[0].id : "apply");
+			} else {
+				resolve("cancel");
+			}
+			return;
+		}
+		var modalEl = document.getElementById("mjConfirmThreeWayModal");
+		if (!modalEl) {
+			modalEl = document.createElement("div");
+			modalEl.className = "modal fade";
+			modalEl.id = "mjConfirmThreeWayModal";
+			modalEl.tabIndex = -1;
+			modalEl.setAttribute("aria-hidden", "true");
+			document.body.appendChild(modalEl);
+		}
+		var btnHtml = "";
+		for (var i = 0; i < buttons.length; i++) {
+			var b = buttons[i];
+			var cls = b.primary ? "btn btn-primary" : "btn btn-outline-secondary";
+			btnHtml +=
+				'<button type="button" class="' +
+				cls +
+				'" data-choice="' +
+				String(b.id) +
+				'">' +
+				String(b.label) +
+				"</button>";
+		}
+		modalEl.innerHTML =
+			'<div class="modal-dialog modal-dialog-centered">' +
+			'<div class="modal-content text-start">' +
+			'<div class="modal-header">' +
+			'<h5 class="modal-title">' +
+			String(title) +
+			"</h5>" +
+			'<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>' +
+			"</div>" +
+			'<div class="modal-body"><p class="mb-0">' +
+			String(message) +
+			"</p></div>" +
+			'<div class="modal-footer flex-wrap gap-2">' +
+			btnHtml +
+			"</div></div></div>";
+
+		var modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+		var chosen = null;
+
+		function onHidden() {
+			modalEl.removeEventListener("hidden.bs.modal", onHidden);
+			resolve(chosen);
+		}
+
+		modalEl.addEventListener("hidden.bs.modal", onHidden);
+		var choiceBtns = modalEl.querySelectorAll("[data-choice]");
+		for (var c = 0; c < choiceBtns.length; c++) {
+			choiceBtns[c].addEventListener("click", function (ev) {
+				chosen = ev.currentTarget.getAttribute("data-choice");
+				modal.hide();
+			});
+		}
+		modal.show();
+	});
+}
+
 module.exports = {
 	pickDirectory: pickDirectory,
 	pickNetworkLocations: pickNetworkLocations,
 	pickProjectRole: pickProjectRole,
+	confirmThreeWay: confirmThreeWay,
 	ROLE_LABELS: ROLE_LABELS,
 };

@@ -102,7 +102,7 @@ export interface BatchQueueDeps {
     code: unknown,
     signal: unknown,
   ) => string | null;
-  queueLogLineForUi: (line: string) => void;
+  queueLogLineForUi?: (line: string) => void;
   pythonShellEnv: () => NodeJS.ProcessEnv;
 }
 
@@ -113,31 +113,20 @@ export interface BatchQueueCallbacks {
   onJobEnd: JobEndCallback;
 }
 
-// Per-step downstream that must be skipped when an upstream fails.
-const DEPENDENCY_GRAPH: Record<string, string[]> = {
-  apply_geometry: [
-    "dapi_cleanup",
-    "parcellation",
-    "max",
-    "sharpen",
-    "detect",
-    "count",
-    "intensity",
-    "dual",
-    "collate",
-  ],
-  dapi_cleanup: ["parcellation", "intensity", "dual"],
-  parcellation: ["count", "intensity", "dual", "collate"],
-  max: ["sharpen", "detect", "intensity", "count", "collate", "dual"],
-  sharpen: ["detect", "intensity", "count", "collate", "dual"],
-  detect: ["count", "collate"],
-  count: ["collate"],
-  intensity: ["dual"],
-  dual: [],
-  collate: [],
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const batchRegistry = require("./js/batch_registry") as {
+  DEPENDENCY_GRAPH: Record<string, string[]>;
 };
+const DEPENDENCY_GRAPH = batchRegistry.DEPENDENCY_GRAPH;
 
 const TAIL_LIMIT = 50;
+const SIGNAL_DATASET_STEPS = [
+  "sharpen",
+  "tophat",
+  "detect",
+  "detect_qc",
+  "intensity",
+];
 
 let batchAbort = false;
 let currentBatchJob: { kill: () => void } | null = null;
@@ -165,6 +154,80 @@ interface RunPythonResult {
   error: string | null;
   noPklsWritten: boolean;
   resultPayload?: Record<string, unknown>;
+  total: number;
+  completedCount: number;
+  exitCode: number;
+  sawDone: boolean;
+}
+
+function pipelineRunsModule(): {
+  buildRunSlug: (stepId: string, context: Record<string, unknown>) => string;
+  buildDetectRunSlug: (options: Record<string, unknown>) => string;
+  inferSignalBranchForMaxFamily: (
+    activeRel: string,
+    indirAbs: string,
+  ) => string;
+  migrateActiveRuns: (processing: unknown) => Record<string, string>;
+} {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return require("./js/pipeline_runs");
+}
+
+function maxDatasetsModule(): {
+  branchRootAbs: (bundleRoot: string, branch: string) => string;
+  listDatasetsForBranch: (
+    bundleRoot: string,
+    branch: string,
+  ) => Array<{
+    kind: string;
+    rel: string;
+    abs: string;
+    mtime: number;
+    label: string;
+  }>;
+  defaultDatasetForBranch: (
+    bundleRoot: string,
+    branch: string,
+    opts?: { preferKind?: string; savedRel?: string },
+  ) => {
+    kind: string;
+    rel: string;
+    abs: string;
+    mtime: number;
+    label: string;
+  } | null;
+  listSignalBranches: (bundleRoot: string) => string[];
+  parseSourceRunRel: (
+    datasetRel: string,
+    branch: string,
+  ) => { source_kind: string; source_run_rel: string };
+} {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return require("./js/max_datasets");
+}
+
+function detectCommonModule(): {
+  modelBranchForSlug: (
+    detectionMethod: string,
+    modelPath: string,
+  ) => string;
+} {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return require("./js/detect_common");
+}
+
+function preprocessBatchCompletionModule(): {
+  evaluatePreprocessBatchResult: (state: {
+    runFailed?: boolean;
+    exitCode?: number;
+    pyFail?: string;
+    total?: number;
+    completedCount?: number;
+    failMessage?: string;
+  }) => { ok: boolean; message: string; warnOnly?: boolean };
+} {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return require("./js/preprocess_batch_completion");
 }
 
 function geometryStateModule(): {
@@ -200,15 +263,25 @@ function runPython(
 ): Promise<RunPythonResult> {
   return new Promise((resolve) => {
     if (batchAbort) {
-      resolve({ error: "Cancelled", noPklsWritten: false });
+      resolve({
+        error: "Cancelled",
+        noPklsWritten: false,
+        total: 0,
+        completedCount: 0,
+        exitCode: 0,
+        sawDone: false,
+      });
       return;
     }
     const baseEnv = deps.pythonShellEnv();
     let total = 0;
     let current = 0;
+    let completedCount = 0;
+    let sawDone = false;
     let sawNoPkls = false;
     let resolved = false;
     let resultPayload: Record<string, unknown> | undefined;
+    let exitCode = 0;
 
     let pyJob = runPythonJob({
       script: opts.scriptName,
@@ -243,6 +316,19 @@ function runPython(
           }
           return;
         }
+        if (
+          message.startsWith("LOG: sharpen_done ") ||
+          message.startsWith("LOG: tophat_done ")
+        ) {
+          completedCount++;
+          opts.onLine(message.slice(4));
+          if (opts.onProgress) {
+            const pct =
+              total > 0 ? Math.round((completedCount / total) * 100) : 0;
+            opts.onProgress(pct, message.slice(4));
+          }
+          return;
+        }
         if (message.startsWith("LOG:")) {
           opts.onLine(message.slice(4));
           return;
@@ -258,8 +344,10 @@ function runPython(
           }
         }
         if (message === "Done!") {
+          sawDone = true;
           void pyJob.end().then(({ err, code, signal }) => {
             const pyFail = deps.describePythonShellFailure(err, code, signal);
+            exitCode = typeof code === "number" ? code : Number(code) || 0;
             finish(pyFail);
           });
         } else {
@@ -280,7 +368,15 @@ function runPython(
       }
       resolved = true;
       currentBatchJob = null;
-      resolve({ error, noPklsWritten: sawNoPkls, resultPayload });
+      resolve({
+        error,
+        noPklsWritten: sawNoPkls,
+        resultPayload,
+        total,
+        completedCount: completedCount > 0 ? completedCount : current,
+        exitCode,
+        sawDone,
+      });
     }
 
     void pyJob.wait().then(({ err, code, signal }) => {
@@ -291,6 +387,7 @@ function runPython(
         finish(null);
         return;
       }
+      exitCode = typeof code === "number" ? code : Number(code) || 0;
       if (err) {
         finish(String(err instanceof Error ? err.message : err));
         return;
@@ -428,13 +525,120 @@ function appendIfPath(args: string[], flag: string, value: string) {
 }
 
 function buildRunSlug(stepId: string, ctx: Record<string, unknown>): string {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const pipelineRuns = (require as (id: string) => unknown)(
-    "./js/pipeline_runs",
-  ) as {
-    buildRunSlug: (stepId: string, context: Record<string, unknown>) => string;
+  return pipelineRunsModule().buildRunSlug(stepId, ctx);
+}
+
+function buildDetectRunSlug(ctx: Record<string, unknown>): string {
+  return pipelineRunsModule().buildDetectRunSlug(ctx);
+}
+
+function resolveBatchStepPaths(
+  projPath: string,
+  stepId: string,
+): ResolvedStepPaths {
+  const pathStepId = stepId === "detect_qc" ? "detect" : stepId;
+  return resolvePathsForStep(projPath, pathStepId) || {};
+}
+
+function resolveSignalDatasetAbs(
+  proj: BatchProject,
+  stepId: string,
+  plan: BatchPlan,
+  processing: ProjectJsonShape["processing"],
+): string | null {
+  const params = (plan.params && plan.params[stepId]) || {};
+  const kind = String(params.signalDatasetKind || "max");
+  const maxDatasets = maxDatasetsModule();
+  const pipelineRuns = pipelineRunsModule();
+  const activeRuns = pipelineRuns.migrateActiveRuns(processing || null) || {};
+  const activeRel = String(activeRuns.max || "");
+  const signalBranch =
+    pipelineRuns.inferSignalBranchForMaxFamily(activeRel, "") || "";
+
+  type Ds = {
+    kind: string;
+    rel: string;
+    abs: string;
+    mtime: number;
+    label: string;
   };
-  return pipelineRuns.buildRunSlug(stepId, ctx);
+  const collect = (branch: string): Ds[] =>
+    maxDatasets
+      .listDatasetsForBranch(proj.path, branch)
+      .filter((d) => d.kind === kind);
+
+  let datasets = collect(signalBranch);
+  if (!datasets.length) {
+    const branches = maxDatasets.listSignalBranches(proj.path) || [];
+    for (const b of branches) {
+      if (b === signalBranch) {
+        continue;
+      }
+      datasets = datasets.concat(collect(b));
+    }
+    if (!signalBranch && !datasets.length) {
+      datasets = collect("");
+    }
+  }
+
+  if (activeRel) {
+    const activeMatch = datasets.find((d) => d.rel === activeRel);
+    if (activeMatch) {
+      return activeMatch.abs;
+    }
+  }
+
+  const preferred = maxDatasets.defaultDatasetForBranch(
+    proj.path,
+    signalBranch,
+    { preferKind: kind },
+  );
+  if (preferred && preferred.kind === kind) {
+    return preferred.abs;
+  }
+
+  datasets.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+  return datasets.length ? datasets[0].abs : null;
+}
+
+function applySignalDatasetOverride(
+  paths: ResolvedStepPaths,
+  proj: BatchProject,
+  stepId: string,
+  plan: BatchPlan,
+  processing: ProjectJsonShape["processing"],
+  onLine: (line: string) => void,
+): ResolvedStepPaths {
+  if (SIGNAL_DATASET_STEPS.indexOf(stepId) < 0) {
+    return paths;
+  }
+  const abs = resolveSignalDatasetAbs(proj, stepId, plan, processing);
+  if (!abs) {
+    return paths;
+  }
+  const kind = String(
+    ((plan.params && plan.params[stepId]) || {}).signalDatasetKind || "max",
+  );
+  onLine(`[signal] ${stepId}: using ${kind} dataset → ${abs}`);
+  return { ...paths, indir: abs };
+}
+
+function maxWriteBase(
+  proj: BatchProject,
+  roles: Record<string, string>,
+  indir: string,
+): { writeBase: string; signalBranch: string; roleBase: string } {
+  const roleBase = resolveRolePath(proj.path, roles, "max");
+  const signalBranch =
+    pipelineRunsModule().inferSignalBranchForMaxFamily("", indir || "") || "";
+  if (signalBranch) {
+    return {
+      writeBase: maxDatasetsModule().branchRootAbs(proj.path, signalBranch),
+      signalBranch,
+      roleBase,
+    };
+  }
+  return { writeBase: roleBase, signalBranch: "", roleBase };
 }
 
 function resolveRunLeaf(
@@ -591,17 +795,6 @@ function preflightJob(
     }
   }
 
-  if (stepId === "dapi_cleanup") {
-    const dapiDir = resolveRolePath(proj.path, roles, "dapi");
-    if (!dapiDir || !fs.existsSync(dapiDir)) {
-      return { skip: true, reason: "no DAPI input" };
-    }
-    const imgs = listImageFiles(dapiDir);
-    if (imgs.length === 0) {
-      return { skip: true, reason: "no DAPI input" };
-    }
-  }
-
   if (stepId === "collate") {
     const projects = (plan.projects || []).filter((p) => {
       const projData = (() => {
@@ -656,9 +849,22 @@ function preflightJob(
     }
   }
 
-  // slice list for detect/count/intensity
-  if (stepId === "detect" || stepId === "count" || stepId === "intensity") {
-    const stepPaths = resolvePathsForStep(proj.path, stepId);
+  // slice list for detect / detect_qc / count / intensity
+  if (
+    stepId === "detect" ||
+    stepId === "detect_qc" ||
+    stepId === "count" ||
+    stepId === "intensity"
+  ) {
+    let stepPaths = resolveBatchStepPaths(proj.path, stepId);
+    stepPaths = applySignalDatasetOverride(
+      stepPaths,
+      proj,
+      stepId,
+      plan,
+      processing,
+      onLine,
+    );
     const slicesLeaf = resolveActiveRunLeafForBundle(
       proj.path,
       roles,
@@ -668,7 +874,7 @@ function preflightJob(
     const annoIds = listAnnotationSliceIds(slicesLeaf);
     let candidateIds: string[] = annoIds;
 
-    if (stepId === "detect") {
+    if (stepId === "detect" || stepId === "detect_qc") {
       const inputIds = listImageSliceIds(stepPaths.indir || "");
       candidateIds = intersectSliceIds(inputIds, annoIds.length ? annoIds : inputIds);
       if (!annoIds.length) {
@@ -744,12 +950,82 @@ function writeIntensityConfig(
   return cfgPath;
 }
 
+function recordDetectQcScout(
+  proj: BatchProject,
+  outputAbs: string,
+  _plan: BatchPlan,
+  paths: ResolvedStepPaths,
+): void {
+  let projectData: ProjectJsonShape | null;
+  try {
+    projectData = loadProjectJson(proj.path);
+  } catch {
+    return;
+  }
+  if (!projectData) {
+    return;
+  }
+  const roles = projectData.roles || {};
+  const predBase = resolveRolePath(proj.path, roles, "predictions");
+  const maxBase = resolveRolePath(proj.path, roles, "max");
+  const output_rel = relFromBase(predBase, outputAbs);
+  const summaryAbs = path.join(outputAbs, "detect_qc_summary.json");
+  const summary_rel = fs.existsSync(summaryAbs)
+    ? relFromBase(predBase, summaryAbs)
+    : "";
+  const signal_dataset_rel = relFromBase(maxBase, paths.indir || "");
+
+  const suggestions: { intensity_min?: number } = {};
+  if (fs.existsSync(summaryAbs)) {
+    try {
+      const summary = JSON.parse(fs.readFileSync(summaryAbs, "utf8")) as {
+        analysis?: { suggestions?: { intensity_min?: number } };
+        suggestions?: { intensity_min?: number };
+      };
+      const sug =
+        (summary.analysis && summary.analysis.suggestions) ||
+        summary.suggestions ||
+        {};
+      if (sug.intensity_min != null) {
+        suggestions.intensity_min = Number(sug.intensity_min);
+      }
+    } catch (_err) {
+      /* ignore */
+    }
+  }
+
+  if (!projectData.processing) {
+    projectData.processing = {};
+  }
+  projectData.processing.detect_qc = {
+    output_rel,
+    summary_rel,
+    signal_dataset_rel,
+    finished_at: new Date().toISOString(),
+    suggestions,
+    applied_intensity_min: null,
+  };
+  try {
+    saveProjectJson(proj.path, projectData);
+  } catch (_err) {
+    /* ignore */
+  }
+}
+
 function applyPostStepSideEffects(
   proj: BatchProject,
   stepId: string,
   outputAbs: string,
-  branch: string | null,
+  _branch: string | null,
+  plan?: BatchPlan,
+  paths?: ResolvedStepPaths,
 ): string {
+  if (stepId === "detect_qc") {
+    if (plan && paths) {
+      recordDetectQcScout(proj, outputAbs, plan, paths);
+    }
+    return "";
+  }
   const cfg = getStepConfig(stepId);
   if (!cfg || !cfg.outputRole) {
     return "";
@@ -850,6 +1126,63 @@ interface BuiltJob {
   finalOutAbs: string;
   finalOutRel: string;
   branch: string | null;
+  paths?: ResolvedStepPaths;
+}
+
+function buildDetectLikeArgs(
+  deps: BatchQueueDeps,
+  params: Record<string, unknown>,
+  indir: string,
+  finalOut: string,
+  sliceListPath: string,
+  qcOnly: boolean,
+): string[] {
+  const models: Record<string, string> = {
+    somata: "models/chaosdruid.pt",
+    nuclei: "models/ankou.pt",
+  };
+  const method = String(params.method || "somata");
+  const customModel = String(params.customModel || "").trim();
+  let modelPath = path.join(deps.homeDir, models[method] || models.somata);
+  if (customModel.length > 0) {
+    modelPath = customModel;
+  }
+  const samModelPath = path.join(deps.homeDir, "models/sam_vit_b.pth");
+  const args = [
+    "-i",
+    indir,
+    "-o",
+    finalOut,
+    "-c",
+    String(params.confidence ?? 0.5),
+    "-t",
+    String(params.tile ?? 640),
+    "-a",
+    String(params.area ?? 200),
+    "-s",
+    samModelPath,
+    "-e",
+    String(params.eccentricity ?? 0.2),
+    "-m",
+    modelPath,
+  ];
+  if (params.multichannel) {
+    args.push("--multichannel");
+  }
+  if (sliceListPath) {
+    args.push("--slice-list", sliceListPath);
+  }
+  if (params.perSliceQc) {
+    args.push("--per-slice-qc");
+  }
+  const intensityMin = Number(params.intensityMin ?? 0);
+  if (intensityMin > 0) {
+    args.push("--intensity-min", String(intensityMin));
+  }
+  if (qcOnly) {
+    args.push("--qc-only");
+  }
+  return args;
 }
 
 function buildJob(
@@ -865,17 +1198,28 @@ function buildJob(
   const meta = readProjectMeta(proj.path);
   const roles = meta.roles;
   const processing = meta.processing;
-  const paths = resolvePathsForStep(proj.path, stepId);
+  let paths = resolveBatchStepPaths(proj.path, stepId);
+  paths = applySignalDatasetOverride(
+    paths,
+    proj,
+    stepId,
+    plan,
+    processing,
+    onLine,
+  );
 
   if (stepId === "max") {
     const stems = listImageSliceStems(paths.indir || "");
     const slug = buildRunSlug("max", {
       sortedStems: stems,
       dendrite: !!params.dendrites,
-      tophat: !!params.cells,
     });
-    const base = resolveRolePath(proj.path, roles, "max");
-    const finalOut = resolveRunLeaf(base, "max", slug);
+    const { writeBase, roleBase } = maxWriteBase(
+      proj,
+      roles,
+      paths.indir || "",
+    );
+    const finalOut = resolveRunLeaf(writeBase, "max", slug);
     fs.mkdirSync(finalOut, { recursive: true });
     const args = [
       "-o",
@@ -885,7 +1229,7 @@ function buildJob(
       "-d",
       params.dendrites ? "True" : "False",
       "-t",
-      params.cells ? "True" : "False",
+      "False",
       "-g",
       "False",
     ];
@@ -893,21 +1237,33 @@ function buildJob(
       scriptName: "max.py",
       args,
       finalOutAbs: finalOut,
-      finalOutRel: relFromBase(base, finalOut),
+      finalOutRel: relFromBase(roleBase, finalOut),
       branch: "max",
+      paths,
     };
   }
 
   if (stepId === "sharpen") {
     const stems = listImageSliceStems(paths.indir || "");
+    const { writeBase, signalBranch, roleBase } = maxWriteBase(
+      proj,
+      roles,
+      paths.indir || "",
+    );
+    const inputDatasetRel = relFromBase(roleBase, paths.indir || "");
+    const parsed = maxDatasetsModule().parseSourceRunRel(
+      inputDatasetRel,
+      signalBranch,
+    );
     const slug = buildRunSlug("sharpen", {
       sortedStems: stems,
       radius: Number(params.radius || 1),
       amount: Number(params.amount || 1),
       equalize: !!params.equalize,
+      sourceKind: parsed.source_kind,
+      sourceRunRel: parsed.source_run_rel,
     });
-    const base = resolveRolePath(proj.path, roles, "max");
-    const finalOut = resolveRunLeaf(base, "sharpen", slug);
+    const finalOut = resolveRunLeaf(writeBase, "sharpen", slug);
     fs.mkdirSync(finalOut, { recursive: true });
     const args = [
       "-o",
@@ -926,31 +1282,72 @@ function buildJob(
       scriptName: "sharpen.py",
       args,
       finalOutAbs: finalOut,
-      finalOutRel: relFromBase(base, finalOut),
+      finalOutRel: relFromBase(roleBase, finalOut),
       branch: "sharpen",
+      paths,
     };
   }
 
-  if (stepId === "detect") {
-    const models: Record<string, string> = {
-      somata: "models/chaosdruid.pt",
-      nuclei: "models/ankou.pt",
-    };
-    const method = String(params.method || "somata");
-    const branchName = method === "nuclei" ? "nuclei" : "somata";
-    const customModel = String(params.customModel || "").trim();
-    let modelPath = path.join(
-      deps.homeDir,
-      models[method] || models.somata,
+  if (stepId === "tophat") {
+    const stems = listImageSliceStems(paths.indir || "");
+    const { writeBase, signalBranch, roleBase } = maxWriteBase(
+      proj,
+      roles,
+      paths.indir || "",
     );
-    if (customModel.length > 0) {
-      modelPath = customModel;
-    }
-    const samModelPath = path.join(deps.homeDir, "models/sam_vit_b.pth");
+    const inputDatasetRel = relFromBase(roleBase, paths.indir || "");
+    const parsed = maxDatasetsModule().parseSourceRunRel(
+      inputDatasetRel,
+      signalBranch,
+    );
+    const slug = buildRunSlug("tophat", {
+      sortedStems: stems,
+      radius: Number(params.radius ?? 10),
+      gamma: Number(params.gamma ?? 1.25),
+      sourceKind: parsed.source_kind,
+      sourceRunRel: parsed.source_run_rel,
+    });
+    const finalOut = resolveRunLeaf(writeBase, "tophat", slug);
+    fs.mkdirSync(finalOut, { recursive: true });
+    const args = [
+      "-g",
+      "False",
+      "-i",
+      paths.indir || "",
+      "-o",
+      finalOut,
+      "-f",
+      String(params.radius ?? 10),
+      "-c",
+      String(params.gamma ?? 1.25),
+    ];
+    return {
+      scriptName: "top_hat.py",
+      args,
+      finalOutAbs: finalOut,
+      finalOutRel: relFromBase(roleBase, finalOut),
+      branch: "tophat",
+      paths,
+    };
+  }
+
+  if (stepId === "detect" || stepId === "detect_qc") {
+    const method = String(params.method || "somata");
+    const customModel = String(params.customModel || "").trim();
+    const modelBranch = detectCommonModule().modelBranchForSlug(
+      method,
+      customModel,
+    );
     const stems = listImageSliceStems(paths.indir || "");
     const maxBase = resolveRolePath(proj.path, roles, "max");
     const inputDatasetRel = relFromBase(maxBase, paths.indir || "");
-    const slug = buildRunSlug("detect", {
+    const signalBranch =
+      pipelineRunsModule().inferSignalBranchForMaxFamily(
+        inputDatasetRel,
+        paths.indir || "",
+      ) || "";
+    const branchName = signalBranch || modelBranch;
+    const slug = buildDetectRunSlug({
       sortedStems: stems,
       confidence: Number(params.confidence ?? 0.5),
       tile: Number(params.tile ?? 640),
@@ -958,47 +1355,42 @@ function buildJob(
       eccentricity: Number(params.eccentricity ?? 0.2),
       intensityMin: Number(params.intensityMin ?? 0),
       inputDatasetRel,
+      modelBranch,
     });
-    const base = resolveRolePath(proj.path, roles, "predictions");
-    const finalOut = resolveRunLeaf(base, branchName, slug);
+    const predBase = resolveRolePath(proj.path, roles, "predictions");
+    let finalOut: string;
+    let branch: string | null;
+    if (stepId === "detect_qc") {
+      if (signalBranch) {
+        finalOut = resolveRunLeaf(
+          path.join(predBase, signalBranch),
+          "qc_scout",
+          slug,
+        );
+      } else {
+        finalOut = resolveRunLeaf(predBase, "qc_scout", slug);
+      }
+      branch = "qc_scout";
+    } else {
+      finalOut = resolveRunLeaf(predBase, branchName, slug);
+      branch = branchName;
+    }
     fs.mkdirSync(finalOut, { recursive: true });
-    const args = [
-      "-i",
+    const args = buildDetectLikeArgs(
+      deps,
+      params,
       paths.indir || "",
-      "-o",
       finalOut,
-      "-c",
-      String(params.confidence ?? 0.5),
-      "-t",
-      String(params.tile ?? 640),
-      "-a",
-      String(params.area ?? 200),
-      "-s",
-      samModelPath,
-      "-e",
-      String(params.eccentricity ?? 0.2),
-      "-m",
-      modelPath,
-    ];
-    if (params.multichannel) {
-      args.push("--multichannel");
-    }
-    if (sliceListPath) {
-      args.push("--slice-list", sliceListPath);
-    }
-    if (params.perSliceQc) {
-      args.push("--per-slice-qc");
-    }
-    const intensityMin = Number(params.intensityMin ?? 0);
-    if (intensityMin > 0) {
-      args.push("--intensity-min", String(intensityMin));
-    }
+      sliceListPath,
+      stepId === "detect_qc",
+    );
     return {
       scriptName: "find_neurons.py",
       args,
       finalOutAbs: finalOut,
-      finalOutRel: relFromBase(base, finalOut),
-      branch: branchName,
+      finalOutRel: relFromBase(predBase, finalOut),
+      branch,
+      paths,
     };
   }
 
@@ -1038,6 +1430,7 @@ function buildJob(
       finalOutAbs: finalOut,
       finalOutRel: relFromBase(base, finalOut),
       branch: "count",
+      paths,
     };
   }
 
@@ -1098,6 +1491,7 @@ function buildJob(
       finalOutAbs: finalOut,
       finalOutRel: relFromBase(base, finalOut),
       branch: "intensity",
+      paths,
     };
   }
 
@@ -1119,46 +1513,7 @@ function buildJob(
       finalOutAbs: finalOut,
       finalOutRel: relFromBase(base, finalOut),
       branch: "dual",
-    };
-  }
-
-  if (stepId === "dapi_cleanup") {
-    const dapiDir = resolveRolePath(proj.path, roles, "dapi");
-    const inPlace = params.inPlace !== false; // default in-place
-    const backupDirRel = path.join(
-      path.dirname(dapiDir),
-      "00_dapi_backup",
-    );
-    const outDir = inPlace
-      ? dapiDir
-      : path.join(path.dirname(dapiDir), "00_dapi_clean");
-    if (!inPlace) {
-      fs.mkdirSync(outDir, { recursive: true });
-    }
-    const args = [
-      "-i",
-      dapiDir,
-      "-o",
-      outDir,
-      params.isolate === false ? "--no-isolate" : "--isolate",
-      "--saturation",
-      String(params.saturation != null ? params.saturation : 5),
-    ];
-    if (params.clahe) {
-      args.push("--clahe");
-    }
-    if (inPlace) {
-      args.push("--backup-dir", backupDirRel);
-    }
-    if (params.bgValue != null && String(params.bgValue).trim().length > 0) {
-      args.push("--bg-value", String(params.bgValue).trim());
-    }
-    return {
-      scriptName: "dapi_cleanup.py",
-      args,
-      finalOutAbs: outDir,
-      finalOutRel: "",
-      branch: null,
+      paths,
     };
   }
 
@@ -1171,7 +1526,6 @@ function buildJob(
       settings = {};
     }
     const cziImport = (settings.czi_import || {}) as Record<string, unknown>;
-    const metaPath = ensureMetaDir(proj.path);
     const geometryState = geometryStateModule();
     const cfgPath = geometryState.writeCziImportConfig(proj.path, cziImport, {
       apply_source: "batch",
@@ -1183,6 +1537,7 @@ function buildJob(
       finalOutAbs: proj.path,
       finalOutRel: "",
       branch: null,
+      paths,
     };
   }
 
@@ -1213,6 +1568,7 @@ function buildJob(
       finalOutAbs: annodir,
       finalOutRel: "",
       branch: null,
+      paths,
     };
   }
 
@@ -1282,6 +1638,9 @@ async function runCollate(
   const onLine = (line: string) => {
     captureLineForTail(tail, line);
     callbacks.onJobLog(procLabel, "collate", line);
+    if (typeof deps.queueLogLineForUi === "function") {
+      deps.queueLogLineForUi(line);
+    }
   };
 
   // Gather count CSVs from each project (count leaf).
@@ -1541,6 +1900,9 @@ export async function runBatchQueue(
       const onLine = (line: string) => {
         captureLineForTail(tail, line);
         callbacks.onJobLog(proj.name, stepId, line);
+        if (typeof deps.queueLogLineForUi === "function") {
+          deps.queueLogLineForUi(line);
+        }
       };
 
       let pre: PreflightDecision;
@@ -1633,6 +1995,9 @@ export async function runBatchQueue(
               )
             : pct;
         callbacks.onProgress(overall, `${proj.name}: ${stepId}`, msg);
+        if (typeof deps.queueLogLineForUi === "function" && msg) {
+          deps.queueLogLineForUi(msg);
+        }
       };
 
       const result = await runPython(deps, {
@@ -1650,6 +2015,45 @@ export async function runBatchQueue(
       if (batchAbort) {
         status = "cancelled";
         reason = "Cancelled by user";
+      } else if (
+        (stepId === "sharpen" || stepId === "tophat") &&
+        result.error
+      ) {
+        const outputsExist =
+          !!job.finalOutAbs &&
+          fs.existsSync(job.finalOutAbs) &&
+          countImageFiles(job.finalOutAbs) > 0;
+        let completedCount = result.completedCount;
+        if (completedCount <= 0 && outputsExist && result.sawDone) {
+          completedCount = Math.max(1, countImageFiles(job.finalOutAbs));
+        }
+        const verdict = preprocessBatchCompletionModule().evaluatePreprocessBatchResult(
+          {
+            runFailed: false,
+            exitCode: result.exitCode,
+            pyFail: result.error || "",
+            total: result.total,
+            completedCount,
+            failMessage: result.error || "",
+          },
+        );
+        if (verdict.ok) {
+          status = "ok";
+          if (verdict.warnOnly && verdict.message) {
+            onLine(`[warn] ${verdict.message}`);
+            reason = verdict.message;
+          }
+        } else if (outputsExist && result.sawDone) {
+          status = "ok";
+          const warn =
+            verdict.message ||
+            "Outputs were written but Python reported a non-zero exit.";
+          onLine(`[warn] ${warn}`);
+          reason = warn;
+        } else {
+          status = "failed";
+          reason = verdict.message || result.error;
+        }
       } else if (result.error) {
         status = "failed";
         reason = result.error;
@@ -1666,6 +2070,8 @@ export async function runBatchQueue(
           stepId,
           job.finalOutAbs,
           job.branch,
+          plan,
+          job.paths,
         );
         if (stepId === "apply_geometry") {
           finalizeBatchApplyGeometry(proj, result.resultPayload);

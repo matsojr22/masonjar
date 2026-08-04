@@ -249,25 +249,41 @@ function fieldRow(label, html, formText) {
 	);
 }
 
+function signalDatasetKindField(idPrefix, kind) {
+	kind = kind || "max";
+	return fieldRow(
+		"Signal dataset (per project)",
+		'<select class="form-select form-select-sm" id="' +
+			idPrefix +
+			'-signalKind">' +
+			'<option value="max"' +
+			(kind === "max" ? " selected" : "") +
+			">Max projection</option>" +
+			'<option value="sharpen"' +
+			(kind === "sharpen" ? " selected" : "") +
+			">Sharpen</option>" +
+			'<option value="tophat"' +
+			(kind === "tophat" ? " selected" : "") +
+			">Top-hat</option>" +
+			"</select>",
+		"Uses each project’s active/newest leaf of that kind (same families as Cell Detection).",
+	);
+}
+
 function renderParamSection(stepId, body, params) {
 	if (stepId === "max") {
-		body.innerHTML =
-			fieldRow(
-				"Dendrites",
-				'<input type="checkbox" class="form-check-input" id="max-dendrites" ' +
-					(params.dendrites ? "checked" : "") +
-					" />",
-			) +
-			fieldRow(
-				"Cells (top-hat)",
-				'<input type="checkbox" class="form-check-input" id="max-cells" ' +
-					(params.cells ? "checked" : "") +
-					" />",
-			);
+		body.innerHTML = fieldRow(
+			"Dendrites filter",
+			'<input type="checkbox" class="form-check-input" id="max-dendrites" ' +
+				(params.dendrites ? "checked" : "") +
+				" />",
+			"Optional max.py dendrites mode (unrelated to the Top-hat filter tool).",
+		);
 		return;
 	}
 	if (stepId === "sharpen") {
 		body.innerHTML =
+			signalDatasetKindField("sharpen", params.signalDatasetKind) +
 			fieldRow(
 				"Radius",
 				'<input type="number" step="any" class="form-control form-control-sm" id="sharpen-radius" value="' +
@@ -288,23 +304,53 @@ function renderParamSection(stepId, body, params) {
 			);
 		return;
 	}
-	if (stepId === "detect") {
+	if (stepId === "tophat") {
 		body.innerHTML =
+			signalDatasetKindField("tophat", params.signalDatasetKind) +
+			fieldRow(
+				"Radius",
+				'<input type="number" step="any" class="form-control form-control-sm" id="tophat-radius" value="' +
+					(params.radius != null ? params.radius : 10) +
+					'" />',
+			) +
+			fieldRow(
+				"Gamma",
+				'<input type="number" step="any" class="form-control form-control-sm" id="tophat-gamma" value="' +
+					(params.gamma != null ? params.gamma : 1.25) +
+					'" />',
+			);
+		return;
+	}
+	if (stepId === "detect" || stepId === "detect_qc") {
+		var prefix = stepId === "detect_qc" ? "detectqc" : "detect";
+		var intro =
+			stepId === "detect_qc"
+				? '<p class="small text-muted">Writes the full QC package under predictions/…/qc_scout/ (graphs, summary, threshold suggestions). Does not write Predictions_*.pkl.</p>'
+				: "";
+		body.innerHTML =
+			intro +
+			signalDatasetKindField(prefix, params.signalDatasetKind) +
 			fieldRow(
 				"Confidence (0–1)",
-				'<input type="number" step="0.01" min="0" max="1" class="form-control form-control-sm" id="detect-confidence" value="' +
+				'<input type="number" step="0.01" min="0" max="1" class="form-control form-control-sm" id="' +
+					prefix +
+					'-confidence" value="' +
 					params.confidence +
 					'" />',
 			) +
 			fieldRow(
 				"Tile size (px)",
-				'<input type="number" class="form-control form-control-sm" id="detect-tile" value="' +
+				'<input type="number" class="form-control form-control-sm" id="' +
+					prefix +
+					'-tile" value="' +
 					params.tile +
 					'" />',
 			) +
 			fieldRow(
 				"Model",
-				'<select class="form-select form-select-sm" id="detect-method">' +
+				'<select class="form-select form-select-sm" id="' +
+					prefix +
+					'-method">' +
 					'<option value="somata"' +
 					(params.method === "somata" ? " selected" : "") +
 					">Somata</option>" +
@@ -315,39 +361,51 @@ function renderParamSection(stepId, body, params) {
 			) +
 			fieldRow(
 				"Min area (px)",
-				'<input type="number" class="form-control form-control-sm" id="detect-area" value="' +
+				'<input type="number" class="form-control form-control-sm" id="' +
+					prefix +
+					'-area" value="' +
 					params.area +
 					'" />',
 			) +
 			fieldRow(
 				"Eccentricity (0–1)",
-				'<input type="number" step="0.01" min="0" max="1" class="form-control form-control-sm" id="detect-eccentricity" value="' +
+				'<input type="number" step="0.01" min="0" max="1" class="form-control form-control-sm" id="' +
+					prefix +
+					'-eccentricity" value="' +
 					params.eccentricity +
 					'" />',
 			) +
 			fieldRow(
 				"Intensity cutoff (0–255, 0=off)",
-				'<input type="number" step="1" min="0" max="255" class="form-control form-control-sm" id="detect-intensityMin" value="' +
+				'<input type="number" step="1" min="0" max="255" class="form-control form-control-sm" id="' +
+					prefix +
+					'-intensityMin" value="' +
 					(params.intensityMin || 0) +
 					'" />',
 			) +
 			fieldRow(
 				"Multi-channel",
-				'<input type="checkbox" class="form-check-input" id="detect-multichannel" ' +
+				'<input type="checkbox" class="form-check-input" id="' +
+					prefix +
+					'-multichannel" ' +
 					(params.multichannel ? "checked" : "") +
 					" />",
 			) +
 			fieldRow(
 				"Custom model path (optional)",
-				'<input type="text" class="form-control form-control-sm" id="detect-customModel" value="' +
+				'<input type="text" class="form-control form-control-sm" id="' +
+					prefix +
+					'-customModel" value="' +
 					escapeHtml(params.customModel || "") +
 					'" />',
 			) +
 			fieldRow(
 				"Per-slice QC histograms",
-				'<input type="checkbox" class="form-check-input" id="detect-perSliceQc" ' +
+				'<input type="checkbox" class="form-check-input" id="' +
+					prefix +
+					'-perSliceQc" ' +
 					(params.perSliceQc ? "checked" : "") +
-					" /> <span class=\"small text-muted\">Run-level QC PNGs are always written</span>",
+					' /> <span class="small text-muted">Run-level QC PNGs are always written</span>',
 			);
 		return;
 	}
@@ -403,42 +461,6 @@ function renderParamSection(stepId, body, params) {
 		setTimeout(initParcellationPicker, 0);
 		return;
 	}
-	if (stepId === "dapi_cleanup") {
-		body.innerHTML =
-			fieldRow(
-				"Mode",
-				'<select class="form-select form-select-sm" id="dapi-inplace"><option value="true"' +
-					(params.inPlace !== false ? " selected" : "") +
-					'>In-place (backup originals to 00_dapi_backup)</option><option value="false"' +
-					(params.inPlace === false ? " selected" : "") +
-					">Separate (write to 00_dapi_clean)</option></select>",
-			) +
-			fieldRow(
-				"Isolate tissue",
-				'<input type="checkbox" class="form-check-input" id="dapi-isolate" ' +
-					(params.isolate !== false ? "checked" : "") +
-					" />",
-			) +
-			fieldRow(
-				"CLAHE",
-				'<input type="checkbox" class="form-check-input" id="dapi-clahe" ' +
-					(params.clahe ? "checked" : "") +
-					" />",
-			) +
-			fieldRow(
-				"Saturation % (each tail)",
-				'<input type="number" step="any" min="0" max="50" class="form-control form-control-sm" id="dapi-saturation" value="' +
-					params.saturation +
-					'" />',
-			) +
-			fieldRow(
-				"Background value (optional 0–255)",
-				'<input type="text" class="form-control form-control-sm" id="dapi-bgvalue" value="' +
-					escapeHtml(params.bgValue != null ? String(params.bgValue) : "") +
-					'" placeholder="auto" />',
-			);
-		return;
-	}
 	if (stepId === "apply_geometry") {
 		body.innerHTML =
 			'<p class="small text-muted mb-0">Applies the per-slice rotate/flip stored under <code>settings.czi_import.geometry</code>. Skipped automatically when nothing is pending.</p>';
@@ -446,6 +468,7 @@ function renderParamSection(stepId, body, params) {
 	}
 	if (stepId === "intensity") {
 		body.innerHTML =
+			signalDatasetKindField("intensity", params.signalDatasetKind) +
 			'<div class="row g-2 mb-2">' +
 				'<div class="col-md-4">' +
 					'<label class="form-label small">Hemisphere</label>' +
@@ -1030,31 +1053,47 @@ function collectParamsFromUi() {
 		var next = Object.assign({}, prev);
 		if (stepId === "max") {
 			next.dendrites = !!(qs("max-dendrites") && qs("max-dendrites").checked);
-			next.cells = !!(qs("max-cells") && qs("max-cells").checked);
+			delete next.cells;
 		} else if (stepId === "sharpen") {
 			next.radius = parseFloat(qs("sharpen-radius").value);
 			next.amount = parseFloat(qs("sharpen-amount").value);
 			next.equalize = !!(qs("sharpen-equalize") && qs("sharpen-equalize").checked);
-		} else if (stepId === "detect") {
-			next.confidence = parseFloat(qs("detect-confidence").value);
-			next.tile = parseInt(qs("detect-tile").value, 10);
-			next.method = qs("detect-method").value;
-			next.area = parseInt(qs("detect-area").value, 10);
-			next.eccentricity = parseFloat(qs("detect-eccentricity").value);
-			next.intensityMin = parseInt(qs("detect-intensityMin").value, 10) || 0;
+			next.signalDatasetKind = qs("sharpen-signalKind")
+				? qs("sharpen-signalKind").value
+				: "max";
+		} else if (stepId === "tophat") {
+			next.radius = parseFloat(qs("tophat-radius").value);
+			next.gamma = parseFloat(qs("tophat-gamma").value);
+			next.signalDatasetKind = qs("tophat-signalKind")
+				? qs("tophat-signalKind").value
+				: "max";
+		} else if (stepId === "detect" || stepId === "detect_qc") {
+			var prefix = stepId === "detect_qc" ? "detectqc" : "detect";
+			next.confidence = parseFloat(qs(prefix + "-confidence").value);
+			next.tile = parseInt(qs(prefix + "-tile").value, 10);
+			next.method = qs(prefix + "-method").value;
+			next.area = parseInt(qs(prefix + "-area").value, 10);
+			next.eccentricity = parseFloat(qs(prefix + "-eccentricity").value);
+			next.intensityMin = parseInt(qs(prefix + "-intensityMin").value, 10) || 0;
 			next.multichannel = !!(
-				qs("detect-multichannel") && qs("detect-multichannel").checked
+				qs(prefix + "-multichannel") && qs(prefix + "-multichannel").checked
 			);
-			next.customModel = qs("detect-customModel").value || "";
+			next.customModel = qs(prefix + "-customModel").value || "";
 			next.perSliceQc = !!(
-				qs("detect-perSliceQc") && qs("detect-perSliceQc").checked
+				qs(prefix + "-perSliceQc") && qs(prefix + "-perSliceQc").checked
 			);
+			next.signalDatasetKind = qs(prefix + "-signalKind")
+				? qs(prefix + "-signalKind").value
+				: "max";
 		} else if (stepId === "intensity") {
 			var hem = qs("intensity-hemisphere") ? qs("intensity-hemisphere").value : "whole";
 			next.wholeSlice = hem === "whole";
 			next.useDapi = !!(qs("intensity-useDapi") && qs("intensity-useDapi").checked);
 			next.selectedRegionIds = state.intensity.selectedIds.slice();
 			next.includeLayers = state.intensity.includeLayers;
+			next.signalDatasetKind = qs("intensity-signalKind")
+				? qs("intensity-signalKind").value
+				: next.signalDatasetKind || "max";
 		} else if (stepId === "parcellation") {
 			next.tierId = qs("parcelTierSelect") ? qs("parcelTierSelect").value : "areas";
 			next.stLevel = qs("parcelLevelSelect")
@@ -1062,12 +1101,6 @@ function collectParamsFromUi() {
 				: 6;
 			next.ccfAdvanced = !!(qs("parcelAdvanced") && qs("parcelAdvanced").checked);
 			next.includedRegionIds = state.parcellation.includedRegionIds.slice();
-		} else if (stepId === "dapi_cleanup") {
-			next.inPlace = qs("dapi-inplace") ? qs("dapi-inplace").value === "true" : true;
-			next.isolate = !!(qs("dapi-isolate") && qs("dapi-isolate").checked);
-			next.clahe = !!(qs("dapi-clahe") && qs("dapi-clahe").checked);
-			next.saturation = parseFloat(qs("dapi-saturation").value);
-			next.bgValue = qs("dapi-bgvalue") ? qs("dapi-bgvalue").value : "";
 		} else if (stepId === "collate") {
 			next = next; // params not used directly by per-project queue
 			state.collate.outputProjectPath = qs("collate-output")
@@ -1202,33 +1235,6 @@ function classifyPreflightCell(bundleRoot, stepId) {
 			reason: annoCount + " annotation(s); in-place rollup on active align run.",
 		};
 	}
-	if (stepId === "dapi_cleanup") {
-		var paths = project.resolvePathsForBundle(bundleRoot, "max");
-		// Inspect dapi role directly
-		var projData2;
-		try {
-			projData2 = project.readProjectJson(bundleRoot);
-		} catch (_e) {
-			return { tone: "red", label: "no project", reason: "Bundle missing project file." };
-		}
-		var roles = (projData2 && projData2.roles) || project.CANONICAL_ROLES;
-		var dapiAbs = pipelineRuns.resolveRoleBaseAbsForBundle(bundleRoot, roles, "dapi");
-		if (!dapiAbs || !fs.existsSync(dapiAbs)) {
-			return { tone: "amber", label: "no DAPI", reason: "00_dapi missing — step will skip." };
-		}
-		var count = 0;
-		try {
-			var entries = fs.readdirSync(dapiAbs);
-			for (var e = 0; e < entries.length; e++) {
-				if (/\.(png|tif|tiff)$/i.test(entries[e])) count++;
-			}
-		} catch (_e2) {
-			/* ignore */
-		}
-		return count > 0
-			? { tone: "green", label: count + " img", reason: count + " DAPI image(s) in 00_dapi" }
-			: { tone: "amber", label: "no DAPI", reason: "00_dapi empty — step will skip." };
-	}
 	if (stepId === "collate") {
 		var allProjects = listProjects();
 		var counted = 0;
@@ -1241,7 +1247,8 @@ function classifyPreflightCell(bundleRoot, stepId) {
 			? { tone: "green", label: counted + " ok", reason: counted + " counted project(s)" }
 			: { tone: "amber", label: "needs 2+", reason: "Needs ≥2 counted projects (current: " + counted + ")." };
 	}
-	var paths3 = project.resolvePathsForBundle(bundleRoot, stepId);
+	var pathStepId = stepId === "detect_qc" ? "detect" : stepId;
+	var paths3 = project.resolvePathsForBundle(bundleRoot, pathStepId);
 	if (!paths3 || !Object.keys(paths3).length) {
 		return { tone: "red", label: "?", reason: "Step paths unresolved" };
 	}
@@ -1599,6 +1606,10 @@ ipc.on("batchComplete", function (_event, result) {
 	}
 	renderSummary(result);
 	setStep(3);
+	// Refresh active project index so Completed tasks / Detect scout banners update
+	if (project.isActive()) {
+		project.refreshProjectIndex().catch(function () {});
+	}
 });
 
 function renderSummary(result) {
