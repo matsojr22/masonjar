@@ -6,6 +6,22 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.27
+
+**What's new**
+
+- **Updater validation build:** Pre-release with no other product changes, so machines on 6.0.26 can confirm Update Now finishes installing and relaunches on the new version.
+
+**Commit subject**
+
+Ship 6.0.27 pre-release to validate Update Now
+
+**Commit body**
+
+Version bump only so lab installs on 6.0.26 can exercise the Windows apply handoff fix end-to-end against a newer pre-release.
+
+---
+
 ## v6.0.26
 
 **What's new**
