@@ -11,25 +11,27 @@
     <meta http-equiv="X-Content-Security-Policy" content="default-src 'self'; script-src 'self'  https://cdn.jsdelivr.net/; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net/; font-src 'self' https://fonts.gstatic.com;">
     <title>Mason Jar</title>
   </head>
-  <body>
+  <body class="wizard-page">
     <div id="parent" class="container h-100">
       <div class="row align-items-center">
         <div class="col">
           <h1>Align Sections</h1>
           <p>
             <br>
-            Alignment takes your experimental tissue sections and helps align them to the Allen Brain Atlas. A predictor network will evaluate your tissue and suggest the best fitting sections. 
+            Alignment takes your experimental tissue sections and helps align them to the Allen Brain Atlas. A predictor network will evaluate your tissue and suggest the best fitting sections.
             Afterwards you will have to fine tune these predictions to best match your tissue.
             <br>
           </p>
         </div>
       </div>
+
+      <div id="alignSetupPanel">
       <div class="row align-items-center m-1">
         <div class="col d-grid justify-content-start">
           <h5>
             Input Path
             <i class="fas fa-circle-question fa-fw fa-xs" data-bs-toggle="tooltip" data-bs-placement="right" title="Path to a folder with your ordered DAPI/Nissl tissue slices"></i>
-          </h5>       
+          </h5>
         </div>
         <div class="col d-grid">
         </div>
@@ -69,7 +71,7 @@
               <li><a class="dropdown-item" id="whole" href="#">Both hemispheres (all sections)</a></li>
               <li><a class="dropdown-item" id="half" href="#">Single hemisphere (all sections)</a></li>
             </ul>
-          </div> 
+          </div>
         </div>
         <div class="col d-grid justify-content-start">
           <h5>
@@ -119,8 +121,8 @@
         >
           Atlas Alignment opened in Napari — switch to the
           <strong>Atlas Alignment</strong> window. Mason Jar is minimized until
-          you click <strong>Finish</strong> in Napari or <strong>Cancel</strong>
-          here.
+          you click <strong>Finish</strong> in Napari (Mason Jar returns for warping
+          progress) or <strong>Cancel</strong> here.
         </div>
       </div>
       <div class="row align-items-center m-4">
@@ -130,6 +132,32 @@
         <div class="col d-grid">
             <button type="button" class="btn btn-primary" id="run">Run</button>
         </div>
+      </div>
+      </div>
+
+      <div id="alignWarpPanel" class="d-none workspace-block text-start mt-3">
+        <div class="alert alert-info" role="status">
+          Warping sections to the atlas — please wait. Do not start other tools until this finishes.
+        </div>
+        <div class="progress mb-2">
+          <div
+            id="alignWarpProgress"
+            class="progress-bar progress-bar-striped progress-bar-animated"
+            style="width: 0%"
+          ></div>
+        </div>
+        <p id="alignWarpMessage" class="small text-muted"></p>
+        <pre id="alignWarpLog" class="wizard-log small"></pre>
+      </div>
+
+      <div id="alignFinishPanel" class="d-none workspace-block text-start mt-3">
+        <div id="alignFinishAlert" class="alert alert-success" role="status">
+          Alignment finished.
+        </div>
+        <p id="alignFinishSummary" class="mb-3"></p>
+        <a class="btn btn-outline-primary" href="./detect_wizard.html">Cell Detection</a>
+        <a class="btn btn-outline-primary ms-2" href="./menu_category.html?cat=alignment">Alignment menu</a>
+        <a class="btn btn-outline-secondary ms-2" href="./workspace_menu.html">Workspace</a>
       </div>
     </div>
 

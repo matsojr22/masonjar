@@ -1129,7 +1129,13 @@ def _is_unsupported_pixel_type_error(exc: BaseException) -> bool:
 
 
 def probe_channels_read(czi, scene: int = 0) -> tuple[list[dict[str, Any]], list[str]]:
-    """Per-channel sparse-Z + sample read for CZI probe."""
+    """Per-channel sample read for CZI probe (cheap sparse-Z for mosaics).
+
+    Non-mosaic files still run the full per-Z subblock scan (cheap). Mosaic
+    multi-Z files skip O(Z×C) ``get_all_mosaic_tile_bounding_boxes`` at probe
+    time and assume dense Z — extract re-runs sparse-Z detection authoritatively.
+    Sample reads never fall through to full-resolution tile composite.
+    """
     warnings: list[str] = []
     pixel_type = ""
     try:
@@ -1137,11 +1143,18 @@ def probe_channels_read(czi, scene: int = 0) -> tuple[list[dict[str, Any]], list
     except Exception:
         pass
     skip_sample = False
-    z_total = len(z_indices_from_czi(czi))
+    all_z = z_indices_from_czi(czi)
+    z_total = len(all_z)
+    is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
     channel_pixel_probe: list[dict[str, Any]] = []
     for cidx in channel_indices_from_czi(czi):
-        z_with_data = z_indices_with_data(czi, scene, cidx, log_sparse=False)
-        sparse = len(z_with_data) < z_total
+        if is_mosaic:
+            # Assume dense Z at probe; extract does the real sparse scan.
+            z_with_data = list(all_z) if all_z else [0]
+            sparse = False
+        else:
+            z_with_data = z_indices_with_data(czi, scene, cidx, log_sparse=False)
+            sparse = len(z_with_data) < z_total
         sample_z = z_with_data[len(z_with_data) // 2] if z_with_data else 0
         entry: dict[str, Any] = {
             "index": cidx,
@@ -1163,7 +1176,14 @@ def probe_channels_read(czi, scene: int = 0) -> tuple[list[dict[str, Any]], list
             channel_pixel_probe.append(entry)
             continue
         try:
-            read_czi_plane(czi, scene, sample_z, cidx, sample_scale=0.05)
+            read_czi_plane(
+                czi,
+                scene,
+                sample_z,
+                cidx,
+                sample_scale=0.05,
+                allow_tile_composite=False,
+            )
         except Exception as exc:
             entry["ok"] = False
             entry["error"] = str(exc)
@@ -1185,8 +1205,14 @@ def read_czi_plane(
     channel: int,
     *,
     sample_scale: float = 1.0,
+    allow_tile_composite: bool = True,
 ) -> Any:
-    """Read one S/Z/C plane (pyramid-safe, mosaic-aware). sample_scale applies to mosaic reads."""
+    """Read one S/Z/C plane (pyramid-safe, mosaic-aware). sample_scale applies to mosaic reads.
+
+    When ``allow_tile_composite`` is False (probe path), skip the expensive
+    full-resolution per-tile composite fallback and raise after read_mosaic /
+    read_image failures.
+    """
     is_mosaic = bool(getattr(czi, "is_mosaic", lambda: False)())
     if is_mosaic:
         try:
@@ -1200,6 +1226,15 @@ def read_czi_plane(
                     czi, scene, z, channel, is_mosaic=True
                 )
             except Exception as exc2:
+                if not allow_tile_composite:
+                    emit_log(
+                        f"LOG: read_image fallback failed ({exc2}); "
+                        "skipping tile composite"
+                    )
+                    raise RuntimeError(
+                        f"mosaic sample read failed: mosaic={exc}; "
+                        f"read_image={exc2}"
+                    ) from exc2
                 emit_log(
                     f"LOG: read_image fallback failed ({exc2}); trying tile composite"
                 )

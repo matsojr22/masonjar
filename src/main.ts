@@ -22,6 +22,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 import * as crypto from "crypto";
 import type { BatchPlan } from "./batch_queue";
 import {
+  createHeavyJobHandle,
   defaultCoordinatorDir,
   detectLinkMbps,
   ensureCoordinatorDir,
@@ -1783,6 +1784,8 @@ function pythonShellEnv(): NodeJS.ProcessEnv {
 
 type StartPyJobOpts = {
   label?: string;
+  /** Reuse parent fairshare env (skips new registry entry). */
+  fairshareEnv?: NodeJS.ProcessEnv;
   killChannel?: string;
   forceShell?: boolean;
   baseEnv?: NodeJS.ProcessEnv;
@@ -1803,6 +1806,7 @@ function startPyJob(
     pythonPath: path.join(envPythonPath, pyCommand),
     scriptPath: pyScriptsPath,
     label: opts.label,
+    fairshareEnv: opts.fairshareEnv,
     killChannel: opts.killChannel,
     ipcMain,
     homeDir,
@@ -1874,11 +1878,77 @@ function startPyJobShell(
 }
 
 // Renderer metadata probes (no child_process in renderer)
+const projectIndexFairshareBySender = new Map<
+  number,
+  { jobId: string; env: NodeJS.ProcessEnv; release: () => void }
+>();
+
+function releaseProjectIndexFairshare(senderId: number): void {
+  const handle = projectIndexFairshareBySender.get(senderId);
+  if (!handle) {
+    return;
+  }
+  projectIndexFairshareBySender.delete(senderId);
+  try {
+    handle.release();
+  } catch (_err) {
+    // best effort
+  }
+}
+
+ipcMain.on("beginProjectIndexIo", function (event: any) {
+  const senderId =
+    event && event.sender && typeof event.sender.id === "number"
+      ? event.sender.id
+      : -1;
+  releaseProjectIndexFairshare(senderId);
+  const handle = createHeavyJobHandle(
+    ioFairshareDir,
+    homeDir,
+    "project_index",
+    pythonShellEnvBase(),
+  );
+  // Node owns registry lifetime; metadata child must not unregister on deactivate.
+  if (handle.jobId) {
+    handle.env.MASONJAR_IO_KEEP_REGISTRY = "1";
+  }
+  if (senderId >= 0) {
+    projectIndexFairshareBySender.set(senderId, handle);
+    try {
+      event.sender.once("destroyed", () => {
+        releaseProjectIndexFairshare(senderId);
+      });
+    } catch (_err) {
+      // best effort
+    }
+  }
+  event.returnValue = { ok: true, jobId: handle.jobId || "" };
+});
+
+ipcMain.on("endProjectIndexIo", function (event: any) {
+  const senderId =
+    event && event.sender && typeof event.sender.id === "number"
+      ? event.sender.id
+      : -1;
+  releaseProjectIndexFairshare(senderId);
+  event.returnValue = { ok: true };
+});
+
 ipcMain.on("runIndexMetadata", function (event: any, data: any) {
   const reqId = data && data.reqId != null ? String(data.reqId) : "";
   const paths = Array.isArray(data && data.paths) ? data.paths.map(String) : [];
   const lines: string[] = [];
+  const senderId =
+    event && event.sender && typeof event.sender.id === "number"
+      ? event.sender.id
+      : -1;
+  const parent =
+    senderId >= 0 ? projectIndexFairshareBySender.get(senderId) : undefined;
   const job = startPyJob("index_metadata.py", paths, {
+    // Reuse parent project_index session when present to avoid double-counting.
+    ...(parent && parent.jobId
+      ? { fairshareEnv: parent.env }
+      : { label: "index_metadata" }),
     onMessage: (message: string) => {
       lines.push(message);
     },
@@ -2123,6 +2193,9 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
   let resultSent = false;
   let alignViewerClosedHandshake = false;
   let alignSessionSavedOnClose = false;
+  let alignWarpingStarted = false;
+  let alignResultSummary: Record<string, unknown> | null = null;
+  let lastAlignPct = 0;
 
   let saveExitKillTimer: ReturnType<typeof setTimeout> | null = null;
   const clearSaveExitKillTimer = () => {
@@ -2159,7 +2232,13 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
       console.log("The exit code was: " + code);
       console.log("The exit signal was: " + signal);
     }
-    event.sender.send("alignResult", { cancelled });
+    const payload: { cancelled: boolean; summary?: Record<string, unknown> } = {
+      cancelled,
+    };
+    if (!cancelled && alignResultSummary) {
+      payload.summary = alignResultSummary;
+    }
+    event.sender.send("alignResult", payload);
     if (pyFail) {
       event.sender.send("alignError", [pyFail]);
     }
@@ -2183,6 +2262,37 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
         total = Number(trimmed);
         return;
       }
+      if (trimmed === "ALIGN_WARPING") {
+        alignWarpingStarted = true;
+        restoreParentAfterExternalTool(alignParent);
+        event.sender.send("alignWarping", {});
+        event.sender.send("updateLoad", [0, "Warping sections…"]);
+        return;
+      }
+      if (trimmed.startsWith("RESULT:")) {
+        try {
+          alignResultSummary = JSON.parse(trimmed.slice("RESULT:".length));
+        } catch (_err) {
+          alignResultSummary = null;
+        }
+        return;
+      }
+      if (trimmed.startsWith("PROGRESS:")) {
+        const rest = trimmed.slice("PROGRESS:".length);
+        const colon = rest.indexOf(":");
+        let pct = lastAlignPct;
+        let text = rest;
+        if (colon >= 0) {
+          const rawPct = Number(rest.slice(0, colon));
+          if (Number.isFinite(rawPct)) {
+            pct = Math.max(0, Math.min(100, Math.round(rawPct)));
+            lastAlignPct = pct;
+          }
+          text = rest.slice(colon + 1);
+        }
+        event.sender.send("updateLoad", [pct, text]);
+        return;
+      }
       if (trimmed === "Done!") {
         void job.end().then(({ err, code, signal }) => {
           finalizeAlign(false, err, code, signal);
@@ -2190,6 +2300,10 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
         return;
       }
       if (trimmed === "Viewer closed") {
+        // Ignore cancel handshake if Finish already started warping.
+        if (alignWarpingStarted) {
+          return;
+        }
         alignViewerClosedHandshake = true;
         void job.end().then(({ err, code, signal }) => {
           finalizeAlign(true, err, 0, signal);
@@ -2201,14 +2315,16 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
       }
       if (trimmed.startsWith("LOG:")) {
         queueLogLineForUi(trimmed);
+        const logText = trimmed.replace(/^LOG:\s*/i, "");
+        if (alignWarpingStarted || total > 0) {
+          event.sender.send("updateLoad", [lastAlignPct, logText]);
+        }
         return;
       }
       if (total > 0) {
         current++;
-        event.sender.send("updateLoad", [
-          Math.round((current / total) * 100),
-          message,
-        ]);
+        lastAlignPct = Math.round((current / total) * 100);
+        event.sender.send("updateLoad", [lastAlignPct, message]);
       }
     },
   });
@@ -2219,6 +2335,12 @@ ipcMain.on("runAlign", function (event: any, data: any[]) {
       return;
     }
     const exitCode = typeof code === "number" ? code : Number(code) || 1;
+    // Successful Finish already emitted Done! / finalizeAlign(false).
+    // If warping started and the process exited 0 without Done!, treat as success.
+    if (alignWarpingStarted && exitCode === 0) {
+      finalizeAlign(false, err, code, signal);
+      return;
+    }
     const gracefulClose =
       exitCode === 0 || alignViewerClosedHandshake || alignSessionSavedOnClose;
     if (gracefulClose) {

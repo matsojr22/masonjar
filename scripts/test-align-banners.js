@@ -56,4 +56,32 @@ const innerHide =
 	/id="align(SessionRestore|Napari)Banner"[\s\n]+class="[^"]*\bd-none\b/;
 assert(!innerHide.test(html), "inner banner alerts must not carry d-none alone");
 
+const wizardPanels = ["alignSetupPanel", "alignWarpPanel", "alignFinishPanel"];
+for (const id of wizardPanels) {
+	assert(
+		html.indexOf('id="' + id + '"') >= 0,
+		id + " must exist in align.html",
+	);
+	assert(js.indexOf(id) >= 0, "align.js must reference " + id);
+}
+
+assert(
+	html.indexOf('id="alignWarpProgress"') >= 0,
+	"alignWarpProgress bar must exist",
+);
+assert(html.indexOf('id="alignWarpLog"') >= 0, "alignWarpLog must exist");
+assert(
+	js.indexOf("alignWarping") >= 0,
+	"align.js must listen for alignWarping",
+);
+assert(
+	js.indexOf("showAlignPhase") >= 0 || js.indexOf('showAlignPhase("warp")') >= 0,
+	"align.js must switch to warp phase",
+);
+assert(
+	html.indexOf("Finish</strong> in Napari") >= 0 ||
+		html.indexOf("warping progress") >= 0,
+	"Napari banner should mention Finish returns Mason Jar for warping",
+);
+
 console.log("test-align-banners.js: OK");

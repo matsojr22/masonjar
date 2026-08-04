@@ -7,6 +7,35 @@ var dialogs = require("./dialogs");
 var fileIndex = require("./file_index");
 var pipelineRuns = require("./pipeline_runs");
 
+var ipcRenderer = null;
+try {
+	ipcRenderer = require("electron").ipcRenderer;
+} catch (_err) {
+	ipcRenderer = null;
+}
+
+function beginProjectIndexFairshare() {
+	if (!ipcRenderer || typeof ipcRenderer.sendSync !== "function") {
+		return;
+	}
+	try {
+		ipcRenderer.sendSync("beginProjectIndexIo");
+	} catch (_err) {
+		// Fairshare is best-effort; index refresh must still proceed.
+	}
+}
+
+function endProjectIndexFairshare() {
+	if (!ipcRenderer || typeof ipcRenderer.sendSync !== "function") {
+		return;
+	}
+	try {
+		ipcRenderer.sendSync("endProjectIndexIo");
+	} catch (_err) {
+		// best effort
+	}
+}
+
 var PROJECT_FILENAME = branding.PROJECT_FILENAME;
 var META_DIR = branding.META_DIR;
 var RECENT_KEY = branding.RECENT_KEY;
@@ -641,6 +670,7 @@ function refreshProjectIndex(bundleRoot, options) {
 		}
 	}
 	var onProgress = options.onProgress;
+	beginProjectIndexFairshare();
 	var promise = fileIndex
 		.buildFileIndex(bundleRoot, roles, {
 			appRoot: options.appRoot,
@@ -681,6 +711,7 @@ function refreshProjectIndex(bundleRoot, options) {
 		})
 		.finally(function () {
 			if (_indexRefreshPromise === promise) {
+				endProjectIndexFairshare();
 				_indexRefreshPromise = null;
 				_indexRefreshBundleRoot = null;
 			}

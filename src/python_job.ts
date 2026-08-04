@@ -35,6 +35,11 @@ export type RunPythonJobOptions = {
   scriptPath: string;
   /** Fairshare label; when set, registers a heavy job handle. */
   label?: string;
+  /**
+   * Reuse an existing fairshare env (e.g. parent project_index session).
+   * When set, skips createHeavyJobHandle and does not release on job end.
+   */
+  fairshareEnv?: NodeJS.ProcessEnv;
   homeDir: string;
   ioFairshareDir: string;
   baseEnv: NodeJS.ProcessEnv;
@@ -527,21 +532,36 @@ async function shutdownWorker(): Promise<void> {
   workerStartPromise = null;
 }
 
+function resolveFairshareHandle(opts: RunPythonJobOptions): {
+  jobId: string;
+  env: NodeJS.ProcessEnv;
+  release: () => void;
+} {
+  if (opts.fairshareEnv) {
+    return {
+      jobId: String(opts.fairshareEnv.MASONJAR_IO_JOB_ID || ""),
+      env: { ...opts.fairshareEnv },
+      release: () => undefined,
+    };
+  }
+  if (opts.label && opts.label.length > 0) {
+    return createHeavyJobHandle(
+      opts.ioFairshareDir,
+      opts.homeDir,
+      opts.label,
+      opts.baseEnv,
+    );
+  }
+  return {
+    jobId: "",
+    env: { ...opts.baseEnv },
+    release: () => undefined,
+  };
+}
+
 function runViaWorker(opts: RunPythonJobOptions): PythonJobHandle {
   const jobId = `w${++jobSeq}_${Date.now()}`;
-  const fair =
-    opts.label && opts.label.length > 0
-      ? createHeavyJobHandle(
-          opts.ioFairshareDir,
-          opts.homeDir,
-          opts.label,
-          opts.baseEnv,
-        )
-      : {
-          jobId: "",
-          env: { ...opts.baseEnv },
-          release: () => undefined,
-        };
+  const fair = resolveFairshareHandle(opts);
 
   const record: JobRecord = {
     jobId,
@@ -615,19 +635,7 @@ function runViaWorker(opts: RunPythonJobOptions): PythonJobHandle {
 
 function runViaShell(opts: RunPythonJobOptions): PythonJobHandle {
   const jobId = `s${++jobSeq}_${Date.now()}`;
-  const fair =
-    opts.label && opts.label.length > 0
-      ? createHeavyJobHandle(
-          opts.ioFairshareDir,
-          opts.homeDir,
-          opts.label,
-          opts.baseEnv,
-        )
-      : {
-          jobId: "",
-          env: { ...opts.baseEnv },
-          release: () => undefined,
-        };
+  const fair = resolveFairshareHandle(opts);
 
   const options = {
     mode: "text" as const,

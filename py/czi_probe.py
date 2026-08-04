@@ -62,11 +62,18 @@ def probe_file(path: Path) -> dict:
             "aicspylibczi is not installed in the Mason Jar Python environment"
         ) from exc
 
+    t0 = time.monotonic()
     czi = CziFile(str(path))
+    t_open = time.monotonic() - t0
+
     blocks = normalized_dim_blocks(czi)
     dim_letters = sorted({str(k).upper() for b in blocks for k in b.keys()})
     dims = "".join(dim_letters)
+
+    t1 = time.monotonic()
     mosaic_info = assess_mosaic_import(czi, sample_read=False)
+    t_assess = time.monotonic() - t1
+
     is_mosaic = bool(mosaic_info.get("is_mosaic"))
     has_m_dim = bool(mosaic_info.get("has_m_dim"))
     scene_indices = scene_indices_from_czi(czi)
@@ -90,7 +97,15 @@ def probe_file(path: Path) -> dict:
         )
 
     scene = scene_indices[0] if scene_indices else 0
+    t2 = time.monotonic()
     channel_pixel_probe, read_warnings = probe_channels_read(czi, scene)
+    t_channels = time.monotonic() - t2
+
+    emit_log(
+        f"  {path.name}: open={t_open:.1f}s assess={t_assess:.1f}s "
+        f"channels={t_channels:.1f}s"
+    )
+
     for entry in channel_pixel_probe:
         cidx = int(entry.get("index", 0))
         for ch in channel_meta:

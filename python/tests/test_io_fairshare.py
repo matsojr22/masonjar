@@ -131,3 +131,48 @@ def test_activate_deactivate_rebind_job_id(coordinator: Path, monkeypatch):
     assert payload["job_id"] == "job-b"
     assert payload["label"] == "tissue_cleanup"
     io_fairshare.deactivate()
+
+
+def test_keep_registry_on_deactivate(coordinator: Path, monkeypatch):
+    """Parent project_index session: Python must not unregister Node-owned entry."""
+    reg = coordinator / "registry"
+    monkeypatch.setenv("MASONJAR_IO_FAIRSHARE", "1")
+    monkeypatch.setenv("MASONJAR_IO_JOB_ID", "project-index-1")
+    monkeypatch.setenv("MASONJAR_IO_JOB_LABEL", "project_index")
+    monkeypatch.setenv("MASONJAR_IO_KEEP_REGISTRY", "1")
+    io_fairshare.deactivate()
+    assert io_fairshare.activate()
+    assert (reg / "project-index-1.json").is_file()
+    io_fairshare.deactivate()
+    assert io_fairshare._activated is False
+    assert (reg / "project-index-1.json").is_file()
+    monkeypatch.delenv("MASONJAR_IO_KEEP_REGISTRY", raising=False)
+    (reg / "project-index-1.json").unlink(missing_ok=True)
+
+
+def test_account_nas_open_consumes_when_throttling(tmp_path: Path, coordinator: Path, monkeypatch):
+    monkeypatch.setenv("MASONJAR_IO_FAIRSHARE", "1")
+    io_fairshare.deactivate()
+    assert io_fairshare.activate()
+    monkeypatch.setattr(io_fairshare, "_should_throttle", lambda _p: True)
+    big = tmp_path / "big.tif"
+    big.write_bytes(b"x" * (512 * 1024))
+    before = io_fairshare._BUCKET.bytes_total()
+    io_fairshare.account_nas_open(big)
+    after = io_fairshare._BUCKET.bytes_total()
+    assert after - before == 512 * 1024
+    # Small files under bypass threshold are no-ops.
+    tiny = tmp_path / "tiny.tif"
+    tiny.write_bytes(b"y" * 100)
+    mid = io_fairshare._BUCKET.bytes_total()
+    io_fairshare.account_nas_open(tiny)
+    assert io_fairshare._BUCKET.bytes_total() == mid
+    io_fairshare.deactivate()
+
+
+def test_index_metadata_imports_bootstrap():
+    src = (Path(__file__).resolve().parents[1] / ".." / "py" / "index_metadata.py").read_text(
+        encoding="utf-8"
+    )
+    assert "import pipeline_io_bootstrap" in src
+    assert "account_nas_open" in src

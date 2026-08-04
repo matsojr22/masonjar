@@ -218,6 +218,25 @@ function testLocalThrottledMbpsAggregation() {
 	fs.rmSync(home, { recursive: true, force: true });
 }
 
+function testProjectIndexNodeJobTracking() {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mj-io-idx-"));
+	fs.mkdirSync(path.join(tmp, "registry"), { recursive: true });
+	fs.writeFileSync(
+		path.join(tmp, "config.json"),
+		JSON.stringify({ enabled: true, stale_seconds: 30 }),
+	);
+	const jobId = ioFairshare.newJobId();
+	ioFairshare.beginNodeJobTracking(tmp, jobId, "project_index");
+	const live = ioFairshare.listRegistryEntries(tmp, 30);
+	assert(live.length === 1, "project_index registry entry present");
+	assert(live[0].label === "project_index", "label is project_index");
+	assert(live[0].job_id === jobId, "job id matches");
+	ioFairshare.endNodeJobTracking(tmp, jobId);
+	const after = ioFairshare.listRegistryEntries(tmp, 30);
+	assert(after.length === 0, "project_index registry entry cleared");
+	fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 function main() {
 	testParseLinkSpeed();
 	testComputeJobLimit();
@@ -230,6 +249,7 @@ function main() {
 	testStatusIncludesNasPrefixes();
 	testFormatFairshareTitleSuffix();
 	testLocalThrottledMbpsAggregation();
+	testProjectIndexNodeJobTracking();
 	console.log("test-io-fairshare: ok");
 }
 

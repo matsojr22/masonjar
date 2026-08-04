@@ -357,6 +357,34 @@ def throttled_write_bytes(path: str | os.PathLike[str], data: bytes) -> None:
             offset += len(block)
 
 
+# Cap for header/metadata probes (TiffFile opens) so we rate-limit without
+# reading full multi-GB planes through the token bucket.
+_ACCOUNT_NAS_OPEN_CAP_BYTES = int(
+    os.environ.get("MASONJAR_IO_ACCOUNT_OPEN_CAP", str(1024 * 1024))
+)
+
+
+def account_nas_open(path: str | os.PathLike[str]) -> None:
+    """Charge the token bucket for a NAS open that bypasses patched readers.
+
+    Used by index_metadata (tifffile.TiffFile header probes). Consumes
+    ``min(file_size, 1 MiB)`` when fairshare is active and the path is NAS.
+    No-op when inactive, local, or for small files under the bypass threshold.
+    """
+    if not _activated:
+        return
+    p = os.fspath(path)
+    if not _should_throttle(p):
+        return
+    size = _file_size(p)
+    if size is None:
+        return
+    small = int(_load_shared_config().get("small_file_bytes", _SMALL_FILE_BYTES))
+    if size <= small:
+        return
+    _BUCKET.consume(min(size, _ACCOUNT_NAS_OPEN_CAP_BYTES))
+
+
 def _wrap_cv2_imread(orig: Callable[..., Any], path: str, *args: Any, **kwargs: Any) -> Any:
     import cv2
     import numpy as np
@@ -471,6 +499,10 @@ def deactivate() -> None:
     The long-lived masonjar_worker calls this after each runpy job so the next
     script can activate() with a fresh MASONJAR_IO_JOB_ID. Also registered with
     atexit for one-shot PythonShell processes.
+
+    When ``MASONJAR_IO_KEEP_REGISTRY=1`` (Node owns the registry entry for a
+    parent session such as project_index), stop the Python heartbeat but leave
+    the registry file for Node's ``endNodeJobTracking`` to clear.
     """
     global _activated, _heartbeat_stop, _heartbeat_thread
     with _state_lock:
@@ -483,7 +515,13 @@ def deactivate() -> None:
             _heartbeat_thread.join(timeout=1.0)
         _heartbeat_stop = None
         _heartbeat_thread = None
-        _remove_registry()
+        keep = os.environ.get("MASONJAR_IO_KEEP_REGISTRY", "").strip() in (
+            "1",
+            "true",
+            "True",
+        )
+        if not keep:
+            _remove_registry()
 
 
 def activate() -> bool:

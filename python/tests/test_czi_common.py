@@ -878,11 +878,142 @@ def test_probe_channel_pixel_probe_sparse() -> None:
     assert any("sample read failed" in w for w in warnings)
 
 
+def test_probe_channels_read_mosaic_skips_per_z_tile_bbox() -> None:
+    """Mosaic probe must not enumerate tile bboxes for every Z×C."""
+    import numpy as np
+
+    bbox_calls: list[dict] = []
+
+    class FakeCzi:
+        pixel_type = "gray16"
+
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"Z": (0, 40), "C": (0, 3), "M": (0, 4), "S": (0, 1)}]
+
+        def get_all_mosaic_tile_bounding_boxes(self, **kwargs):
+            bbox_calls.append(dict(kwargs))
+            return {0: type("B", (), {"x": 0, "y": 0, "w": 10, "h": 10})()}
+
+        def read_mosaic(self, **kwargs):
+            arr = np.ones((4, 4), dtype=np.uint8)
+            return arr, [("Y", 4), ("X", 4)]
+
+        def read_image(self, **kwargs):
+            raise AssertionError("read_image should not be needed")
+
+    probe, warnings = probe_channels_read(FakeCzi(), scene=0)
+    assert bbox_calls == []
+    assert len(probe) == 3
+    for entry in probe:
+        assert entry["sparse_z"] is False
+        assert entry["z_count"] == 40
+        assert entry["z_with_data"] == list(range(40))
+        assert entry["ok"] is True
+    assert warnings == []
+
+
+def test_probe_channels_read_skips_tile_composite_fallback() -> None:
+    """Probe sample reads must soft-fail without full-res tile composite."""
+    import numpy as np
+
+    tile_bbox_calls = 0
+    tile_read_calls = 0
+
+    class BBox:
+        def __init__(self, x, y, w, h):
+            self.x, self.y, self.w, self.h = x, y, w, h
+
+    class FakeCzi:
+        pixel_type = "gray16"
+
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"Z": (0, 5), "C": (0, 2), "M": (0, 2), "S": (0, 1)}]
+
+        def get_mosaic_scene_bounding_box(self, index=0):
+            return BBox(0, 0, 20, 10)
+
+        def read_mosaic(self, **kwargs):
+            raise PylibCZI_PixelTypeException(
+                "PixelType( Unknown type ): Pixel Type unsupported by libCZI."
+            )
+
+        def read_image(self, **kwargs):
+            nonlocal tile_read_calls
+            if "M" in kwargs:
+                tile_read_calls += 1
+                arr = np.full((10, 10), 1, dtype=np.uint8)
+                return arr, [("Y", 10), ("X", 10)]
+            raise PylibCZI_PixelTypeException(
+                "PixelType( Unknown type ): Pixel Type unsupported by libCZI."
+            )
+
+        def get_all_mosaic_tile_bounding_boxes(self, **kwargs):
+            nonlocal tile_bbox_calls
+            tile_bbox_calls += 1
+            return {
+                0: BBox(0, 0, 10, 10),
+                1: BBox(10, 0, 10, 10),
+            }
+
+    probe, warnings = probe_channels_read(FakeCzi(), scene=0)
+    assert tile_bbox_calls == 0
+    assert tile_read_calls == 0
+    assert all(entry["ok"] is False for entry in probe)
+    assert any("sample read failed" in w for w in warnings)
+    assert any("skipping further sample" in w for w in warnings)
+    # First channel fails; remaining channels skip without more I/O
+    assert probe[0]["error"]
+    assert "sample read skipped" in probe[1]["error"]
+
+
+def test_read_czi_plane_no_tile_composite_when_disallowed() -> None:
+    class FakeCzi:
+        def is_mosaic(self):
+            return True
+
+        def get_dims_shape(self):
+            return [{"Z": (0, 1), "C": (0, 1), "M": (0, 2), "S": (0, 1)}]
+
+        def read_mosaic(self, **kwargs):
+            raise RuntimeError("mosaic boom")
+
+        def read_image(self, **kwargs):
+            raise RuntimeError("read_image boom")
+
+        def get_all_mosaic_tile_bounding_boxes(self, **kwargs):
+            raise AssertionError("tile composite must not run")
+
+    try:
+        read_czi_plane(
+            FakeCzi(),
+            scene=0,
+            z=0,
+            channel=0,
+            allow_tile_composite=False,
+        )
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        msg = str(exc)
+        assert "mosaic boom" in msg
+        assert "read_image boom" in msg
+        assert "tiles=" not in msg
+
+
 def test_extract_sparse_z_single_plane(tmp_path: Path, monkeypatch) -> None:
     """One sparse Z with data writes a 2D TIFF (no full Z loop)."""
     import numpy as np
 
     import czi_extract
+    import tifffile
+
+    monkeypatch.setattr(czi_extract, "np", np)
+    monkeypatch.setattr(czi_extract, "tiff", tifffile)
 
     read_calls: list[int] = []
 
@@ -916,7 +1047,6 @@ def test_extract_sparse_z_single_plane(tmp_path: Path, monkeypatch) -> None:
     )
     assert read_calls == [4]
     assert out_path.is_file()
-    import tifffile
 
     data = tifffile.imread(str(out_path))
     assert data.ndim == 2

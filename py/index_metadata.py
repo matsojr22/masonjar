@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import pipeline_io_bootstrap  # noqa: F401
 import json
 import sys
 from pathlib import Path
+
+import io_fairshare
 
 IMAGE_SUFFIXES = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
 
@@ -29,6 +32,7 @@ def image_metadata(path: Path) -> dict:
         if suf in (".tif", ".tiff") or ".ome." in path.name.lower():
             import tifffile
 
+            io_fairshare.account_nas_open(path)
             with tifffile.TiffFile(path) as tif:
                 page = tif.pages[0]
                 shape = page.shape

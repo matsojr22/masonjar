@@ -440,15 +440,26 @@ function shutdownWorker() {
         workerStartPromise = null;
     });
 }
-function runViaWorker(opts) {
-    const jobId = `w${++jobSeq}_${Date.now()}`;
-    const fair = opts.label && opts.label.length > 0
-        ? (0, io_fairshare_1.createHeavyJobHandle)(opts.ioFairshareDir, opts.homeDir, opts.label, opts.baseEnv)
-        : {
-            jobId: "",
-            env: Object.assign({}, opts.baseEnv),
+function resolveFairshareHandle(opts) {
+    if (opts.fairshareEnv) {
+        return {
+            jobId: String(opts.fairshareEnv.MASONJAR_IO_JOB_ID || ""),
+            env: Object.assign({}, opts.fairshareEnv),
             release: () => undefined,
         };
+    }
+    if (opts.label && opts.label.length > 0) {
+        return (0, io_fairshare_1.createHeavyJobHandle)(opts.ioFairshareDir, opts.homeDir, opts.label, opts.baseEnv);
+    }
+    return {
+        jobId: "",
+        env: Object.assign({}, opts.baseEnv),
+        release: () => undefined,
+    };
+}
+function runViaWorker(opts) {
+    const jobId = `w${++jobSeq}_${Date.now()}`;
+    const fair = resolveFairshareHandle(opts);
     const record = {
         jobId,
         script: opts.script,
@@ -506,13 +517,7 @@ function runViaWorker(opts) {
 }
 function runViaShell(opts) {
     const jobId = `s${++jobSeq}_${Date.now()}`;
-    const fair = opts.label && opts.label.length > 0
-        ? (0, io_fairshare_1.createHeavyJobHandle)(opts.ioFairshareDir, opts.homeDir, opts.label, opts.baseEnv)
-        : {
-            jobId: "",
-            env: Object.assign({}, opts.baseEnv),
-            release: () => undefined,
-        };
+    const fair = resolveFairshareHandle(opts);
     const options = {
         mode: "text",
         pythonPath: opts.pythonPath,

@@ -75,6 +75,8 @@ from qt_window_utils import (
     resolve_napari_qt_window,
     show_napari_maximized_and_activate,
 )
+from align_finish_confirm import confirm_align_finish
+from czi_common import emit_log, emit_progress_phase, emit_result
 
 
 class AtlasDamageMarker(QMainWindow):
@@ -1605,8 +1607,19 @@ class AlignmentController:
             #     cv2.destroyAllWindows()
             #     self.isolate_section(sample)
 
+    def _confirm_finish(self) -> bool:
+        """Ask before save+warp so accidental Finish clicks are easy to cancel."""
+        parent = None
+        try:
+            parent = resolve_napari_qt_window(self.viewer)
+        except Exception:
+            parent = None
+        return confirm_align_finish(parent)
+
     def finish(self):
         """Finish alignment"""
+        if not self._confirm_finish():
+            return
         self._session_finished = True
         # disconnect signals
         self.x_angle_spinbox.valueChanged.disconnect(self.que_update_slice)
@@ -1621,8 +1634,18 @@ class AlignmentController:
         # save alignment
         self.save_alignment()
 
+        # Hand Mason Jar back immediately so users see warp progress (not a
+        # minimized window). Closing Napari is safe: _session_finished skips
+        # the cancel / Viewer-closed handshake.
+        print("ALIGN_WARPING", flush=True)
+        try:
+            self.viewer.close()
+        except Exception as exc:
+            print(f"LOG: align_viewer_close_after_finish error={exc}", flush=True)
+
         # warp images
-        print("Warping images...", flush=True)
+        emit_log("Warping images…")
+        emit_progress_phase(0, "Warping images…")
         with open(self.structures_path, "rb") as f:
             structure_map = pickle.load(f)
 
@@ -1637,10 +1660,14 @@ class AlignmentController:
             WARP_MODE_PER_ISLAND,
         }
         warped_at = datetime.now(timezone.utc).isoformat()
+        n_slices = max(1, self.num_slices)
         for i in range(self.num_slices):
             filename = self.file_list[i]
             slice_stem = slice_stem_from_image_filename(filename)
-            print(f"Warping {filename}...", flush=True)
+            pct = int(((i + 1) / n_slices) * 100)
+            status = f"Warping {i + 1}/{self.num_slices} {filename}"
+            emit_log(status)
+            emit_progress_phase(pct, status)
             current_slice = self.atlas_slices[filename]
             sample = cv2.imread(
                 str(Path(self.input_path) / filename),
@@ -1786,7 +1813,6 @@ class AlignmentController:
                 pickle.dump(warped_labels, f)
             warp_ok.append(slice_stem)
 
-        self.viewer.close()
         from run_manifest import write_run_manifest
 
         manifest_payload = {
@@ -1827,18 +1853,33 @@ class AlignmentController:
         with open(report_path, "w", encoding="utf-8") as report_file:
             json.dump(manifest_payload, report_file, indent=2)
 
+        failed_ids = [
+            str(row.get("slice_id") or row.get("file") or "")
+            for row in warp_failed
+        ]
+        summary = {
+            "ok": True,
+            "warped": len(warp_ok),
+            "failed": len(warp_failed),
+            "failed_slice_ids": [sid for sid in failed_ids if sid],
+            "output_dir": str(self.output_path),
+        }
         if warp_failed:
             print(
                 f"LOG: align_warp_summary ok={len(warp_ok)} failed={len(warp_failed)}",
                 flush=True,
             )
         if not warp_ok:
+            summary["ok"] = False
+            emit_result(summary)
             print("LOG: align_warp_zero_slices_warped", flush=True)
             raise SystemExit(1)
         try:
             mark_session_completed(self.input_path, self._tuning_fingerprint())
         except Exception as exc:
             print(f"LOG: align_session_complete_failed error={exc}", flush=True)
+        emit_progress_phase(100, "Warping complete")
+        emit_result(summary)
         print("Done!", flush=True)
 
     def _emit_viewer_closed_handshake(self) -> None:

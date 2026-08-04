@@ -6,6 +6,25 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.24
+
+**What's new**
+
+- **Faster CZI probe:** Probing large multi-Z mosaic CZIs no longer scans every Z plane’s mosaic tiles up front. Probe stays quick for folder import; sparse-Z detection still runs correctly during extract.
+- **Fair-share project index:** Opening or refreshing a large project index now counts toward network fair-share, so another Mason Jar instance running a heavy pipeline job shares the NAS link instead of starving the index load.
+- **Align Finish confirmation:** Clicking Finish in Napari asks you to confirm before warping, with Cancel as the safe default.
+- **Align warp progress in Mason Jar:** After you confirm Finish, Mason Jar comes back to the front immediately and shows a live warping progress log. When warping completes, a Done panel summarizes results with next-step buttons (Detect, Alignment menu, Workspace).
+
+**Commit subject**
+
+Speed up CZI probe, fair-share index loads, and Align Finish UX
+
+**Commit body**
+
+Make multi-Z mosaic CZI probe metadata-cheap again, register project index refresh under io fair-share, and after Napari Align Finish confirmation restore Mason Jar with a warp progress panel and Done summary.
+
+---
+
 ## v6.0.23
 
 **What's new**
