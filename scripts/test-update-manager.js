@@ -142,14 +142,17 @@ function testUpdatePreferencesRoundTrip() {
 
 function testBuildApplySpawnCommand() {
 	const spec = updateManager.buildApplySpawnCommand("C:\\Temp\\apply-update.ps1");
-	assert(spec.command === "powershell.exe", "powershell spawn");
+	assert(spec.command === "cmd.exe", "cmd breakaway launcher");
+	assert(spec.args[0] === "/c", "cmd /c");
+	assert(spec.args.includes("start"), "start breakaway");
+	assert(spec.args.includes("/b"), "start /b");
+	assert(spec.args.includes("powershell.exe"), "powershell after start");
 	assert(spec.args.includes("-File"), "file arg");
 	assert(spec.args.includes("-WindowStyle"), "hidden window");
 	assert(
 		spec.args[spec.args.length - 1] === "C:\\Temp\\apply-update.ps1",
 		"script path last arg",
 	);
-	assert(!spec.args.includes("cmd.exe"), "no cmd wrapper");
 }
 
 function testAppendUpdateLogLine() {
@@ -273,6 +276,21 @@ function testApplyScriptContent() {
 		assert(
 			ps1.indexOf("Skipping version backup") >= 0,
 			"skip backup log when off",
+		);
+		assert(ps1.indexOf("Register-ApplyLock") >= 0, "lock rewrite helper");
+		assert(ps1.indexOf("applyPid = $PID") >= 0, "lock uses PowerShell PID");
+		assert(
+			ps1.indexOf("Apply update process started pid=$PID") >= 0,
+			"early survival log",
+		);
+		assert(ps1.indexOf("-PassThru") >= 0, "elevation PassThru");
+		assert(
+			ps1.indexOf("Elevated apply failed or was cancelled") >= 0,
+			"elevation exit-code check",
+		);
+		assert(
+			ps1.indexOf("Apply update failed:") >= 0,
+			"clear failure logging",
 		);
 
 		const withBackup = mgr.writeApplyScript(

@@ -6,6 +6,22 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.26
+
+**What's new**
+
+- **Update Now completes and reopens:** After downloading a Windows update, Mason Jar closes, finishes installing in the background, and relaunches on the new version instead of leaving you stuck on the old build (which could trigger another required-update loop).
+
+**Commit subject**
+
+Fix Windows Update Now so apply survives quit and relaunches
+
+**Commit body**
+
+Launch the Windows apply script via a breakaway cmd start so Electron’s job object cannot kill it on quit, have the script register its own PID in update.lock, and fail clearly if elevation is cancelled so Update Now can finish and reopen Mason Jar.
+
+---
+
 ## v6.0.25
 
 **What's new**

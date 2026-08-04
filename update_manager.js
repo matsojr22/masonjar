@@ -502,11 +502,17 @@ function deleteInstallVersionBackups(installRoot) {
 exports.deleteInstallVersionBackups = deleteInstallVersionBackups;
 exports.CLOSE_OTHER_INSTANCES_MESSAGE = "Please close all other running instances of Mason Jar before updating.";
 function buildApplySpawnCommand(scriptPath) {
-    // Spawn powershell directly (detached) so applyPid in update.lock stays alive
-    // for the full apply, unlike `cmd /c start` which exits immediately.
+    // Break away from Electron's Windows Job Object via `cmd /c start` so the
+    // apply script survives app.quit(). The short-lived cmd PID is not the apply
+    // process — apply-update.ps1 rewrites update.lock with its own $PID on start.
     return {
-        command: "powershell.exe",
+        command: "cmd.exe",
         args: [
+            "/c",
+            "start",
+            "",
+            "/b",
+            "powershell.exe",
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
@@ -925,6 +931,23 @@ function Write-Log([string]$Message) {
   }
 }
 
+function Register-ApplyLock {
+  try {
+    $payload = @{
+      started = (Get-Date).ToUniversalTime().ToString('o')
+      version = $TargetVersion
+      installRoot = $InstallRoot
+      applyPid = $PID
+    } | ConvertTo-Json -Compress
+    $parent = Split-Path -Parent $LockPath
+    if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+    Set-Content -LiteralPath $LockPath -Value $payload -Encoding UTF8
+    Write-Log "Registered update.lock applyPid=$PID"
+  } catch {
+    Write-Log "WARN: failed to rewrite update.lock: $($_.Exception.Message)"
+  }
+}
+
 function Get-InstallProcesses {
   $procs = @()
   try {
@@ -992,6 +1015,8 @@ function Merge-WithRetries {
 }
 
 try {
+  Write-Log "Apply update process started pid=$PID"
+  Register-ApplyLock
   Write-Log "Apply update started (elevated=$Elevated keepBackup=$KeepBackup) ${oldVersion} -> ${newVersion}"
   Wait-InstallProcesses
   Assert-UpdatePaths
@@ -1007,7 +1032,12 @@ try {
     }
     if ($needsElevation) {
       Write-Log 'Install folder not writable; requesting elevation'
-      Start-Process powershell.exe -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $MyInvocation.MyCommand.Path, '-Elevated') -Wait
+      $elev = Start-Process powershell.exe -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $MyInvocation.MyCommand.Path, '-Elevated') -Wait -PassThru
+      if ($null -eq $elev -or $elev.ExitCode -ne 0) {
+        $code = if ($null -ne $elev) { $elev.ExitCode } else { 'null' }
+        throw "Elevated apply failed or was cancelled (exit=$code)"
+      }
+      Write-Log "Elevated apply finished with exit code $($elev.ExitCode)"
       exit 0
     }
   }
@@ -1151,14 +1181,14 @@ try {
                     installRoot,
                     applyPid: child.pid,
                 });
-                appendUpdateLogLine(this.homeDir, `Updater detached pid=${child.pid}`);
+                appendUpdateLogLine(this.homeDir, `Updater breakaway launcher pid=${child.pid} (apply-update.ps1 will rewrite lock with its own PID)`);
                 setTimeout(() => {
                     if (settled) {
                         return;
                     }
                     quit();
                     finish({ ok: true });
-                }, 400);
+                }, 1000);
             }
             catch (error) {
                 const msg = error instanceof Error ? error.message : String(error);
