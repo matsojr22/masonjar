@@ -22,6 +22,12 @@ try {
 	const flat = path.join(tmp, "flat");
 	fs.mkdirSync(flat, { recursive: true });
 	fs.writeFileSync(path.join(flat, "masonjar.exe"), "fake");
+	const appDir = path.join(flat, "resources", "app");
+	fs.mkdirSync(appDir, { recursive: true });
+	fs.writeFileSync(
+		path.join(appDir, "package.json"),
+		JSON.stringify({ name: "masonjar", version: "9.9.9" }, null, 2),
+	);
 	const zipPath = path.join(tmp, "masonjar-win32-x64-9.9.9.zip");
 	const flatPs = flat.replace(/'/g, "''");
 	const zipPs = zipPath.replace(/'/g, "''");
@@ -52,11 +58,25 @@ try {
 	if (top.length !== 1 || top[0] !== "masonjar-win32-x64") {
 		fail("expected single top-level masonjar-win32-x64/, got: " + top.join(", "));
 	}
-	if (!fs.existsSync(path.join(verifyDir, "masonjar-win32-x64", "masonjar.exe"))) {
+	const wrapped = path.join(verifyDir, "masonjar-win32-x64");
+	if (!fs.existsSync(path.join(wrapped, "masonjar.exe"))) {
 		fail("masonjar.exe missing inside wrapper folder");
+	}
+	if (!fs.existsSync(path.join(wrapped, "resources", "app", "package.json"))) {
+		fail("resources/app/package.json missing inside wrapper");
+	}
+	if (!fs.existsSync(path.join(wrapped, "package.json"))) {
+		fail("root package.json shim missing next to masonjar.exe");
+	}
+	const rootPkg = JSON.parse(
+		fs.readFileSync(path.join(wrapped, "package.json"), "utf8"),
+	);
+	if (rootPkg.version !== "9.9.9") {
+		fail("root package.json shim version mismatch: " + rootPkg.version);
 	}
 
 	ok("Windows release zip wraps app in masonjar-win32-x64/");
+	ok("root package.json shim present for updater compatibility");
 } finally {
 	fs.rmSync(tmp, { recursive: true, force: true });
 }

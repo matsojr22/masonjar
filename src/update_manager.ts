@@ -1082,7 +1082,8 @@ export class UpdateManager {
     const backupDir = versionBackupDirName(installRoot, oldVersion);
     const exePath = path.join(installRoot, "masonjar.exe");
     const lockPath = updateLockPath();
-    const pkgPath = path.join(installRoot, "package.json");
+    // Electron packaged layout: package.json lives under resources/app (app.getAppPath()).
+    // Root package.json is only a compatibility shim for older apply scripts / odd layouts.
     const stagingExe = path.join(stagingDir, "masonjar.exe");
     const keepBackupLiteral = keepBackup ? "$true" : "$false";
 
@@ -1096,7 +1097,6 @@ $StagingExe = '${stagingExe.replace(/'/g, "''")}'
 $BackupDir = '${backupDir.replace(/'/g, "''")}'
 $ExePath = '${exePath.replace(/'/g, "''")}'
 $LockPath = '${lockPath.replace(/'/g, "''")}'
-$PkgPath = '${pkgPath.replace(/'/g, "''")}'
 $TargetVersion = '${newVersion.replace(/'/g, "''")}'
 $KeepBackup = ${keepBackupLiteral}
 $Elevated = $args -contains '-Elevated'
@@ -1241,18 +1241,27 @@ try {
 
   Merge-WithRetries
 
+  $appPkg = Join-Path $InstallRoot 'resources\\app\\package.json'
+  $rootPkg = Join-Path $InstallRoot 'package.json'
+  $PkgPath = $null
+  if (Test-Path -LiteralPath $appPkg) {
+    $PkgPath = $appPkg
+  } elseif (Test-Path -LiteralPath $rootPkg) {
+    $PkgPath = $rootPkg
+  }
+
   $mergeOk = $false
-  if (Test-Path -LiteralPath $PkgPath) {
+  if ($PkgPath) {
     $pkgText = Get-Content -LiteralPath $PkgPath -Raw
     if ($pkgText -notmatch ('"version"\\s*:\\s*"' + [regex]::Escape($TargetVersion) + '"')) {
-      Write-Log "ERROR: package.json after merge does not report version $TargetVersion; not relaunching"
+      Write-Log "ERROR: package.json at $PkgPath after merge does not report version $TargetVersion; not relaunching"
       throw "package.json version mismatch after merge"
     } else {
-      Write-Log "Verified package.json version $TargetVersion"
+      Write-Log "Verified package.json version $TargetVersion at $PkgPath"
       $mergeOk = $true
     }
   } else {
-    Write-Log 'ERROR: package.json missing after merge; not relaunching'
+    Write-Log 'ERROR: package.json missing after merge (checked resources\\app\\package.json and root); not relaunching'
     throw "package.json missing after merge"
   }
 

@@ -292,6 +292,25 @@ function testApplyScriptContent() {
 			ps1.indexOf("Apply update failed:") >= 0,
 			"clear failure logging",
 		);
+		assert(
+			ps1.indexOf("resources\\app\\package.json") >= 0 ||
+				ps1.indexOf("resources\\\\app\\\\package.json") >= 0,
+			"verifies Electron resources/app/package.json",
+		);
+		assert(
+			ps1.indexOf("Join-Path $InstallRoot 'resources") >= 0,
+			"resolves app package.json via Join-Path",
+		);
+		assert(
+			ps1.indexOf("checked resources") >= 0,
+			"missing-pkg error mentions both candidate paths",
+		);
+		// Must not hard-code only installRoot/package.json as the sole verify path.
+		assert(
+			!/\$PkgPath = '[^']*package\.json'/.test(ps1) ||
+				ps1.indexOf("resources") >= 0,
+			"does not sole-bind root package.json as PkgPath",
+		);
 
 		const withBackup = mgr.writeApplyScript(
 			installRoot,

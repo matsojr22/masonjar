@@ -291,6 +291,16 @@ function createWindowsZipFromFolder(folderPath, zipPath) {
 	}
 }
 
+function ensureWindowsZipRootPackageJson(appFolder) {
+	const appPkg = path.join(appFolder, "resources", "app", "package.json");
+	const rootPkg = path.join(appFolder, "package.json");
+	if (!fs.existsSync(appPkg)) {
+		return false;
+	}
+	fs.copyFileSync(appPkg, rootPkg);
+	return true;
+}
+
 function wrapWindowsReleaseZipFile(zipPath, version) {
 	const parentName = windowsZipParentFolderName(zipPath, version);
 	const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mj-zipwrap-"));
@@ -301,27 +311,39 @@ function wrapWindowsReleaseZipFile(zipPath, version) {
 		unzipSync(zipPath, extracted);
 
 		const top = fs.readdirSync(extracted);
+		let appFolder;
 		if (
 			top.length === 1 &&
 			top[0] === parentName &&
 			fs.statSync(path.join(extracted, top[0])).isDirectory()
 		) {
+			appFolder = path.join(extracted, parentName);
 			console.log("Windows zip already wrapped:", path.basename(zipPath));
-			return;
+		} else {
+			fs.mkdirSync(wrapped, { recursive: true });
+			for (const ent of top) {
+				fs.renameSync(path.join(extracted, ent), path.join(wrapped, ent));
+			}
+			appFolder = wrapped;
+			console.log("Wrapped Windows zip with top-level folder:", parentName + "/");
 		}
 
-		fs.mkdirSync(wrapped, { recursive: true });
-		for (const ent of top) {
-			fs.renameSync(path.join(extracted, ent), path.join(wrapped, ent));
+		// Compatibility shim: old apply scripts verify installRoot/package.json
+		// (next to masonjar.exe). Electron's real file is resources/app/package.json.
+		if (ensureWindowsZipRootPackageJson(appFolder)) {
+			console.log("Added root package.json shim for updater compatibility");
+		} else {
+			console.warn(
+				"WARN: resources/app/package.json missing; skipped root package.json shim",
+			);
 		}
 
 		const outTmp = zipPath.replace(/\.zip$/i, "") + ".wrap-tmp.zip";
-		createWindowsZipFromFolder(wrapped, outTmp);
+		createWindowsZipFromFolder(appFolder, outTmp);
 		if (fs.existsSync(zipPath)) {
 			fs.unlinkSync(zipPath);
 		}
 		fs.renameSync(outTmp, zipPath);
-		console.log("Wrapped Windows zip with top-level folder:", parentName + "/");
 	} finally {
 		fs.rmSync(tmpRoot, { recursive: true, force: true });
 	}

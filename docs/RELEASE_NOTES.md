@@ -10,7 +10,7 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 **What's new**
 
-- **Updater validation build:** Pre-release with no other product changes, so machines on 6.0.26 can confirm Update Now finishes installing and relaunches on the new version.
+- **Updater validation build:** Pre-release with no other product changes, so machines on the fixed 6.0.26 can confirm Update Now finishes installing and relaunches on the new version.
 
 **Commit subject**
 
@@ -18,7 +18,7 @@ Ship 6.0.27 pre-release to validate Update Now
 
 **Commit body**
 
-Version bump only so lab installs on 6.0.26 can exercise the Windows apply handoff fix end-to-end against a newer pre-release.
+Version bump only so lab installs on fixed 6.0.26 can exercise Update Now end-to-end against a newer pre-release.
 
 ---
 
@@ -27,14 +27,15 @@ Version bump only so lab installs on 6.0.26 can exercise the Windows apply hando
 **What's new**
 
 - **Update Now completes and reopens:** After downloading a Windows update, Mason Jar closes, finishes installing in the background, and relaunches on the new version instead of leaving you stuck on the old build (which could trigger another required-update loop).
+- **Install check uses the real app version file:** Update Now verifies the version from Electron’s `resources/app` package file (and still accepts a root copy for compatibility), so a successful install is no longer treated as a failure when that file is not next to `masonjar.exe`.
 
 **Commit subject**
 
-Fix Windows Update Now so apply survives quit and relaunches
+Fix Windows Update Now verify path and quit handoff
 
 **Commit body**
 
-Launch the Windows apply script via a breakaway cmd start so Electron’s job object cannot kill it on quit, have the script register its own PID in update.lock, and fail clearly if elevation is cancelled so Update Now can finish and reopen Mason Jar.
+Launch the apply script via a breakaway cmd start so Electron’s job object cannot kill it on quit, verify the installed version from resources/app/package.json (with a root package.json zip shim for older clients), register the script’s own PID in update.lock, and fail clearly if elevation is cancelled.
 
 ---
 
