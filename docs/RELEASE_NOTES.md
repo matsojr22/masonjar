@@ -6,6 +6,22 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.29
+
+**What's new**
+
+- **Tissue edge cleanup paints removed areas black:** Red (remove) regions are filled with black on Apply, matching what the green/red overlay suggests. Previously the tool tried to match the frame-edge brightness, which could leave a grey background when tissue touched the scan edge.
+
+**Commit subject**
+
+Fill tissue cleanup remove regions with black
+
+**Commit body**
+
+Tissue edge cleanup Apply now replaces red (remove) pixels with black by default instead of estimating background from the image border, so edge tissue can no longer leave a grey field behind.
+
+---
+
 ## v6.0.28
 
 **What's new**

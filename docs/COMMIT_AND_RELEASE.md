@@ -2,6 +2,8 @@
 
 [`scripts/publish-release.js`](../scripts/publish-release.js) reads **only** [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
 
+**Everything pushed to GitHub is public-facing** (commits, tags, prereleases, release notes). Write for lab users / the public; do not put secrets, local NAS project paths, or one-off repair scratch in the repo.
+
 ---
 
 ## Git commits

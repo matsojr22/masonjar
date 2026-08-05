@@ -159,6 +159,12 @@ def guided_keep_mask(
 
 
 def border_median_bg(arr2d: np.ndarray) -> float:
+    """Legacy helper: 1px frame median (can be mid-grey when tissue touches the edge).
+
+    Apply no longer uses this by default — removed pixels fill with 0 unless
+    ``bg_value`` is set in the apply config. Kept for repair scripts / callers
+    that still want an estimated camera floor.
+    """
     h, w = arr2d.shape[:2]
     if h < 2 or w < 2:
         return 15.0
@@ -173,6 +179,13 @@ def border_median_bg(arr2d: np.ndarray) -> float:
     if border.size == 0:
         return 15.0
     return float(np.median(border))
+
+
+def resolve_apply_bg(bg_override: float | None) -> float:
+    """Background fill for removed (red) pixels. Default is black (0)."""
+    if bg_override is not None:
+        return float(bg_override)
+    return 0.0
 
 
 def resize_keep_mask_nearest(keep_mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
@@ -270,7 +283,7 @@ def _apply_mask_to_file(
             arr = array_to_gray_u8(np.asarray(arr))
         except ValueError as exc:
             raise ValueError(f"Unsupported ndim for {path.name}") from exc
-        bg = bg_override if bg_override is not None else border_median_bg(arr)
+        bg = resolve_apply_bg(bg_override)
         out = apply_keep_mask_to_plane(arr, keep_mask, bg)
         cv2.imwrite(str(path), out)
         desc = _shape_desc(out)
@@ -282,7 +295,7 @@ def _apply_mask_to_file(
         arr = read_tiff_2d(path)
         if arr.ndim != 2:
             raise ValueError(f"Unsupported ndim={arr.ndim} for {path.name}")
-        bg = bg_override if bg_override is not None else border_median_bg(arr)
+        bg = resolve_apply_bg(bg_override)
         out = apply_keep_mask_to_plane(arr, keep_mask, bg)
         write_tiff_2d(path, out)
         desc = _shape_desc(out)
@@ -295,7 +308,7 @@ def _apply_mask_to_file(
         if plane.ndim != 2:
             raise ValueError(f"Unsupported plane ndim={plane.ndim} for {path.name}")
         if bg_holder[0] is None:
-            bg_holder[0] = bg_override if bg_override is not None else border_median_bg(plane)
+            bg_holder[0] = resolve_apply_bg(bg_override)
         return apply_keep_mask_to_plane(plane, keep_mask, bg_holder[0])
 
     z_count, first_shape = transform_tiff_pages(path, plane_fn)

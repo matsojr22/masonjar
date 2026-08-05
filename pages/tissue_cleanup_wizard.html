@@ -80,7 +80,8 @@
           <canvas id="tissueCanvas" width="512" height="512"></canvas>
         </div>
         <p id="canvasStatus" class="small text-muted mt-2">
-          Green overlay = tissue to keep; red = areas to remove. Image is fixed size (no pan/zoom).
+          Green = tissue to keep; red = areas to remove (replaced with black on Apply).
+          Preview red is only an overlay — not written to disk. Image is fixed size (no pan/zoom).
         </p>
         <p id="tracePointCount" class="small text-info mb-0"></p>
 
@@ -120,7 +121,8 @@
         <div class="alert alert-warning">
           <strong>Destructive apply.</strong>
           Apply will overwrite DAPI previews, orient previews, original scan z-stacks, and all
-          max/sharpen/top-hat TIFFs for edited sections. Originals are copied to
+          max/sharpen/top-hat TIFFs for edited sections. Red (remove) regions are filled with
+          <strong>black</strong>. Originals are copied to
           <code>.masonjar/tissue_cleanup_backup/</code> first. If you already ran <strong>Align</strong>,
           run it again after cleanup.
         </div>

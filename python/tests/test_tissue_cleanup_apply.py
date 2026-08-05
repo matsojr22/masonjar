@@ -91,6 +91,9 @@ def test_apply_masks_batch_zstack_plane_wise(tmp_path: Path) -> None:
     assert np.std(zstack[:, 24:]) < 1.0
     assert np.std(zstack[:, :24]) > 1.0
     assert zstack[0, 0] == 40
+    # Removed half fills with black (0), not border-median grey
+    assert int(zstack[0, 36]) == 0
+    assert np.all(zstack[:, 24:] == 0)
 
     tiff_targets = [
         p
@@ -122,6 +125,87 @@ def test_apply_masks_batch_2d_max_and_png(tmp_path: Path) -> None:
 
     max_arr = read_tiff_2d(bundle / "data/counting/03_max/somata/max/run1" / f"{slice_id}.tif")
     assert max_arr.shape == (32, 48)
+    assert np.all(max_arr[:, 24:] == 0)
+
+
+def test_apply_fill_zero_despite_bright_border(tmp_path: Path) -> None:
+    """Tissue on the frame edge must not paint removed areas mid-grey."""
+    import cv2
+
+    slice_id = "M528_s010"
+    bundle = _build_bundle(tmp_path, slice_id, z_planes=1)
+    mask_path = bundle / ".masonjar/tissue_cleanup_draft/masks" / f"{slice_id}.png"
+
+    # Dark interior, bright frame (contaminated border median ~200)
+    plane = np.full((32, 48), 8, dtype=np.uint8)
+    plane[0, :] = 200
+    plane[-1, :] = 200
+    plane[:, 0] = 200
+    plane[:, -1] = 200
+    plane[8:24, 8:24] = 180  # tissue blob
+    dapi = bundle / "data/counting/00_dapi" / f"{slice_id}.png"
+    prev = bundle / "data/counting/_previews" / f"{slice_id}_somata.png"
+    cv2.imwrite(str(dapi), plane)
+    cv2.imwrite(str(prev), plane)
+    tiff.imwrite(
+        str(bundle / "data/original_scans/somata" / f"{slice_id}.tif"),
+        plane,
+        photometric="minisblack",
+    )
+    tiff.imwrite(
+        str(bundle / "data/counting/03_max/somata/max/run1" / f"{slice_id}.tif"),
+        plane,
+        photometric="minisblack",
+    )
+
+    # Keep only the tissue blob; remove everything else (including bright border)
+    mask = np.zeros((32, 48), dtype=np.uint8)
+    mask[8:24, 8:24] = 255
+    cv2.imwrite(str(mask_path), mask)
+
+    config = {
+        "slices": {slice_id: {"mask_path": str(mask_path), "method": "auto"}},
+        "channels": [{"role": "signal_somata", "keep": True}],
+        "resume_apply": False,
+    }
+    result = apply_masks_batch(bundle, config)
+    assert result["ok"] is True
+
+    out = cv2.imread(str(dapi), cv2.IMREAD_UNCHANGED)
+    assert out is not None
+    removed = mask < 128
+    assert np.all(out[removed] == 0)
+    assert np.all(out[~removed] == plane[~removed])
+
+
+def test_apply_bg_value_override(tmp_path: Path) -> None:
+    """Explicit bg_value in apply config is still honored for repair scripts."""
+    import cv2
+
+    slice_id = "M528_s011"
+    bundle = _build_bundle(tmp_path, slice_id, z_planes=1)
+    mask_path = bundle / ".masonjar/tissue_cleanup_draft/masks" / f"{slice_id}.png"
+
+    config = {
+        "slices": {
+            slice_id: {
+                "mask_path": str(mask_path),
+                "method": "auto",
+                "bg_value": 42,
+            },
+        },
+        "channels": [{"role": "signal_somata", "keep": True}],
+        "resume_apply": False,
+    }
+    result = apply_masks_batch(bundle, config)
+    assert result["ok"] is True
+
+    out = cv2.imread(
+        str(bundle / "data/counting/00_dapi" / f"{slice_id}.png"),
+        cv2.IMREAD_UNCHANGED,
+    )
+    assert out is not None
+    assert int(out[0, 36]) == 42
 
 
 def test_apply_masks_batch_bgr_png_previews(tmp_path: Path) -> None:

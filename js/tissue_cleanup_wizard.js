@@ -291,7 +291,7 @@ async function loadCurrentSlice() {
 	if (canvasStatus) {
 		canvasStatus.textContent =
 			meta.method === "untouched" && !hasMaskFile
-				? "Green = keep; red = remove (overlay appears after you edit the mask)."
+				? "Green = keep; red = remove → black on Apply (overlay appears after you edit the mask)."
 				: preview;
 	}
 	updateSliceUi();
@@ -557,7 +557,7 @@ ipc.on("tissueCleanupAutoResult", function (_ev, payload) {
 	}
 	if (canvasStatus) {
 		canvasStatus.textContent =
-			"Green = keep; red = remove. Use Eraser to paint red remove regions.";
+			"Green = keep; red = remove (becomes black on Apply). Use Eraser to paint red remove regions.";
 	}
 });
 
@@ -591,7 +591,7 @@ ipc.on("tissueCleanupGuidedResult", function (_ev, payload) {
 		persistCurrentSlice();
 		if (canvasStatus) {
 			canvasStatus.textContent =
-				"Green = keep; red = remove. Trace-guided mask applied.";
+				"Green = keep; red = remove (becomes black on Apply). Trace-guided mask applied.";
 		}
 	});
 });
@@ -657,7 +657,7 @@ document.getElementById("eraserBtn").addEventListener("click", function () {
 	syncBrushButtons();
 	if (canvasStatus && next === "erase") {
 		canvasStatus.textContent =
-			"Paint over areas to REMOVE (shown in red). Stray pixels are cleaned when you release the mouse.";
+			"Paint over areas to REMOVE (shown in red; replaced with black on Apply). Stray pixels are cleaned when you release the mouse.";
 	}
 });
 var keepBrushBtn = document.getElementById("keepBrushBtn");
