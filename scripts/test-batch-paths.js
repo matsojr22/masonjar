@@ -47,6 +47,57 @@ function testMaxStepReadsOriginalScansAndActiveOutLeaf() {
 	}
 }
 
+function testSharpenStepReadsSignalBranchMaxLeaf() {
+	var bundle = makeBundle({
+		activeRuns: { max: "somata/max/M528_max1" },
+	});
+	try {
+		var paths = project.resolvePathsForBundle(bundle, "sharpen");
+		assert.ok(
+			paths.indir.indexOf(path.join("03_max", "somata", "max", "M528_max1")) >= 0,
+			"sharpen should read somata/max leaf, got: " + paths.indir,
+		);
+	} finally {
+		helpers.rmDir(bundle);
+	}
+}
+
+function testMaxWriteBaseInfersSignalBranchFromIndir() {
+	var batchQueue = require("../batch_queue");
+	var bundle = makeBundle({});
+	try {
+		var roleBase = path.join(bundle, "data", "counting", "03_max");
+		var indir = path.join(roleBase, "somata", "max", "M528_max1");
+		fs.mkdirSync(indir, { recursive: true });
+		fs.writeFileSync(path.join(indir, "M528_s001.tif"), "x");
+		var result = batchQueue.maxWriteBase(
+			{ path: bundle, name: "M528" },
+			pipelineRuns.CANONICAL_ROLES,
+			indir,
+		);
+		assert.strictEqual(result.signalBranch, "somata");
+		assert.ok(
+			result.writeBase.indexOf(path.join("03_max", "somata")) >= 0,
+			"writeBase should be under somata, got: " + result.writeBase,
+		);
+		var leaf = path.join(result.writeBase, "sharpen", "slug1");
+		assert.ok(leaf.indexOf(path.join("somata", "sharpen", "slug1")) >= 0);
+	} finally {
+		helpers.rmDir(bundle);
+	}
+}
+
+function testInferSignalBranchFromRel() {
+	assert.strictEqual(
+		pipelineRuns.inferSignalBranchForMaxFamily("somata/max/x", ""),
+		"somata",
+	);
+	assert.strictEqual(
+		pipelineRuns.inferSignalBranchForMaxFamily("somata/sharpen/y", ""),
+		"somata",
+	);
+}
+
 function testSharpenStepReadsMaxBranchLeaf() {
 	// When active runs has a max run on the `max` branch (e.g. max/<slug>),
 	// sharpen should read from that max branch leaf (not the sharpen branch).
@@ -168,6 +219,46 @@ function testResolveRoleBaseAbsForBundle() {
 	}
 }
 
+function testResolveSignalDatasetPrefersActiveSharpen() {
+	var batchQueue = require("../batch_queue");
+	var maxDatasets = require("../js/max_datasets");
+	var bundle = makeBundle({
+		activeRuns: { max: "somata/sharpen/M528_sharp1" },
+	});
+	try {
+		var roleBase = path.join(bundle, "data", "counting", "03_max");
+		var maxLeaf = path.join(roleBase, "somata", "max", "M528_max1");
+		var sharpLeaf = path.join(roleBase, "somata", "sharpen", "M528_sharp1");
+		fs.mkdirSync(maxLeaf, { recursive: true });
+		fs.mkdirSync(sharpLeaf, { recursive: true });
+		fs.writeFileSync(path.join(maxLeaf, "M528_s001.tif"), "m");
+		fs.writeFileSync(path.join(sharpLeaf, "M528_s001.tif"), "s");
+		var abs = batchQueue.resolveSignalDatasetAbs(
+			{ path: bundle, name: "M528" },
+			"detect",
+			{
+				projects: [],
+				steps: ["detect"],
+				params: { detect: { signalDatasetKind: "max" } },
+			},
+			{ active_runs: { max: "somata/sharpen/M528_sharp1" } },
+		);
+		assert.ok(abs, "expected dataset abs");
+		assert.ok(
+			abs.indexOf(path.join("somata", "sharpen", "M528_sharp1")) >= 0,
+			"active sharpen should win over kind=max default, got: " + abs,
+		);
+		var listed = maxDatasets.listDatasetsForBranch(bundle, "somata");
+		assert.ok(
+			listed.some(function (d) {
+				return d.kind === "sharpen";
+			}),
+		);
+	} finally {
+		helpers.rmDir(bundle);
+	}
+}
+
 function testStepIdFanoutCovered() {
 	// Make sure every step in RUN_STEP_CONFIG with scriptRoles resolves without throwing
 	var bundle = makeBundle({});
@@ -193,12 +284,16 @@ function testStepIdFanoutCovered() {
 function run() {
 	testMaxStepReadsOriginalScansAndActiveOutLeaf();
 	testSharpenStepReadsMaxBranchLeaf();
+	testSharpenStepReadsSignalBranchMaxLeaf();
+	testMaxWriteBaseInfersSignalBranchFromIndir();
+	testInferSignalBranchFromRel();
 	testIntensityStepHasInputOutputAnnotations();
 	testApplyGeometryHasNoScriptRoles();
 	testTophatStepReadsMaxBranchLeaf();
 	testDetectQcResolvesLikeDetect();
 	testCollateUsesQuantificationRoleBase();
 	testResolveRoleBaseAbsForBundle();
+	testResolveSignalDatasetPrefersActiveSharpen();
 	testStepIdFanoutCovered();
 	console.log("test-batch-paths: PASS");
 }

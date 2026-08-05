@@ -764,11 +764,12 @@ function resolveInputLeafAbsForStepBundle(
 		return resolveRoleBaseAbsForBundle(bundleRoot, roles, inputRole);
 	}
 	if (stepId === "sharpen" && inputRole === "max") {
-		return resolveActiveBranchLeafAbsForBundle(
+		// Active max-family leaf may be somata/max/... or somata/sharpen/... —
+		// do not force legacy branch name "max".
+		return resolveActiveRunLeafAbsForBundle(
 			bundleRoot,
 			roles,
 			processing,
-			"max",
 			"max",
 		);
 	}
@@ -1032,6 +1033,223 @@ function reconcileProjectRunsOnOpen(bundleRoot, roles, processing) {
 		}
 	}
 	return { active_runs: runs, changed: changed };
+}
+
+/**
+ * Move orphaned 03_max/{max|sharpen|tophat}/{slug} leaves under a signal branch.
+ * Rename-only (no EXDEV copy). Returns immediately when no orphans exist.
+ */
+function primarySignalBranchFromSettings(settings) {
+	var czi =
+		settings && settings.czi_import && typeof settings.czi_import === "object"
+			? settings.czi_import
+			: null;
+	if (!czi) {
+		return "";
+	}
+	var role = String(czi.primary_signal_role || "");
+	if (role.indexOf("other:") === 0) {
+		return role.slice(6).replace(/[^a-zA-Z0-9_-]/g, "") || "";
+	}
+	if (role === "signal_somata") {
+		return "somata";
+	}
+	if (role === "signal_nuclei") {
+		return "nuclei";
+	}
+	if (role === "signal_axons") {
+		return "axons";
+	}
+	return "";
+}
+
+function pickOrphanMigrateBranch(bundleRoot, roles, runs, settings) {
+	var roleBase = resolveRoleBaseAbsForBundle(bundleRoot, roles, "max");
+	var branches = [];
+	if (roleBase && fs.existsSync(roleBase)) {
+		try {
+			var ents = fs.readdirSync(roleBase, { withFileTypes: true });
+			for (var bi = 0; bi < ents.length; bi++) {
+				if (!ents[bi].isDirectory()) {
+					continue;
+				}
+				var bname = ents[bi].name;
+				if (MAX_KIND_DIRS.indexOf(bname) >= 0) {
+					continue;
+				}
+				var child = path.join(roleBase, bname);
+				for (var kk = 0; kk < MAX_KIND_DIRS.length; kk++) {
+					if (fs.existsSync(path.join(child, MAX_KIND_DIRS[kk]))) {
+						branches.push(bname);
+						break;
+					}
+				}
+			}
+		} catch (_err) {
+			branches = [];
+		}
+	}
+	branches.sort();
+	if (branches.length === 1) {
+		return { branch: branches[0], reason: "sole_signal_branch" };
+	}
+	var activeRel = normalizeRelPath((runs && runs.max) || "");
+	if (activeRel) {
+		var parts = activeRel.split("/");
+		if (
+			parts.length >= 2 &&
+			MAX_KIND_DIRS.indexOf(parts[0]) < 0 &&
+			MAX_KIND_DIRS.indexOf(parts[1]) >= 0
+		) {
+			return { branch: parts[0], reason: "active_runs.max" };
+		}
+	}
+	var fromCzi = primarySignalBranchFromSettings(settings);
+	if (fromCzi) {
+		return { branch: fromCzi, reason: "czi_primary_signal" };
+	}
+	if (branches.length === 0) {
+		return { branch: "", reason: "no_signal_branch" };
+	}
+	return { branch: "", reason: "ambiguous_signal_branches:" + branches.join(",") };
+}
+
+function listOrphanMaxFamilyLeaves(roleBase) {
+	var orphans = [];
+	if (!roleBase || !fs.existsSync(roleBase)) {
+		return orphans;
+	}
+	for (var k = 0; k < MAX_KIND_DIRS.length; k++) {
+		var kind = MAX_KIND_DIRS[k];
+		var kindDir = path.join(roleBase, kind);
+		if (!fs.existsSync(kindDir) || !fs.statSync(kindDir).isDirectory()) {
+			continue;
+		}
+		var entries;
+		try {
+			entries = fs.readdirSync(kindDir, { withFileTypes: true });
+		} catch (_err) {
+			continue;
+		}
+		for (var i = 0; i < entries.length; i++) {
+			if (!entries[i].isDirectory()) {
+				continue;
+			}
+			var leafAbs = path.join(kindDir, entries[i].name);
+			if (!hasRunMarkers(leafAbs, kind)) {
+				continue;
+			}
+			orphans.push({
+				kind: kind,
+				slug: entries[i].name,
+				abs: leafAbs,
+				orphanRel: kind + "/" + entries[i].name,
+			});
+		}
+	}
+	return orphans;
+}
+
+function migrateOrphanMaxFamilyLeaves(bundleRoot, roles, processing, settings) {
+	var runs = migrateActiveRuns(processing || null);
+	var roleBase = resolveRoleBaseAbsForBundle(bundleRoot, roles, "max");
+	var orphans = listOrphanMaxFamilyLeaves(roleBase);
+	if (!orphans.length) {
+		return {
+			changed: false,
+			moved: [],
+			skippedReason: "",
+			active_runs: runs,
+			messages: [],
+		};
+	}
+	var pick = pickOrphanMigrateBranch(bundleRoot, roles, runs, settings);
+	if (!pick.branch) {
+		var skipMsg =
+			"[pipeline_runs] Skipping orphan max-family migrate (" +
+			pick.reason +
+			"); re-run sharpen/tophat after updating Mason Jar, or set a single signal branch.";
+		console.warn(skipMsg);
+		return {
+			changed: false,
+			moved: [],
+			skippedReason: pick.reason,
+			active_runs: runs,
+			messages: [skipMsg],
+		};
+	}
+	var messages = [
+		"[pipeline_runs] Repairing misplaced max/sharpen/tophat folders → " +
+			pick.branch +
+			" (" +
+			pick.reason +
+			")…",
+	];
+	console.log(messages[0]);
+	var moved = [];
+	var changed = false;
+	for (var i = 0; i < orphans.length; i++) {
+		var o = orphans[i];
+		var destParent = path.join(roleBase, pick.branch, o.kind);
+		var destAbs = path.join(destParent, o.slug);
+		var destRel = pick.branch + "/" + o.kind + "/" + o.slug;
+		if (path.resolve(o.abs) === path.resolve(destAbs)) {
+			continue;
+		}
+		if (fs.existsSync(destAbs)) {
+			var clash =
+				"[pipeline_runs] Skip orphan " +
+				o.orphanRel +
+				": destination already exists " +
+				destRel;
+			console.warn(clash);
+			messages.push(clash);
+			continue;
+		}
+		try {
+			fs.mkdirSync(destParent, { recursive: true });
+			fs.renameSync(o.abs, destAbs);
+		} catch (err) {
+			var code = err && err.code ? String(err.code) : "";
+			var fail =
+				"[pipeline_runs] Failed to rename " +
+				o.orphanRel +
+				" → " +
+				destRel +
+				(code === "EXDEV"
+					? " (cross-volume; not copying — re-run the tool instead)"
+					: ": " + (err && err.message ? err.message : String(err)));
+			console.warn(fail);
+			messages.push(fail);
+			continue;
+		}
+		moved.push({ from: o.orphanRel, to: destRel });
+		changed = true;
+		var done = "[pipeline_runs] Moved " + o.orphanRel + " → " + destRel;
+		console.log(done);
+		messages.push(done);
+		if (normalizeRelPath(runs.max || "") === o.orphanRel) {
+			runs.max = destRel;
+		}
+	}
+	// Remove empty orphan kind dirs when possible
+	for (var ki = 0; ki < MAX_KIND_DIRS.length; ki++) {
+		var emptyKind = path.join(roleBase, MAX_KIND_DIRS[ki]);
+		try {
+			if (fs.existsSync(emptyKind) && fs.readdirSync(emptyKind).length === 0) {
+				fs.rmdirSync(emptyKind);
+			}
+		} catch (_rm) {
+			/* ignore */
+		}
+	}
+	return {
+		changed: changed,
+		moved: moved,
+		skippedReason: "",
+		active_runs: runs,
+		messages: messages,
+	};
 }
 
 function ensureDefaultActiveRunForRole(role) {
@@ -1406,6 +1624,8 @@ module.exports = {
 	discoverRunChoicesForBundle: discoverRunChoicesForBundle,
 	isStoredActiveRunValid: isStoredActiveRunValid,
 	reconcileProjectRunsOnOpen: reconcileProjectRunsOnOpen,
+	migrateOrphanMaxFamilyLeaves: migrateOrphanMaxFamilyLeaves,
+	listOrphanMaxFamilyLeaves: listOrphanMaxFamilyLeaves,
 	buildRunsCatalog: buildRunsCatalog,
 	writeRunsCatalog: writeRunsCatalog,
 	computeFinalOutputPath: computeFinalOutputPath,

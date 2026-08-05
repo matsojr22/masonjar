@@ -457,6 +457,21 @@ function openProject(bundleRoot) {
 			);
 		}
 	}
+	var orphanMigrate = pipelineRuns.migrateOrphanMaxFamilyLeaves(
+		bundleRoot,
+		data.roles,
+		data.processing,
+		data.settings || {},
+	);
+	if (orphanMigrate.messages && orphanMigrate.messages.length) {
+		for (var mi = 0; mi < orphanMigrate.messages.length; mi++) {
+			console.log(orphanMigrate.messages[mi]);
+		}
+	}
+	if (orphanMigrate.changed) {
+		data.processing.active_runs = orphanMigrate.active_runs;
+		activeRunsMigrated = true;
+	}
 	var reconcile = pipelineRuns.reconcileProjectRunsOnOpen(
 		bundleRoot,
 		data.roles,

@@ -510,7 +510,50 @@ var tests = [
 	testActiveRunScoping,
 	testCollectRunDeleteTargetsDoubled,
 	testRemoveRunForRoleClearsActive,
+	testMigrateOrphanMaxFamilyLeaves,
 ];
+
+function testMigrateOrphanMaxFamilyLeaves() {
+	var bundle = helpers.tmpDir("mj-orphan-");
+	try {
+		fs.mkdirSync(path.join(bundle, ".masonjar"), { recursive: true });
+		var roleBase = path.join(bundle, "data", "counting", "03_max");
+		var somataMax = path.join(roleBase, "somata", "max", "M528_max1");
+		fs.mkdirSync(somataMax, { recursive: true });
+		fs.writeFileSync(path.join(somataMax, "M528_s001.tif"), "max");
+		var orphanSharpen = path.join(roleBase, "sharpen", "M528_sharp1");
+		fs.mkdirSync(orphanSharpen, { recursive: true });
+		fs.writeFileSync(path.join(orphanSharpen, "M528_s001.tif"), "sharp");
+		var processing = {
+			active_runs: { max: "sharpen/M528_sharp1" },
+		};
+		var result = pipelineRuns.migrateOrphanMaxFamilyLeaves(
+			bundle,
+			pipelineRuns.CANONICAL_ROLES,
+			processing,
+			{},
+		);
+		assert.ok(result.changed, "should migrate orphan");
+		assert.strictEqual(result.moved.length, 1);
+		assert.strictEqual(result.moved[0].to, "somata/sharpen/M528_sharp1");
+		assert.ok(
+			fs.existsSync(path.join(roleBase, "somata", "sharpen", "M528_sharp1", "M528_s001.tif")),
+		);
+		assert.ok(!fs.existsSync(orphanSharpen));
+		assert.strictEqual(result.active_runs.max, "somata/sharpen/M528_sharp1");
+		// Idempotent
+		var again = pipelineRuns.migrateOrphanMaxFamilyLeaves(
+			bundle,
+			pipelineRuns.CANONICAL_ROLES,
+			{ active_runs: result.active_runs },
+			{},
+		);
+		assert.ok(!again.changed);
+		assert.strictEqual(again.moved.length, 0);
+	} finally {
+		helpers.rmDir(bundle);
+	}
+}
 
 function runAll() {
 	var chain = Promise.resolve();

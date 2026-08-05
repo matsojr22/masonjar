@@ -6,6 +6,23 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.28
+
+**What's new**
+
+- **Batch sharpen / top-hat show up in Cell Detection:** Batch now writes sharpened (and top-hat) datasets under the correct signal branch folder (for example somata), so the Intensity dataset dropdown lists them next to max projection.
+- **Repair on open:** Opening a project that already has misplaced batch sharpen folders moves them into the signal branch with a short log message — no need to re-run batch sharpen when the images are already on disk.
+
+**Commit subject**
+
+Fix batch max-family write paths so Detect lists sharpen
+
+**Commit body**
+
+Infer the signal branch from the batch input leaf when writing max/sharpen/top-hat outputs, prefer the active max-family leaf for signal-dataset steps, and rename orphaned 03_max/{kind}/{slug} folders into the signal branch on project open.
+
+---
+
 ## v6.0.27
 
 **What's new**

@@ -32,7 +32,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.runBatchQueue = exports.killBatchQueue = void 0;
+exports.runBatchQueue = exports.maxWriteBase = exports.resolveSignalDatasetAbs = exports.killBatchQueue = void 0;
 const python_job_1 = require("./python_job");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
@@ -344,35 +344,43 @@ function resolveSignalDatasetAbs(proj, stepId, plan, processing) {
     const activeRuns = pipelineRuns.migrateActiveRuns(processing || null) || {};
     const activeRel = String(activeRuns.max || "");
     const signalBranch = pipelineRuns.inferSignalBranchForMaxFamily(activeRel, "") || "";
-    const collect = (branch) => maxDatasets
-        .listDatasetsForBranch(proj.path, branch)
-        .filter((d) => d.kind === kind);
-    let datasets = collect(signalBranch);
-    if (!datasets.length) {
+    const collectAll = (branch) => maxDatasets.listDatasetsForBranch(proj.path, branch);
+    let all = collectAll(signalBranch);
+    if (!all.length || !signalBranch) {
         const branches = maxDatasets.listSignalBranches(proj.path) || [];
         for (const b of branches) {
             if (b === signalBranch) {
                 continue;
             }
-            datasets = datasets.concat(collect(b));
+            all = all.concat(collectAll(b));
         }
-        if (!signalBranch && !datasets.length) {
-            datasets = collect("");
+        if (!signalBranch && !all.length) {
+            all = collectAll("");
         }
     }
+    // Prefer active max-family leaf (any kind) — same as Detect / wizard pickers.
+    // Kind is used for fallback when active is missing or not on disk.
     if (activeRel) {
-        const activeMatch = datasets.find((d) => d.rel === activeRel);
+        const activeMatch = all.find((d) => d.rel === activeRel);
         if (activeMatch) {
             return activeMatch.abs;
         }
+    }
+    let datasets = all.filter((d) => d.kind === kind);
+    if (!datasets.length) {
+        datasets = all.slice();
     }
     const preferred = maxDatasets.defaultDatasetForBranch(proj.path, signalBranch, { preferKind: kind });
     if (preferred && preferred.kind === kind) {
         return preferred.abs;
     }
+    if (preferred && !datasets.length) {
+        return preferred.abs;
+    }
     datasets.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
     return datasets.length ? datasets[0].abs : null;
 }
+exports.resolveSignalDatasetAbs = resolveSignalDatasetAbs;
 function applySignalDatasetOverride(paths, proj, stepId, plan, processing, onLine) {
     if (SIGNAL_DATASET_STEPS.indexOf(stepId) < 0) {
         return paths;
@@ -387,7 +395,12 @@ function applySignalDatasetOverride(paths, proj, stepId, plan, processing, onLin
 }
 function maxWriteBase(proj, roles, indir) {
     const roleBase = (0, batch_paths_1.resolveRolePath)(proj.path, roles, "max");
-    const signalBranch = pipelineRunsModule().inferSignalBranchForMaxFamily("", indir || "") || "";
+    // Prefer path relative to role base so inference works in the main process
+    // (renderer project.resolveRolePath is empty there).
+    const inputDatasetRel = relFromBase(roleBase, indir || "");
+    const signalBranch = pipelineRunsModule().inferSignalBranchForMaxFamily(inputDatasetRel, "") ||
+        pipelineRunsModule().inferSignalBranchForMaxFamily("", indir || "") ||
+        "";
     if (signalBranch) {
         return {
             writeBase: maxDatasetsModule().branchRootAbs(proj.path, signalBranch),
@@ -397,6 +410,7 @@ function maxWriteBase(proj, roles, indir) {
     }
     return { writeBase: roleBase, signalBranch: "", roleBase };
 }
+exports.maxWriteBase = maxWriteBase;
 function resolveRunLeaf(base, branch, slug) {
     if (!base) {
         return "";
