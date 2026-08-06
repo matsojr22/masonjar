@@ -327,6 +327,16 @@ function renderParamSection(stepId, body, params) {
 			stepId === "detect_qc"
 				? '<p class="small text-muted">Writes the full QC package under predictions/…/qc_scout/ (graphs, summary, threshold suggestions). Does not write Predictions_*.pkl.</p>'
 				: "";
+		var useQc = stepId === "detect" && !!params.useQcIntensityThreshold;
+		var qcRow =
+			stepId === "detect"
+				? fieldRow(
+						"Use QC-derived intensity threshold (per project)",
+						'<input type="checkbox" class="form-check-input" id="detect-useQcIntensity" ' +
+							(params.useQcIntensityThreshold ? "checked" : "") +
+							' /> <span class="small text-muted">Uses each project\'s Detect QC scout suggestion; ignores the cutoff below</span>',
+					)
+				: "";
 		body.innerHTML =
 			intro +
 			signalDatasetKindField(prefix, params.signalDatasetKind) +
@@ -375,13 +385,16 @@ function renderParamSection(stepId, body, params) {
 					params.eccentricity +
 					'" />',
 			) +
+			qcRow +
 			fieldRow(
 				"Intensity cutoff (0–255, 0=off)",
 				'<input type="number" step="1" min="0" max="255" class="form-control form-control-sm" id="' +
 					prefix +
 					'-intensityMin" value="' +
 					(params.intensityMin || 0) +
-					'" />',
+					'"' +
+					(useQc ? " disabled" : "") +
+					" />",
 			) +
 			fieldRow(
 				"Multi-channel",
@@ -407,6 +420,17 @@ function renderParamSection(stepId, body, params) {
 					(params.perSliceQc ? "checked" : "") +
 					' /> <span class="small text-muted">Run-level QC PNGs are always written</span>',
 			);
+		if (stepId === "detect") {
+			var qcCb = body.querySelector("#detect-useQcIntensity");
+			var inten = body.querySelector("#detect-intensityMin");
+			if (qcCb && inten) {
+				qcCb.addEventListener("change", function () {
+					inten.disabled = !!qcCb.checked;
+					state.params = collectParamsFromUi();
+					renderPreflightMatrix();
+				});
+			}
+		}
 		return;
 	}
 	if (stepId === "count") {
@@ -1085,6 +1109,11 @@ function collectParamsFromUi() {
 			next.signalDatasetKind = qs(prefix + "-signalKind")
 				? qs(prefix + "-signalKind").value
 				: "max";
+			if (stepId === "detect") {
+				next.useQcIntensityThreshold = !!(
+					qs("detect-useQcIntensity") && qs("detect-useQcIntensity").checked
+				);
+			}
 		} else if (stepId === "intensity") {
 			var hem = qs("intensity-hemisphere") ? qs("intensity-hemisphere").value : "whole";
 			next.wholeSlice = hem === "whole";
@@ -1270,6 +1299,34 @@ function classifyPreflightCell(bundleRoot, stepId) {
 		}
 	}
 	if (!missing.length) {
+		if (stepId === "detect") {
+			var dParams =
+				state.params.detect || registry.DEFAULT_PARAMS.detect || {};
+			var useQcThr = !!dParams.useQcIntensityThreshold;
+			var qcUi = qs("detect-useQcIntensity");
+			if (qcUi) {
+				useQcThr = !!qcUi.checked;
+			}
+			if (useQcThr) {
+				var detectQcScout = require("./detect_qc_scout");
+				var projForQc;
+				try {
+					projForQc = project.readProjectJson(bundleRoot);
+				} catch (_eQc) {
+					projForQc = null;
+				}
+				var sug = detectQcScout.suggestionIntensityMin(
+					detectQcScout.readDetectQc(projForQc),
+				);
+				if (sug == null) {
+					return {
+						tone: "red",
+						label: "no QC thr",
+						reason: "no QC intensity suggestion",
+					};
+				}
+			}
+		}
 		return { tone: "green", label: "ready", reason: "All inputs present." };
 	}
 	if (missing.length === 1 && missing[0] === "annotation_pkls") {

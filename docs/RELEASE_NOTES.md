@@ -6,6 +6,22 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.30
+
+**What's new**
+
+- **Batch Cell Detection can use each project’s QC intensity threshold:** After Detect QC scout has suggested a cutoff for a project, check **Use QC-derived intensity threshold (per project)** in Batch Detect parameters. Each project gets its own suggested value instead of one global intensity cutoff.
+
+**Commit subject**
+
+Let batch Detect use each project’s QC intensity threshold
+
+**Commit body**
+
+Batch Cell Detection can apply the intensity cutoff suggested by Detect QC scout on a per-project basis, so you no longer have to copy the same number into the global intensity field for every animal.
+
+---
+
 ## v6.0.29
 
 **What's new**

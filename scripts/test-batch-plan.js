@@ -155,6 +155,10 @@ function testDefaultParamsExist() {
 	assert.ok(!registry.DEFAULT_PARAMS.dapi_cleanup);
 	assert.strictEqual(registry.DEFAULT_PARAMS.tophat.radius, 10);
 	assert.strictEqual(registry.DEFAULT_PARAMS.detect.signalDatasetKind, "max");
+	assert.strictEqual(
+		registry.DEFAULT_PARAMS.detect.useQcIntensityThreshold,
+		false,
+	);
 }
 
 function run() {

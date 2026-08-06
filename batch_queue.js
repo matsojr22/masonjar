@@ -40,6 +40,8 @@ const batch_paths_1 = require("./batch_paths");
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const batchRegistry = require("./js/batch_registry");
 const DEPENDENCY_GRAPH = batchRegistry.DEPENDENCY_GRAPH;
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const batchDetectIntensity = require("./js/batch_detect_intensity");
 const TAIL_LIMIT = 50;
 const SIGNAL_DATASET_STEPS = [
     "sharpen",
@@ -506,7 +508,7 @@ function includeLayersAllowedForParcellation(meta) {
     return false;
 }
 function preflightJob(deps, proj, stepId, plan, onLine) {
-    var _a;
+    var _a, _b;
     const projectData = (() => {
         try {
             return (0, batch_paths_1.loadProjectJson)(proj.path);
@@ -594,6 +596,28 @@ function preflightJob(deps, proj, stepId, plan, onLine) {
             if (!annoIds.length) {
                 // detect doesn't need annotations - use raw input list
                 candidateIds = inputIds;
+            }
+            if (stepId === "detect") {
+                const dParams = (((_b = plan.params) === null || _b === void 0 ? void 0 : _b.detect) || {});
+                if (dParams.useQcIntensityThreshold) {
+                    let projectData = null;
+                    try {
+                        projectData = (0, batch_paths_1.loadProjectJson)(proj.path);
+                    }
+                    catch (_c) {
+                        projectData = null;
+                    }
+                    const detectQc = projectData &&
+                        projectData.processing &&
+                        projectData.processing.detect_qc;
+                    const resolved = batchDetectIntensity.resolveDetectIntensityMin(dParams, detectQc);
+                    if (!resolved.ok) {
+                        return {
+                            skip: true,
+                            reason: resolved.reason || "no QC intensity suggestion",
+                        };
+                    }
+                }
             }
         }
         else if (stepId === "count") {
@@ -737,6 +761,21 @@ function applyPostStepSideEffects(proj, stepId, outputAbs, _branch, plan, paths)
     if (cfg.outputRole === "predictions") {
         projectData.processing.active_prediction_run = rel;
     }
+    if (stepId === "detect" &&
+        plan &&
+        plan.params &&
+        plan.params.detect &&
+        plan.params.detect.useQcIntensityThreshold) {
+        const detectQc = projectData.processing
+            .detect_qc;
+        if (detectQc && typeof detectQc === "object") {
+            const sug = batchDetectIntensity.suggestionFromDetectQc(detectQc);
+            if (sug != null) {
+                detectQc.applied_intensity_min = sug;
+                projectData.processing.detect_qc = detectQc;
+            }
+        }
+    }
     try {
         (0, batch_paths_1.saveProjectJson)(proj.path, projectData);
     }
@@ -794,7 +833,7 @@ function readProjectMeta(projPath) {
         return { roles: {}, processing: undefined };
     }
 }
-function buildDetectLikeArgs(deps, params, indir, finalOut, sliceListPath, qcOnly) {
+function buildDetectLikeArgs(deps, params, indir, finalOut, sliceListPath, qcOnly, intensityMinOverride) {
     var _a, _b, _c, _d, _e;
     const models = {
         somata: "models/chaosdruid.pt",
@@ -834,7 +873,9 @@ function buildDetectLikeArgs(deps, params, indir, finalOut, sliceListPath, qcOnl
     if (params.perSliceQc) {
         args.push("--per-slice-qc");
     }
-    const intensityMin = Number((_e = params.intensityMin) !== null && _e !== void 0 ? _e : 0);
+    const intensityMin = Number(intensityMinOverride != null
+        ? intensityMinOverride
+        : (_e = params.intensityMin) !== null && _e !== void 0 ? _e : 0);
     if (intensityMin > 0) {
         args.push("--intensity-min", String(intensityMin));
     }
@@ -844,7 +885,7 @@ function buildDetectLikeArgs(deps, params, indir, finalOut, sliceListPath, qcOnl
     return args;
 }
 function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
     const params = (plan.params && plan.params[stepId]) || {};
     const meta = readProjectMeta(proj.path);
     const roles = meta.roles;
@@ -962,13 +1003,34 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
         const inputDatasetRel = relFromBase(maxBase, paths.indir || "");
         const signalBranch = pipelineRunsModule().inferSignalBranchForMaxFamily(inputDatasetRel, paths.indir || "") || "";
         const branchName = signalBranch || modelBranch;
+        let detectQc = null;
+        if (stepId === "detect" && params.useQcIntensityThreshold) {
+            try {
+                const projectData = (0, batch_paths_1.loadProjectJson)(proj.path);
+                detectQc =
+                    projectData &&
+                        projectData.processing &&
+                        projectData.processing.detect_qc;
+            }
+            catch (_m) {
+                detectQc = null;
+            }
+        }
+        const intensityResolved = batchDetectIntensity.resolveDetectIntensityMin(params, detectQc);
+        if (stepId === "detect" && !intensityResolved.ok) {
+            throw new Error(intensityResolved.reason || "no QC intensity suggestion");
+        }
+        const resolvedIntensity = intensityResolved.value;
+        if (stepId === "detect") {
+            onLine(`[detect] intensity-min=${resolvedIntensity} (${intensityResolved.source === "qc" ? "QC suggestion" : "plan"})`);
+        }
         const slug = buildDetectRunSlug({
             sortedStems: stems,
             confidence: Number((_g = params.confidence) !== null && _g !== void 0 ? _g : 0.5),
             tile: Number((_h = params.tile) !== null && _h !== void 0 ? _h : 640),
             area: Number((_j = params.area) !== null && _j !== void 0 ? _j : 200),
             eccentricity: Number((_k = params.eccentricity) !== null && _k !== void 0 ? _k : 0.2),
-            intensityMin: Number((_l = params.intensityMin) !== null && _l !== void 0 ? _l : 0),
+            intensityMin: resolvedIntensity,
             inputDatasetRel,
             modelBranch,
         });
@@ -989,7 +1051,7 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
             branch = branchName;
         }
         fs.mkdirSync(finalOut, { recursive: true });
-        const args = buildDetectLikeArgs(deps, params, paths.indir || "", finalOut, sliceListPath, stepId === "detect_qc");
+        const args = buildDetectLikeArgs(deps, params, paths.indir || "", finalOut, sliceListPath, stepId === "detect_qc", resolvedIntensity);
         return {
             scriptName: "find_neurons.py",
             args,
@@ -1138,7 +1200,7 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
         if (!annodir) {
             return null;
         }
-        const pParams = (((_m = plan.params) === null || _m === void 0 ? void 0 : _m.parcellation) || {});
+        const pParams = (((_l = plan.params) === null || _l === void 0 ? void 0 : _l.parcellation) || {});
         const cfg = {
             annotation_dir: annodir,
             tier_id: pParams.ccfAdvanced ? null : pParams.tierId || "areas",

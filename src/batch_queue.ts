@@ -119,6 +119,20 @@ const batchRegistry = require("./js/batch_registry") as {
 };
 const DEPENDENCY_GRAPH = batchRegistry.DEPENDENCY_GRAPH;
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const batchDetectIntensity = require("./js/batch_detect_intensity") as {
+  resolveDetectIntensityMin: (
+    params: Record<string, unknown>,
+    detectQc: unknown,
+  ) => {
+    ok: boolean;
+    value: number;
+    reason?: string;
+    source: string;
+  };
+  suggestionFromDetectQc: (detectQc: unknown) => number | null;
+};
+
 const TAIL_LIMIT = 50;
 const SIGNAL_DATASET_STEPS = [
   "sharpen",
@@ -894,6 +908,31 @@ function preflightJob(
         // detect doesn't need annotations - use raw input list
         candidateIds = inputIds;
       }
+      if (stepId === "detect") {
+        const dParams = (plan.params?.detect || {}) as Record<string, unknown>;
+        if (dParams.useQcIntensityThreshold) {
+          let projectData: ProjectJsonShape | null = null;
+          try {
+            projectData = loadProjectJson(proj.path);
+          } catch {
+            projectData = null;
+          }
+          const detectQc =
+            projectData &&
+            projectData.processing &&
+            (projectData.processing as Record<string, unknown>).detect_qc;
+          const resolved = batchDetectIntensity.resolveDetectIntensityMin(
+            dParams,
+            detectQc,
+          );
+          if (!resolved.ok) {
+            return {
+              skip: true,
+              reason: resolved.reason || "no QC intensity suggestion",
+            };
+          }
+        }
+      }
     } else if (stepId === "count") {
       const predIds = listPredictionSliceIds(stepPaths.preddir || "");
       candidateIds = intersectSliceIds(annoIds, predIds);
@@ -1069,6 +1108,23 @@ function applyPostStepSideEffects(
   if (cfg.outputRole === "predictions") {
     projectData.processing.active_prediction_run = rel;
   }
+  if (
+    stepId === "detect" &&
+    plan &&
+    plan.params &&
+    plan.params.detect &&
+    plan.params.detect.useQcIntensityThreshold
+  ) {
+    const detectQc = (projectData.processing as Record<string, unknown>)
+      .detect_qc as Record<string, unknown> | undefined;
+    if (detectQc && typeof detectQc === "object") {
+      const sug = batchDetectIntensity.suggestionFromDetectQc(detectQc);
+      if (sug != null) {
+        detectQc.applied_intensity_min = sug;
+        (projectData.processing as Record<string, unknown>).detect_qc = detectQc;
+      }
+    }
+  }
   try {
     saveProjectJson(proj.path, projectData);
   } catch (_err) {
@@ -1149,6 +1205,7 @@ function buildDetectLikeArgs(
   finalOut: string,
   sliceListPath: string,
   qcOnly: boolean,
+  intensityMinOverride?: number,
 ): string[] {
   const models: Record<string, string> = {
     somata: "models/chaosdruid.pt",
@@ -1188,7 +1245,11 @@ function buildDetectLikeArgs(
   if (params.perSliceQc) {
     args.push("--per-slice-qc");
   }
-  const intensityMin = Number(params.intensityMin ?? 0);
+  const intensityMin = Number(
+    intensityMinOverride != null
+      ? intensityMinOverride
+      : params.intensityMin ?? 0,
+  );
   if (intensityMin > 0) {
     args.push("--intensity-min", String(intensityMin));
   }
@@ -1360,13 +1421,44 @@ function buildJob(
         paths.indir || "",
       ) || "";
     const branchName = signalBranch || modelBranch;
+
+    let detectQc: unknown = null;
+    if (stepId === "detect" && params.useQcIntensityThreshold) {
+      try {
+        const projectData = loadProjectJson(proj.path);
+        detectQc =
+          projectData &&
+          projectData.processing &&
+          (projectData.processing as Record<string, unknown>).detect_qc;
+      } catch {
+        detectQc = null;
+      }
+    }
+    const intensityResolved = batchDetectIntensity.resolveDetectIntensityMin(
+      params,
+      detectQc,
+    );
+    if (stepId === "detect" && !intensityResolved.ok) {
+      throw new Error(
+        intensityResolved.reason || "no QC intensity suggestion",
+      );
+    }
+    const resolvedIntensity = intensityResolved.value;
+    if (stepId === "detect") {
+      onLine(
+        `[detect] intensity-min=${resolvedIntensity} (${
+          intensityResolved.source === "qc" ? "QC suggestion" : "plan"
+        })`,
+      );
+    }
+
     const slug = buildDetectRunSlug({
       sortedStems: stems,
       confidence: Number(params.confidence ?? 0.5),
       tile: Number(params.tile ?? 640),
       area: Number(params.area ?? 200),
       eccentricity: Number(params.eccentricity ?? 0.2),
-      intensityMin: Number(params.intensityMin ?? 0),
+      intensityMin: resolvedIntensity,
       inputDatasetRel,
       modelBranch,
     });
@@ -1396,6 +1488,7 @@ function buildJob(
       finalOut,
       sliceListPath,
       stepId === "detect_qc",
+      resolvedIntensity,
     );
     return {
       scriptName: "find_neurons.py",

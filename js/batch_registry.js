@@ -191,6 +191,7 @@ var DEFAULT_PARAMS = {
 		area: 200,
 		eccentricity: 0.2,
 		intensityMin: 0,
+		useQcIntensityThreshold: false,
 		multichannel: false,
 		customModel: "",
 		perSliceQc: false,
