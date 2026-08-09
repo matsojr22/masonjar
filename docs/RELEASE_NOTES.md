@@ -6,6 +6,26 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.31
+
+**What's new**
+
+- **Viewer/Editor feels snappier while painting:** Long brush strokes stay live on screen, but heavy label audits wait until you release the mouse.
+- **Zoom and pan from the keyboard:** Zoom slider goes from 50% to 1000% and keeps both panes locked. Use `-` / `+` for 10% steps and arrow keys to pan about one-fifth of the view (stops at the edges).
+- **Search finds any atlas region:** The Search bar looks across all categories; press Enter to set the paint target. Hierarchy / Area dropdowns stay tier-scoped for deliberate painting.
+- **Larger brush and Delete → Lost in Warp:** Brush size goes up to 50. Delete or Backspace fills the highlighted region with Lost in Warp (and sets that as the paint target); Undo still works.
+- **Fewer repeat confirmation clicks:** Mixed-resolution tier notices and the Save overwrite confirm can be dismissed with “Don’t show again.” Restore them under **Settings → Dialogs**. Suppressions clear automatically after an app update.
+
+**Commit subject**
+
+Improve Viewer/Editor paint, zoom, search, and dialogs
+
+**Commit body**
+
+Make Adjust painting snappier by deferring UI audits until mouse release, add keyboard zoom/pan and unscoped search with Enter, raise brush size to 50, map Delete to Lost in Warp, and add suppressible dialogs with Settings reset and clear-on-update.
+
+---
+
 ## v6.0.30
 
 **What's new**

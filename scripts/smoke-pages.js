@@ -23,6 +23,7 @@ const PAGES = [
 	"credits.html",
 	"settings.html",
 	"settings_network.html",
+	"settings_dialogs.html",
 	"settings_updates.html",
 	"batch_wizard.html",
 	"geometry_repair_wizard.html",
@@ -75,6 +76,11 @@ const DOM_ASSERTIONS = {
 		"ioFairsharePanel",
 		"ioFairshareNasList",
 		"ioFairsharePickNas",
+	],
+	"settings_dialogs.html": [
+		"dialogPrefsPanel",
+		"dialogSuppressedList",
+		"dialogClearSuppressBtn",
 	],
 	"settings_updates.html": [
 		"updateStatusPanel",

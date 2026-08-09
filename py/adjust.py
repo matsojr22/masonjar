@@ -28,9 +28,16 @@ from qtpy.QtWidgets import (
     QToolBar,
     QDockWidget,
     QSizePolicy,
+    QShortcut,
 )
-from qtpy.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QBrush
+from qtpy.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QBrush, QKeySequence
 from qtpy.QtCore import Qt, QPoint, QEvent, QTimer
+from dialog_preferences import (
+    KEY_CONFIRM_SAVE_OVERWRITE,
+    KEY_MIXED_RESOLUTION_TIER,
+    is_suppressed,
+    set_suppressed,
+)
 from slice_atlas import add_outlines
 from adjust_channels import (
     lowres_channels_for_slice,
@@ -224,6 +231,9 @@ class AnnotationViewer(QMainWindow):
         search_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.area_search_box.setCompleter(search_completer)
         self.area_search_box.textEdited.connect(self._on_area_search_box_edited)
+        self.area_search_box.returnPressed.connect(
+            lambda: self._commit_search_text(self.area_search_box.text())
+        )
         search_completer.activated.connect(self._on_area_search_completer_activated)
 
         self.tier_combo = QComboBox(self)
@@ -267,13 +277,13 @@ class AnnotationViewer(QMainWindow):
 
         self.zoom_label = QLabel(f"Zoom {self.zoom_level}%", self)
         self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setRange(100, 1000)
+        self.zoom_slider.setRange(50, 1000)
         self.zoom_slider.setValue(self.zoom_level)
         self.zoom_slider.valueChanged.connect(self.update_zoom)
 
         self.brush_label = QLabel(f"Brush {self.brush_size}", self)
         self.brush_slider = QSlider(Qt.Orientation.Horizontal)
-        self.brush_slider.setRange(1, 10)
+        self.brush_slider.setRange(1, 50)
         self.brush_slider.setValue(self.brush_size)
         self.brush_slider.valueChanged.connect(self.update_brush)
 
@@ -410,6 +420,7 @@ class AnnotationViewer(QMainWindow):
         self.anno_view.viewport().installEventFilter(self)
         self.img_view.setMouseTracking(True)
         self.img_view.viewport().installEventFilter(self)
+        self._install_view_shortcuts()
 
         self._update_section_labels()
         channel_loaded = self.rebuild_channel_combo()
@@ -608,7 +619,18 @@ class AnnotationViewer(QMainWindow):
         completer = self.area_search_box.completer()
         if completer is None:
             return
-        regions = self._current_regions(query)
+        regions = self._flatten_catalog_regions(query)
+        q = (query or "").strip().lower()
+
+        def sort_key(n):
+            ac = str(n.get("acronym") or "").lower()
+            if q and ac == q:
+                return (0, ac)
+            if q and ac.startswith(q):
+                return (1, ac)
+            return (2, ac)
+
+        regions = sorted(regions, key=sort_key)
         strings = [self._region_display_text(n) for n in regions[:500]]
         from qtpy.QtCore import QStringListModel
 
@@ -616,21 +638,40 @@ class AnnotationViewer(QMainWindow):
 
     def _on_area_search_box_edited(self, text: str):
         self._refresh_search_completer(text)
-        if self.catalog:
-            self._rebuild_area_combo(text)
+
+    def _commit_search_text(self, text: str):
+        """Select paint target from Search text (full catalog, not tier-scoped)."""
+        text = (text or "").strip()
+        if not text or not self.catalog:
+            return
+        regions = self._flatten_catalog_regions("")
+        q = text.lower()
+        exact_display = None
+        exact_acronym = None
+        contains = None
+        for node in regions:
+            disp = self._region_display_text(node)
+            ac = str(node.get("acronym") or "").lower()
+            if disp.lower() == q:
+                exact_display = node
+                break
+            if ac == q and exact_acronym is None:
+                exact_acronym = node
+            hay = f"{node.get('acronym', '')} {node.get('name', '')}".lower()
+            if contains is None and (q in hay or q in disp.lower()):
+                contains = node
+        node = exact_display or exact_acronym or contains
+        if not node:
+            return
+        self._sync_area_combo_to_region(node["id"])
+        self.set_paint_region(node["id"])
+        disp = self._region_display_text(node)
+        self.area_search_box.blockSignals(True)
+        self.area_search_box.setText(disp)
+        self.area_search_box.blockSignals(False)
 
     def _on_area_search_completer_activated(self, text: str):
-        if not self.catalog:
-            return
-        query = self.area_search_box.text()
-        for node in self._current_regions(query):
-            if self._region_display_text(node) == text:
-                self._sync_area_combo_to_region(node["id"])
-                self.set_paint_region(node["id"])
-                self.area_search_box.blockSignals(True)
-                self.area_search_box.setText(text)
-                self.area_search_box.blockSignals(False)
-                break
+        self._commit_search_text(text)
 
     def _section_has_annotation_labels(self) -> bool:
         if self.current_label is None:
@@ -648,6 +689,8 @@ class AnnotationViewer(QMainWindow):
             "intensity PKLs may need a re-run."
         )
         self.status_bar.showMessage(msg, 20000)
+        if is_suppressed(KEY_MIXED_RESOLUTION_TIER):
+            return
         if not self._tier_change_notice_shown:
             self._tier_change_notice_shown = True
             dialog = QMessageBox(self)
@@ -656,7 +699,11 @@ class AnnotationViewer(QMainWindow):
             dialog.setText("Content tier changed after painting")
             dialog.setInformativeText(msg)
             dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+            dont_show = QCheckBox("Don't show this warning again")
+            dialog.setCheckBox(dont_show)
             dialog.exec()
+            if dont_show.isChecked():
+                set_suppressed(KEY_MIXED_RESOLUTION_TIER, True)
 
     def _update_paint_resolution_warning(self):
         if not hasattr(self, "paint_resolution_warning"):
@@ -1489,8 +1536,79 @@ class AnnotationViewer(QMainWindow):
     def update_zoom(self):
         self.zoom_level = self.zoom_slider.value()
         self.zoom_label.setText(f"Zoom {self.zoom_level}%")
-        self.img_view.resetTransform()
-        self.img_view.scale(self.zoom_level / 100, self.zoom_level / 100)
+        scale = self.zoom_level / 100.0
+        for view in (self.img_view, self.anno_view):
+            view.resetTransform()
+            view.scale(scale, scale)
+        self.anno_view.horizontalScrollBar().setValue(
+            self.img_view.horizontalScrollBar().value()
+        )
+        self.anno_view.verticalScrollBar().setValue(
+            self.img_view.verticalScrollBar().value()
+        )
+
+    def _text_input_focused(self) -> bool:
+        return isinstance(QApplication.focusWidget(), QLineEdit)
+
+    def _view_shortcuts_allowed(self) -> bool:
+        return not self.is_drawing and not self._text_input_focused()
+
+    def _nudge_zoom(self, delta_percent: int):
+        if not self._view_shortcuts_allowed():
+            return
+        value = max(50, min(1000, self.zoom_slider.value() + delta_percent))
+        self.zoom_slider.setValue(value)
+
+    def _pan_views(self, fx: float, fy: float):
+        """Pan both panes by ~20% of the visible viewport via scrollbars."""
+        if not self._view_shortcuts_allowed():
+            return
+        vp = self.img_view.viewport()
+        dx = int(round(fx * 0.2 * vp.width()))
+        dy = int(round(fy * 0.2 * vp.height()))
+        if dx == 0 and dy == 0:
+            return
+        for view in (self.img_view, self.anno_view):
+            h = view.horizontalScrollBar()
+            v = view.verticalScrollBar()
+            h.setValue(h.value() + dx)
+            v.setValue(v.value() + dy)
+
+    def _fill_selected_label_with_liw(self):
+        """Fill all pixels of the selected label with Lost in Warp (id 0)."""
+        if not self._view_shortcuts_allowed():
+            return
+        if not self.allow_adjustment.isChecked():
+            return
+        if self.selected_region_id is None or self.current_label is None:
+            return
+        rid = int(self.selected_region_id)
+        if rid == 0:
+            return
+        before = self.current_label.copy()
+        mask = self.current_label == rid
+        if not np.any(mask):
+            return
+        self.current_label[mask] = 0
+        self._push_relabel_undo(before, self.current_label)
+        self.was_changed = True
+        self.set_paint_region(0, "LIW", "Lost in Warp")
+        self.show_image_with_overlay()
+
+    def _install_view_shortcuts(self):
+        def bind(keys, slot):
+            for key in keys:
+                sc = QShortcut(QKeySequence(key), self)
+                sc.setContext(Qt.ShortcutContext.WindowShortcut)
+                sc.activated.connect(slot)
+
+        bind(["-", "Minus", "KeypadMinus"], lambda: self._nudge_zoom(-10))
+        bind(["=", "+", "Plus", "KeypadPlus"], lambda: self._nudge_zoom(10))
+        bind(["Left"], lambda: self._pan_views(-1, 0))
+        bind(["Right"], lambda: self._pan_views(1, 0))
+        bind(["Up"], lambda: self._pan_views(0, -1))
+        bind(["Down"], lambda: self._pan_views(0, 1))
+        bind(["Delete", "Backspace"], self._fill_selected_label_with_liw)
 
     def update_brush(self):
         self.brush_size = self.brush_slider.value()
@@ -1633,18 +1751,24 @@ class AnnotationViewer(QMainWindow):
             return True
 
     def save_changes(self):
-        # Ask if they're sure
-        dialog = QMessageBox(self)
-        dialog.setIcon(QMessageBox.Icon.Information)
-        dialog.setText("Are you sure you want to save your changes?")
-        dialog.setInformativeText("This will overwrite the current annotation file.")
-        dialog.setStandardButtons(
-            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel
-        )
-        dialog.setDefaultButton(QMessageBox.StandardButton.Save)
-        ret = dialog.exec()
-        if ret == QMessageBox.StandardButton.Cancel:
-            return
+        if not is_suppressed(KEY_CONFIRM_SAVE_OVERWRITE):
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Icon.Information)
+            dialog.setText("Are you sure you want to save your changes?")
+            dialog.setInformativeText(
+                "This will overwrite the current annotation file."
+            )
+            dialog.setStandardButtons(
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel
+            )
+            dialog.setDefaultButton(QMessageBox.StandardButton.Save)
+            dont_show = QCheckBox("Don't show this warning again")
+            dialog.setCheckBox(dont_show)
+            ret = dialog.exec()
+            if ret == QMessageBox.StandardButton.Cancel:
+                return
+            if dont_show.isChecked():
+                set_suppressed(KEY_CONFIRM_SAVE_OVERWRITE, True)
 
         # Save the current label
         _, anno_path, _ = self.pairs[self.current_index]
@@ -1806,8 +1930,6 @@ class AnnotationViewer(QMainWindow):
             self.originals[self.current_delta].update(new_originals)
 
             self.was_changed = True
-            self._update_parcellation_labels()
-            self._update_paint_resolution_warning()
 
             # Convert the points to QPoint objects for any necessary GUI operations
             update_points = [QPoint(x, y) for x, y in new_points]
@@ -1924,6 +2046,7 @@ class AnnotationViewer(QMainWindow):
                 self.is_drawing = False
                 self.last_draw_point = None
                 self.current_delta += 1
+                self._update_parcellation_labels()
                 self.show_image_with_overlay()
                 return True
 

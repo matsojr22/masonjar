@@ -71,6 +71,14 @@ var logDismissedByUser = true;
 /** Skip the quit confirmation dialog (update apply / forced update quit). */
 var isQuittingForUpdate = false;
 function quitForUpdate() {
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const dialogPreferences = require(path.join(__dirname, "js", "dialog_preferences"));
+        dialogPreferences.clearSuppressions();
+    }
+    catch (_error) {
+        // ignore — prefs clear is best-effort before relaunch
+    }
     isQuittingForUpdate = true;
     app.quit();
 }
@@ -1032,6 +1040,14 @@ function waitForUpdateApplyIfNeeded(targetWin) {
     });
 }
 function beginAppBootstrap(targetWin) {
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const dialogPreferences = require(path.join(__dirname, "js", "dialog_preferences"));
+        dialogPreferences.syncAppVersionClearIfChanged(getVersion());
+    }
+    catch (_error) {
+        // ignore
+    }
     checkLocalDir();
     (0, io_fairshare_1.ensureCoordinatorDir)(ioFairshareDir);
     void (0, io_fairshare_1.detectLinkMbps)();
