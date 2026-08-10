@@ -59,7 +59,7 @@ function testListTiers() {
 	});
 	assert.deepStrictEqual(
 		ids,
-		["major", "regions", "areas", "subareas", "layers"],
+		["major", "regions", "areas", "subareas", "parts", "layers"],
 		"tier ids and order must match plan",
 	);
 	for (var i = 0; i < tiers.length; i++) {
@@ -172,6 +172,24 @@ function testCcfAdvancedHelpExport() {
 	);
 }
 
+function testPartsParentOfLayers() {
+	structureCatalog.resetCatalogForTests();
+	var catalog = structureCatalog.loadCatalog(appRoot);
+	var parts = structureCatalog.listRegionsForTier("parts", "", catalog);
+	var acros = {};
+	for (var i = 0; i < parts.length; i++) {
+		acros[parts[i].acronym] = true;
+	}
+	assert.ok(acros["RSPagl"], "parts must include RSPagl");
+	assert.ok(acros["RSPd"], "parts must include RSPd");
+	assert.ok(acros["RSPv"], "parts must include RSPv");
+	assert.ok(acros["VISp"], "parts must include VISp");
+	assert.ok(acros["AUDp"] || acros["SSp-bfd"], "parts must include AUD/SS parent-of-layers");
+	assert.ok(!acros["RSP"], "parts must not include RSP parent");
+	assert.ok(!acros["RSPv2/3"], "parts must not include laminar IDs");
+	assert.ok(!acros["VISp4"], "parts must not include laminar IDs");
+}
+
 function main() {
 	testFlattenAndLevels();
 	testVisSiblingsShareGroupParent();
@@ -180,6 +198,7 @@ function main() {
 	testListRegionsForTierAreas();
 	testSubareasExcludeLayers();
 	testSubareasIncludeVispSspBfd();
+	testPartsParentOfLayers();
 	testListCcfLevelsEnriched();
 	testCcfLevel4SingleStructureCtxpl();
 	testCcfAdvancedHelpExport();

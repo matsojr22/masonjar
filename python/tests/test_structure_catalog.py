@@ -77,7 +77,7 @@ def test_list_tiers_shape_and_order(catalog):
     tiers = list_tiers(catalog)
     ids = [t["id"] for t in tiers]
     assert ids == [t["id"] for t in TIER_DEFS]
-    assert ids == ["major", "regions", "areas", "subareas", "layers"]
+    assert ids == ["major", "regions", "areas", "subareas", "parts", "layers"]
     for tier in tiers:
         assert tier["label"]
         assert tier["description"]
@@ -106,6 +106,27 @@ def test_list_tiers_subareas_include_visp_ssp(catalog):
     assert "SSp-bfd" in acronyms or "SSp" in acronyms
     # Common subcortical nuclei are at this depth too
     assert "ACB" in acronyms or "AAA" in acronyms
+    assert "RSP" in acronyms
+    assert "RSPagl" not in acronyms
+
+
+def test_list_tiers_parts_parent_of_layers(catalog):
+    parts = list_regions_for_tier("parts", catalog)
+    acronyms = {n["acronym"] for n in parts}
+    assert "RSPagl" in acronyms
+    assert "RSPd" in acronyms
+    assert "RSPv" in acronyms
+    assert "VISp" in acronyms
+    assert "AUDp" in acronyms
+    assert "SSp-bfd" in acronyms or any(a.startswith("SSp") for a in acronyms)
+    assert "RSP" not in acronyms
+    assert "RSPv2/3" not in acronyms
+    assert "VISp4" not in acronyms
+    for node in parts:
+        assert node["st_level"] != 11
+        assert not (
+            "layer" in node["name"].lower() and node["st_level"] == 11
+        )
 
 
 def test_list_tiers_subareas_excludes_layers(catalog):
@@ -121,6 +142,18 @@ def test_list_tiers_layers_includes_layer_named(catalog):
     # And every entry is either L11 or layer-named (no other depths leak in)
     for node in layer_nodes:
         assert node["st_level"] == 11 or "layer" in node["name"].lower()
+
+
+def test_ancestor_at_level_parts_rollup(catalog):
+    rspv23 = catalog["by_acronym"]["RSPv2/3"]
+    rspv = catalog["by_acronym"]["RSPv"]
+    assert ancestor_at_level(rspv23["id"], catalog, tier_id="parts") == rspv["id"]
+    visp4 = catalog["by_acronym"]["VISp4"]
+    visp = catalog["by_acronym"]["VISp"]
+    assert ancestor_at_level(visp4["id"], catalog, tier_id="parts") == visp["id"]
+    assert ancestor_at_level(visp["id"], catalog, tier_id="parts") == visp["id"]
+    rsp = catalog["by_acronym"]["RSP"]
+    assert ancestor_at_level(rsp["id"], catalog, tier_id="parts") == rsp["id"]
 
 
 def test_list_ccf_levels_enriched_fields(catalog):

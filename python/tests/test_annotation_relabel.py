@@ -52,6 +52,34 @@ def test_ancestor_at_level_visp_unchanged_at_subareas(catalog):
     assert mapped == visp["id"]
 
 
+def test_ancestor_at_level_parts_maps_layers_to_parents(catalog):
+    rspv23 = catalog["by_acronym"]["RSPv2/3"]
+    rspv = catalog["by_acronym"]["RSPv"]
+    assert ancestor_at_level(rspv23["id"], catalog, tier_id="parts") == rspv["id"]
+    visp4 = catalog["by_acronym"]["VISp4"]
+    visp = catalog["by_acronym"]["VISp"]
+    assert ancestor_at_level(visp4["id"], catalog, tier_id="parts") == visp["id"]
+    assert ancestor_at_level(visp["id"], catalog, tier_id="parts") == visp["id"]
+    rsp = catalog["by_acronym"]["RSP"]
+    assert ancestor_at_level(rsp["id"], catalog, tier_id="parts") == rsp["id"]
+
+
+def test_relabel_layers_to_parts_grid(catalog):
+    visp4 = catalog["by_acronym"]["VISp4"]["id"]
+    rspv23 = catalog["by_acronym"]["RSPv2/3"]["id"]
+    visp = catalog["by_acronym"]["VISp"]["id"]
+    rspv = catalog["by_acronym"]["RSPv"]["id"]
+
+    grid = np.zeros((4, 4), dtype=np.uint32)
+    grid[0:2, :] = visp4
+    grid[2:, :] = rspv23
+
+    result = relabel_to_target(grid, catalog, tier_id="parts")
+    assert result.pixels_changed == 16
+    assert np.all(result.label_array[0:2, :] == visp)
+    assert np.all(result.label_array[2:, :] == rspv)
+
+
 def test_relabel_layers_to_areas_grid(catalog):
     visp4 = catalog["by_acronym"]["VISp4"]["id"]
     visl4 = catalog["by_acronym"]["VISl4"]["id"]

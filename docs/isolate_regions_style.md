@@ -12,9 +12,12 @@ Source of truth lives in `TIER_DEFS` in [`js/structure_catalog.js`](../js/struct
 |---------|----------|------------------------------|----------|
 | `major` | Major divisions | `st_level == 2` | CH, BS, CB |
 | `regions` | Classic regions | `st_level == 5` | Isocortex, HPF, OLF, TH, HY, MB, MY, P |
-| `areas` | Functional areas (**default**) | `st_level == 6` | VIS, AUD, SSp, MO, RSP, ACA, ORB |
-| `subareas` | Sub-areas | `st_level == 8` AND `"layer" not in name` | VISp, VISal, SSp-bfd, ACAd, individual nuclei |
+| `areas` | Functional areas (**default**) | `st_level == 6` | VIS, AUD, SS, MO, ACA, ORB |
+| `subareas` | Sub-areas | `st_level == 8` AND `"layer" not in name` | VISp, VISal, SSp-bfd, RSP, individual nuclei |
+| `parts` | Area parts | Non-layer node with ≥1 direct child that is a layer (`st_level == 11` or `"layer" in name`) | VISp, RSPagl, RSPd, RSPv, AUDp, SSp-bfd |
 | `layers` | Cortical layers | `st_level == 11` OR `"layer" in name` | VISp1, VISp2/3, ACA6a |
+
+**Area parts rollup:** laminar IDs map to the nearest non-layer ancestor (`VISp4`→`VISp`, `RSPv2/3`→`RSPv`); already-non-layer IDs stay unchanged. This is graph-based (not a fixed `st_level`), so it works across uneven CCFv3 branches.
 
 ### Advanced (`Advanced — show CCFv3 raw depths`)
 

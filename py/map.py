@@ -715,9 +715,22 @@ class AlignmentController:
 
         self.parcel_selection.clear()
         self.parcel_selection.addItem("Full detail", FULL_DETAIL_TIER)
+        self.parcel_selection.setItemData(
+            0,
+            "Keep annotation IDs as drawn (no rollup).",
+            QtCore.Qt.ItemDataRole.ToolTipRole,
+        )
         if self.catalog:
             for tier in list_tiers(self.catalog):
                 self.parcel_selection.addItem(tier["label"], tier["id"])
+                tip = tier.get("description") or ""
+                if tier["id"] == "layers":
+                    tip = tip or "Laminar resolution for paint / rollup."
+                self.parcel_selection.setItemData(
+                    self.parcel_selection.count() - 1,
+                    tip,
+                    QtCore.Qt.ItemDataRole.ToolTipRole,
+                )
             self.parcel_level_combo.clear()
             for info in list_ccf_levels(self.catalog):
                 self.parcel_level_combo.addItem(

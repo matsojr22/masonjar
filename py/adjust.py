@@ -1121,10 +1121,21 @@ class AnnotationViewer(QMainWindow):
         self.parcel_tier_combo.blockSignals(True)
         self.parcel_tier_combo.clear()
         self.parcel_tier_combo.addItem("Full detail", FULL_DETAIL_TIER)
+        self.parcel_tier_combo.setItemData(
+            0,
+            "Keep annotation IDs as drawn (no rollup).",
+            Qt.ItemDataRole.ToolTipRole,
+        )
         tiers = list_tiers(self.catalog)
         default_tier_index = 0
         for i, tier in enumerate(tiers):
             self.parcel_tier_combo.addItem(tier["label"], tier["id"])
+            tip = tier.get("description") or ""
+            if tier["id"] == "layers":
+                tip = tip or "Laminar resolution for paint / rollup."
+            self.parcel_tier_combo.setItemData(
+                i + 1, tip, Qt.ItemDataRole.ToolTipRole
+            )
             if tier["id"] == self.parcel_tier_id:
                 default_tier_index = i + 1
         self.parcel_tier_combo.setCurrentIndex(default_tier_index)

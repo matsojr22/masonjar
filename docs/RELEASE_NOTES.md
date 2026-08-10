@@ -6,6 +6,23 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.32
+
+**What's new**
+
+- **Area parts hierarchy tier:** Between Sub-areas and Cortical layers, Hierarchy and parcellation now offer **Area parts** — named subdivisions without cortical layers (for example VISp, RSPagl / RSPd / RSPv, AUDp). Applying Area parts rolls laminar labels up to those parents across the whole CCFv3 tree, not just one region family.
+- **Clearer Full detail vs Layers:** Full detail keeps annotation IDs as drawn (no rollup). Tooltips on the parcellation tier list spell that out.
+
+**Commit subject**
+
+Add Area parts tier for CCF editing without layers
+
+**Commit body**
+
+Add a Hierarchy / parcellation tier for immediate non-layer parents of cortical layers so editors can paint and roll up to VISp, RSPagl, AUDp, and similar nodes without collapsing to coarser parents or keeping laminar IDs.
+
+---
+
 ## v6.0.31
 
 **What's new**

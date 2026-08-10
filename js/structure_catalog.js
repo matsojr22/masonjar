@@ -21,8 +21,8 @@ var VIS_RSP_PRESET_ACRONYMS = [
 ];
 
 // Semantic tier order shown in the default Hierarchy dropdown. Rules are
-// applied data-driven (st_level + layer-name heuristic) so a future CCF
-// update keeps working without hardcoded acronym lists.
+// applied data-driven (st_level + layer-name heuristic / graph parent-of-layers)
+// so a future CCF update keeps working without hardcoded acronym lists.
 var TIER_DEFS = [
 	{
 		id: "major",
@@ -37,12 +37,18 @@ var TIER_DEFS = [
 	{
 		id: "areas",
 		label: "Functional areas",
-		description: "Sensory, motor, association (VIS, AUD, SSp, MO, RSP, …)",
+		description: "Sensory, motor, association (VIS, AUD, SSp, MO, …)",
 	},
 	{
 		id: "subareas",
 		label: "Sub-areas",
-		description: "VISp, VISal, SSp-bfd, ACAd, individual nuclei",
+		description: "VISp, VISal, SSp-bfd, ACAd, RSP, individual nuclei",
+	},
+	{
+		id: "parts",
+		label: "Area parts",
+		description:
+			"Named subdivisions without cortical layers (VISp, RSPagl, AUDp, SSp-bfd, …)",
 	},
 	{
 		id: "layers",
@@ -50,6 +56,8 @@ var TIER_DEFS = [
 		description: "VISp1, VISp2/3, ACA6a, …",
 	},
 ];
+
+var PARTS_TIER = "parts";
 
 var CCF_ADVANCED_HELP =
 	"Allen Institute CCFv3 ontology depths (st_level 0–11). Some depths group " +
@@ -127,6 +135,42 @@ function isLayerName(node) {
 	return String((node && node.name) || "").toLowerCase().indexOf("layer") >= 0;
 }
 
+function isLayerNode(node) {
+	return !!(node && (node.st_level === 11 || isLayerName(node)));
+}
+
+function childrenByParent(catalog) {
+	catalog = catalog || loadCatalog();
+	if (catalog.childrenByParent) {
+		return catalog.childrenByParent;
+	}
+	var byParent = {};
+	for (var i = 0; i < catalog.nodes.length; i++) {
+		var n = catalog.nodes[i];
+		var path = n.idPath || [];
+		if (path.length < 2) {
+			continue;
+		}
+		var parentId = path[path.length - 2];
+		if (!byParent[parentId]) {
+			byParent[parentId] = [];
+		}
+		byParent[parentId].push(n);
+	}
+	catalog.childrenByParent = byParent;
+	return byParent;
+}
+
+function hasDirectLayerChild(nodeId, catalog) {
+	var kids = childrenByParent(catalog)[nodeId] || [];
+	for (var i = 0; i < kids.length; i++) {
+		if (isLayerNode(kids[i])) {
+			return true;
+		}
+	}
+	return false;
+}
+
 function tierRegionIds(tierId, catalog) {
 	catalog = catalog || loadCatalog();
 	var nodes = catalog.nodes;
@@ -159,6 +203,17 @@ function tierRegionIds(tierId, catalog) {
 	if (tierId === "subareas") {
 		for (i = 0; i < nodes.length; i++) {
 			if (nodes[i].st_level === 8 && !isLayerName(nodes[i])) {
+				out.push(nodes[i].id);
+			}
+		}
+		return out;
+	}
+	if (tierId === PARTS_TIER || tierId === "parts") {
+		for (i = 0; i < nodes.length; i++) {
+			if (
+				!isLayerNode(nodes[i]) &&
+				hasDirectLayerChild(nodes[i].id, catalog)
+			) {
 				out.push(nodes[i].id);
 			}
 		}
@@ -426,6 +481,7 @@ module.exports = {
 	getRegion: getRegion,
 	VIS_RSP_PRESET_ACRONYMS: VIS_RSP_PRESET_ACRONYMS,
 	TIER_DEFS: TIER_DEFS,
+	PARTS_TIER: PARTS_TIER,
 	CCF_ADVANCED_HELP: CCF_ADVANCED_HELP,
 	graphPath: graphPath,
 };

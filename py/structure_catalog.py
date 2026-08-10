@@ -12,9 +12,11 @@ TIER_TARGET_LEVEL: dict[str, int] = {
     "areas": 6,
     "subareas": 8,
     "layers": 11,
+    # "parts" has no fixed st_level — see ancestor_at_level / _rollup_to_parts
 }
 
 FULL_DETAIL_TIER = "full"
+PARTS_TIER = "parts"
 
 # Semantic tier definitions. Order is the order shown in the Hierarchy dropdown.
 # Rules are derived from CCFv3 ``st_level`` plus simple name heuristics so a
@@ -33,12 +35,20 @@ TIER_DEFS: list[dict[str, Any]] = [
     {
         "id": "areas",
         "label": "Functional areas",
-        "description": "Sensory, motor, association (VIS, AUD, SSp, MO, RSP, …)",
+        "description": "Sensory, motor, association (VIS, AUD, SSp, MO, …)",
     },
     {
         "id": "subareas",
         "label": "Sub-areas",
-        "description": "VISp, VISal, SSp-bfd, ACAd, individual nuclei",
+        "description": "VISp, VISal, SSp-bfd, ACAd, RSP, individual nuclei",
+    },
+    {
+        "id": "parts",
+        "label": "Area parts",
+        "description": (
+            "Named subdivisions without cortical layers "
+            "(VISp, RSPagl, AUDp, SSp-bfd, …)"
+        ),
     },
     {
         "id": "layers",
@@ -89,6 +99,86 @@ def group_parent_for_region(region: dict[str, Any], by_id: dict[int, dict[str, A
     return region
 
 
+def _is_layer_name(node: dict[str, Any]) -> bool:
+    return "layer" in str(node.get("name", "")).lower()
+
+
+def _is_layer_node(node: dict[str, Any]) -> bool:
+    """True for laminar CCF nodes (st_level 11 or layer-named)."""
+    return int(node.get("st_level", -1)) == 11 or _is_layer_name(node)
+
+
+def _children_by_parent(catalog: dict[str, Any]) -> dict[int, list[dict[str, Any]]]:
+    cached = catalog.get("children_by_parent")
+    if isinstance(cached, dict):
+        return cached
+    by_parent: dict[int, list[dict[str, Any]]] = {}
+    for node in catalog.get("nodes") or []:
+        path = node.get("idPath") or _parse_id_path(node.get("id_path"))
+        if len(path) < 2:
+            continue
+        parent_id = int(path[-2])
+        by_parent.setdefault(parent_id, []).append(node)
+    catalog["children_by_parent"] = by_parent
+    return by_parent
+
+
+def _has_direct_layer_child(node_id: int, catalog: dict[str, Any]) -> bool:
+    for child in _children_by_parent(catalog).get(int(node_id), []):
+        if _is_layer_node(child):
+            return True
+    return False
+
+
+def _resolve_path_ids(
+    region_id: int,
+    catalog: dict[str, Any],
+    structure_map: dict | None = None,
+) -> list[int]:
+    rid = int(region_id)
+    by_id = catalog.get("by_id") or {}
+    node = by_id.get(rid)
+    if node:
+        path = list(node.get("idPath") or _parse_id_path(node.get("id_path")))
+        if path:
+            return path
+    if structure_map:
+        info = structure_map.get(rid)
+        if info is None:
+            try:
+                import numpy as np
+
+                info = structure_map.get(np.uint32(rid))
+            except ImportError:
+                pass
+        if info:
+            path = _parse_id_path(info.get("id_path"))
+            if path:
+                return path
+    return [rid]
+
+
+def _rollup_to_parts(
+    region_id: int,
+    catalog: dict[str, Any],
+    structure_map: dict | None = None,
+) -> int:
+    """Map laminar IDs to nearest non-layer ancestor; non-layer IDs stay put."""
+    rid = int(region_id)
+    if rid == 0:
+        return 0
+    by_id = catalog.get("by_id") or {}
+    node = by_id.get(rid)
+    if node is not None and not _is_layer_node(node):
+        return rid
+    path_ids = _resolve_path_ids(rid, catalog, structure_map)
+    for nid in reversed(path_ids):
+        ancestor = by_id.get(int(nid))
+        if ancestor is not None and not _is_layer_node(ancestor):
+            return int(ancestor["id"])
+    return rid
+
+
 def _node_matches_tier_target(
     node: dict[str, Any],
     target_level: int,
@@ -113,6 +203,9 @@ def _resolve_target_level(
         return None, None
     if st_level is not None:
         return int(st_level), tier_id
+    if tier_id == PARTS_TIER:
+        # Handled by _rollup_to_parts; no fixed st_level.
+        return None, PARTS_TIER
     if tier_id:
         level = TIER_TARGET_LEVEL.get(tier_id)
         if level is None:
@@ -133,12 +226,16 @@ def ancestor_at_level(
 
     Walks ``idPath`` from root toward leaf. Returns the deepest ancestor whose
     ``st_level`` matches the target (with tier heuristics for layers/subareas).
+    Area parts (``parts``): laminar → nearest non-layer ancestor; non-layer identity.
     If none match, returns the nearest shallower ancestor (coarser). Unknown ids
     are returned unchanged.
     """
     rid = int(region_id)
     if rid == 0:
         return 0
+
+    if st_level is None and tier_id == PARTS_TIER:
+        return _rollup_to_parts(rid, catalog, structure_map)
 
     target_level, effective_tier = _resolve_target_level(
         tier_id=tier_id, st_level=st_level
@@ -147,25 +244,7 @@ def ancestor_at_level(
         return rid
 
     by_id = catalog.get("by_id") or {}
-    node = by_id.get(rid)
-    path_ids: list[int] = []
-    if node:
-        path_ids = list(node.get("idPath") or _parse_id_path(node.get("id_path")))
-    elif structure_map:
-        for key in (rid,):
-            info = structure_map.get(key)
-            if info is None:
-                try:
-                    import numpy as np
-
-                    info = structure_map.get(np.uint32(rid))
-                except ImportError:
-                    pass
-            if info:
-                path_ids = _parse_id_path(info.get("id_path"))
-                break
-    if not path_ids:
-        path_ids = [rid]
+    path_ids = _resolve_path_ids(rid, catalog, structure_map)
 
     at_level = None
     nearest_shallow = None
@@ -235,16 +314,14 @@ def load_catalog(graph_path: str | Path) -> dict[str, Any]:
         lvl = node["st_level"]
         if lvl not in levels:
             levels[lvl] = node
-    return {
+    catalog = {
         "nodes": nodes,
         "by_id": by_id,
         "by_acronym": by_acronym,
         "levels": levels,
     }
-
-
-def _is_layer_name(node: dict[str, Any]) -> bool:
-    return "layer" in str(node.get("name", "")).lower()
+    _children_by_parent(catalog)
+    return catalog
 
 
 def _tier_region_ids(tier_id: str, catalog: dict[str, Any]) -> list[int]:
@@ -261,6 +338,12 @@ def _tier_region_ids(tier_id: str, catalog: dict[str, Any]) -> list[int]:
             n["id"]
             for n in nodes
             if n["st_level"] == 8 and not _is_layer_name(n)
+        ]
+    if tier_id == PARTS_TIER:
+        return [
+            n["id"]
+            for n in nodes
+            if not _is_layer_node(n) and _has_direct_layer_child(n["id"], catalog)
         ]
     if tier_id == "layers":
         return [
