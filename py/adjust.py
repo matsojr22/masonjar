@@ -30,8 +30,8 @@ from qtpy.QtWidgets import (
     QSizePolicy,
     QShortcut,
 )
-from qtpy.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QBrush, QKeySequence
-from qtpy.QtCore import Qt, QPoint, QEvent, QTimer
+from qtpy.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QBrush, QKeySequence, QTransform
+from qtpy.QtCore import Qt, QPoint, QPointF, QEvent, QTimer, QRectF
 from dialog_preferences import (
     KEY_CONFIRM_SAVE_OVERWRITE,
     KEY_MIXED_RESOLUTION_TIER,
@@ -190,6 +190,11 @@ class AnnotationViewer(QMainWindow):
         self._overlay_ready = False
         self._img_pixmap_item = None
         self._anno_pixmap_item = None
+        self._syncing_scroll = False
+        self._is_panning = False
+        self._pan_last_pos = None
+        self._space_pan_active = False
+        self._space_down = False
         self._save_exit_flag = self.images_dir / ".adjust_save_exit"
         self._save_exit_timer = QTimer(self)
         self._save_exit_timer.timeout.connect(self._poll_save_exit)
@@ -306,6 +311,7 @@ class AnnotationViewer(QMainWindow):
         self.img_scene = QGraphicsScene(self)
         self.img_pixmap = QPixmap()
         self.img_view.setScene(self.img_scene)
+        self._configure_dual_views()
 
         self._brush_cursor_img = QGraphicsEllipseItem()
         self._brush_cursor_img.setZValue(1000)
@@ -420,6 +426,8 @@ class AnnotationViewer(QMainWindow):
         self.anno_view.viewport().installEventFilter(self)
         self.img_view.setMouseTracking(True)
         self.img_view.viewport().installEventFilter(self)
+        self.img_view.installEventFilter(self)
+        self.anno_view.installEventFilter(self)
         self._install_view_shortcuts()
 
         self._update_section_labels()
@@ -584,17 +592,83 @@ class AnnotationViewer(QMainWindow):
             item.setBrush(brush)
             item.setVisible(view is active_view)
 
+    def _configure_dual_views(self):
+        """Center alignment, viewport-center zoom anchors, linked scrollbars."""
+        for view in (self.img_view, self.anno_view):
+            view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            view.setTransformationAnchor(
+                QGraphicsView.ViewportAnchor.AnchorViewCenter
+            )
+            view.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+            view.setDragMode(QGraphicsView.DragMode.NoDrag)
+            view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            view.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAsNeeded
+            )
+            view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        for view in (self.img_view, self.anno_view):
+            view.horizontalScrollBar().valueChanged.connect(
+                lambda _v, src=view: self._sync_scroll_from(src)
+            )
+            view.verticalScrollBar().valueChanged.connect(
+                lambda _v, src=view: self._sync_scroll_from(src)
+            )
+
+    def _lock_scene_rect_to_pixmap(self, scene: QGraphicsScene, pixmap: QPixmap):
+        if pixmap is None or pixmap.isNull():
+            return
+        scene.setSceneRect(QRectF(pixmap.rect()))
+
+    def _viewport_center_scene_pos(self, view: QGraphicsView) -> QPointF:
+        vp = view.viewport()
+        return view.mapToScene(vp.rect().center())
+
+    def _apply_zoom(self, zoom_percent: int, *, center_scene_pos: QPointF | None = None):
+        """Scale both panes, keeping the scene point under the viewport center."""
+        zoom_percent = max(50, min(1000, int(zoom_percent)))
+        if center_scene_pos is None:
+            center_scene_pos = self._viewport_center_scene_pos(self.img_view)
+        scale = zoom_percent / 100.0
+        transform = QTransform()
+        transform.scale(scale, scale)
+        self._syncing_scroll = True
+        try:
+            for view in (self.img_view, self.anno_view):
+                view.setTransform(transform)
+                view.centerOn(center_scene_pos)
+        finally:
+            self._syncing_scroll = False
+        self.zoom_level = zoom_percent
+        self.zoom_label.setText(f"Zoom {self.zoom_level}%")
+        if self.zoom_slider.value() != zoom_percent:
+            self.zoom_slider.blockSignals(True)
+            self.zoom_slider.setValue(zoom_percent)
+            self.zoom_slider.blockSignals(False)
+
+    def _sync_scroll_from(self, source: QGraphicsView):
+        if self._syncing_scroll:
+            return
+        other = self.anno_view if source is self.img_view else self.img_view
+        self._syncing_scroll = True
+        try:
+            other.horizontalScrollBar().setValue(source.horizontalScrollBar().value())
+            other.verticalScrollBar().setValue(source.verticalScrollBar().value())
+        finally:
+            self._syncing_scroll = False
+
     def _set_img_pixmap(self, pixmap: QPixmap):
         if self._img_pixmap_item is not None:
             self.img_scene.removeItem(self._img_pixmap_item)
         self._img_pixmap_item = self.img_scene.addPixmap(pixmap)
         self._img_pixmap_item.setZValue(0)
+        self._lock_scene_rect_to_pixmap(self.img_scene, pixmap)
 
     def _set_anno_pixmap(self, pixmap: QPixmap):
         if self._anno_pixmap_item is not None:
             self.anno_scene.removeItem(self._anno_pixmap_item)
         self._anno_pixmap_item = self.anno_scene.addPixmap(pixmap)
         self._anno_pixmap_item.setZValue(0)
+        self._lock_scene_rect_to_pixmap(self.anno_scene, pixmap)
 
     def _anno_pixmap(self) -> QPixmap | None:
         if self._anno_pixmap_item is None:
@@ -1545,30 +1619,23 @@ class AnnotationViewer(QMainWindow):
         self.show_image_with_overlay()
 
     def update_zoom(self):
-        self.zoom_level = self.zoom_slider.value()
-        self.zoom_label.setText(f"Zoom {self.zoom_level}%")
-        scale = self.zoom_level / 100.0
-        for view in (self.img_view, self.anno_view):
-            view.resetTransform()
-            view.scale(scale, scale)
-        self.anno_view.horizontalScrollBar().setValue(
-            self.img_view.horizontalScrollBar().value()
-        )
-        self.anno_view.verticalScrollBar().setValue(
-            self.img_view.verticalScrollBar().value()
-        )
+        self._apply_zoom(self.zoom_slider.value())
 
     def _text_input_focused(self) -> bool:
         return isinstance(QApplication.focusWidget(), QLineEdit)
 
     def _view_shortcuts_allowed(self) -> bool:
-        return not self.is_drawing and not self._text_input_focused()
+        return (
+            not self.is_drawing
+            and not self._is_panning
+            and not self._text_input_focused()
+        )
 
     def _nudge_zoom(self, delta_percent: int):
         if not self._view_shortcuts_allowed():
             return
         value = max(50, min(1000, self.zoom_slider.value() + delta_percent))
-        self.zoom_slider.setValue(value)
+        self._apply_zoom(value)
 
     def _pan_views(self, fx: float, fy: float):
         """Pan both panes by ~20% of the visible viewport via scrollbars."""
@@ -1579,11 +1646,42 @@ class AnnotationViewer(QMainWindow):
         dy = int(round(fy * 0.2 * vp.height()))
         if dx == 0 and dy == 0:
             return
-        for view in (self.img_view, self.anno_view):
-            h = view.horizontalScrollBar()
-            v = view.verticalScrollBar()
-            h.setValue(h.value() + dx)
-            v.setValue(v.value() + dy)
+        self._syncing_scroll = True
+        try:
+            for view in (self.img_view, self.anno_view):
+                h = view.horizontalScrollBar()
+                v = view.verticalScrollBar()
+                h.setValue(h.value() + dx)
+                v.setValue(v.value() + dy)
+        finally:
+            self._syncing_scroll = False
+
+    def _pan_by_pixels(self, dx: int, dy: int):
+        if dx == 0 and dy == 0:
+            return
+        self._syncing_scroll = True
+        try:
+            for view in (self.img_view, self.anno_view):
+                h = view.horizontalScrollBar()
+                v = view.verticalScrollBar()
+                h.setValue(h.value() + dx)
+                v.setValue(v.value() + dy)
+        finally:
+            self._syncing_scroll = False
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_down = True
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_down = False
+            if self._is_panning and self._space_pan_active:
+                self._is_panning = False
+                self._space_pan_active = False
+                self._pan_last_pos = None
+        super().keyReleaseEvent(event)
 
     def _fill_selected_label_with_liw(self):
         """Fill all pixels of the selected label with Lost in Warp (id 0)."""
@@ -1661,6 +1759,7 @@ class AnnotationViewer(QMainWindow):
         self.repaint_selected_only()
 
     def show_image_with_overlay(self):
+        center = self._viewport_center_scene_pos(self.img_view)
         # Create a blank annotation image with the same dimensions
         label_array = np.array(self._label_for_display(), dtype=np.uint32)
         height, width = label_array.shape
@@ -1702,6 +1801,7 @@ class AnnotationViewer(QMainWindow):
         self._overlay_ready = True
         self.repaint_selected_only()
         self._update_paint_resolution_warning()
+        self._apply_zoom(self.zoom_level, center_scene_pos=center)
 
     def paint_deltas(self, points):
         # Update the annotation pixmap with the new points
@@ -1998,52 +2098,97 @@ class AnnotationViewer(QMainWindow):
         self._set_anno_pixmap(anno_pixmap)
 
     def eventFilter(self, source, event):
-        if event.type() == QEvent.MouseButtonPress:
+        if source in (self.img_view, self.anno_view):
             if (
-                source is self.img_view.viewport()
-                or source is self.anno_view.viewport()
+                event.type() == QEvent.Type.KeyPress
+                and event.key() == Qt.Key.Key_Space
+                and not event.isAutoRepeat()
             ):
-                if (
-                    event.button() == Qt.MouseButton.LeftButton
-                    and self.allow_adjustment.isChecked()
-                    and self.selected_region_id is not None
-                ):
-                    self.is_drawing = True
-                    point = event.pos()
-                    self.last_draw_point = self.view_to_image_coordinates(
-                        source.parent(), point
-                    )
-                    self.draw_on_image(self.last_draw_point)
-                    return True
-                elif event.button() == Qt.MouseButton.RightButton:
-                    # select region
-                    point = event.pos()
-                    image_point = self.view_to_image_coordinates(source.parent(), point)
-                    label_value = self.current_label[image_point.y(), image_point.x()]
-                    self.selected_region_id = label_value
-                    node = (
-                        get_region(int(label_value), self.catalog)
-                        if self.catalog
-                        else None
-                    )
-                    if node:
-                        self.selected_region_name = self._region_display_text(node)
-                        self._sync_area_combo_to_region(label_value)
-                    else:
-                        self.selected_region_name = self.structure_map.get(
-                            label_value, {}
-                        ).get("name", "Unknown region")
-                    self.repaint_selected_only()
-                    self._update_paint_target_strip()
+                self._space_down = True
+            elif (
+                event.type() == QEvent.Type.KeyRelease
+                and event.key() == Qt.Key.Key_Space
+                and not event.isAutoRepeat()
+            ):
+                self._space_down = False
+                if self._is_panning and self._space_pan_active:
+                    self._is_panning = False
+                    self._space_pan_active = False
+                    self._pan_last_pos = None
 
-        elif event.type() == QEvent.MouseMove:
+        is_view_vp = source in (
+            self.img_view.viewport(),
+            self.anno_view.viewport(),
+        )
+
+        if is_view_vp and event.type() == QEvent.Type.Wheel:
+            if self._view_shortcuts_allowed():
+                delta = event.angleDelta().y()
+                if delta != 0:
+                    self._nudge_zoom(10 if delta > 0 else -10)
+                    return True
+            return True
+
+        if event.type() == QEvent.Type.MouseButtonPress and is_view_vp:
+            if event.button() == Qt.MouseButton.MiddleButton or (
+                event.button() == Qt.MouseButton.LeftButton
+                and getattr(self, "_space_down", False)
+            ):
+                self._is_panning = True
+                self._space_pan_active = (
+                    event.button() == Qt.MouseButton.LeftButton
+                    and getattr(self, "_space_down", False)
+                )
+                self._pan_last_pos = event.pos()
+                self.is_drawing = False
+                return True
+            if (
+                event.button() == Qt.MouseButton.LeftButton
+                and self.allow_adjustment.isChecked()
+                and self.selected_region_id is not None
+                and not getattr(self, "_space_down", False)
+            ):
+                self.is_drawing = True
+                point = event.pos()
+                self.last_draw_point = self.view_to_image_coordinates(
+                    source.parent(), point
+                )
+                self.draw_on_image(self.last_draw_point)
+                return True
+            if event.button() == Qt.MouseButton.RightButton:
+                # select region
+                point = event.pos()
+                image_point = self.view_to_image_coordinates(source.parent(), point)
+                label_value = self.current_label[image_point.y(), image_point.x()]
+                self.selected_region_id = label_value
+                node = (
+                    get_region(int(label_value), self.catalog)
+                    if self.catalog
+                    else None
+                )
+                if node:
+                    self.selected_region_name = self._region_display_text(node)
+                    self._sync_area_combo_to_region(label_value)
+                else:
+                    self.selected_region_name = self.structure_map.get(
+                        label_value, {}
+                    ).get("name", "Unknown region")
+                self.repaint_selected_only()
+                self._update_paint_target_strip()
+                return True
+
+        elif event.type() == QEvent.Type.MouseMove and is_view_vp:
             point = event.pos()
             view = source.parent()
+            if self._is_panning and self._pan_last_pos is not None:
+                dx = self._pan_last_pos.x() - point.x()
+                dy = self._pan_last_pos.y() - point.y()
+                self._pan_last_pos = point
+                self._pan_by_pixels(dx, dy)
+                return True
             if self.is_drawing:
                 image_point = self.view_to_image_coordinates(view, point)
-                if (
-                    image_point != self.last_draw_point
-                ):  # Only draw if the point has changed
+                if image_point != self.last_draw_point:
                     self.last_draw_point = image_point
                     self.draw_on_image(image_point)
                 return True
@@ -2052,7 +2197,15 @@ class AnnotationViewer(QMainWindow):
             self._update_brush_cursor(view, image_point)
             return True
 
-        elif event.type() == QEvent.MouseButtonRelease:
+        elif event.type() == QEvent.Type.MouseButtonRelease and is_view_vp:
+            if self._is_panning and event.button() in (
+                Qt.MouseButton.MiddleButton,
+                Qt.MouseButton.LeftButton,
+            ):
+                self._is_panning = False
+                self._space_pan_active = False
+                self._pan_last_pos = None
+                return True
             if self.is_drawing and event.button() == Qt.MouseButton.LeftButton:
                 self.is_drawing = False
                 self.last_draw_point = None

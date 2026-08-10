@@ -6,6 +6,23 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.33
+
+**What's new**
+
+- **Viewer/Editor views stay centered and locked together:** Enabling Allow Adjustment no longer drops the images to the bottom of the panes. Zoom (slider, `+/-`, mouse wheel) keeps the tissue under the center of the view, and both DAPI and annotation panes stay in sync.
+- **Mouse pan:** Middle-drag (or Space+left-drag) pans both panes together without interrupting paint or region pick.
+
+**Commit subject**
+
+Keep Adjust views centered and synced while zooming
+
+**Commit body**
+
+Lock dual-pane scene bounds and scroll sync so Allow Adjustment no longer jumps the images, and apply viewport-center zoom plus middle-button pan so DAPI and annotation stay aligned.
+
+---
+
 ## v6.0.32
 
 **What's new**
