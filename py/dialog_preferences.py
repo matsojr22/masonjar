@@ -10,10 +10,12 @@ DIALOG_PREFS_FILENAME = "dialog_preferences.json"
 
 KEY_MIXED_RESOLUTION_TIER = "adjust.mixed_resolution_tier"
 KEY_CONFIRM_SAVE_OVERWRITE = "adjust.confirm_save_overwrite"
+KEY_ISOLATE_LABEL_AUDIT = "adjust.isolate_label_audit"
 
 KNOWN_KEYS = (
     KEY_MIXED_RESOLUTION_TIER,
     KEY_CONFIRM_SAVE_OVERWRITE,
+    KEY_ISOLATE_LABEL_AUDIT,
 )
 
 

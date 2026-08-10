@@ -30,7 +30,13 @@ function run() {
 		prefs.suppressed = {};
 		prefs.suppressed[dialogPrefs.KEY_MIXED_RESOLUTION_TIER] = true;
 		prefs.suppressed[dialogPrefs.KEY_CONFIRM_SAVE_OVERWRITE] = true;
+		prefs.suppressed[dialogPrefs.KEY_ISOLATE_LABEL_AUDIT] = true;
 		dialogPrefs.save(prefs, home);
+
+		assert.ok(
+			dialogPrefs.KEY_LABELS[dialogPrefs.KEY_ISOLATE_LABEL_AUDIT],
+			"isolate label audit needs a Settings label",
+		);
 
 		var cleared = dialogPrefs.syncAppVersionClearIfChanged("6.0.31", home);
 		assert.strictEqual(cleared, true);

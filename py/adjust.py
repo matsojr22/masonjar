@@ -34,6 +34,7 @@ from qtpy.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QBrush, QKeySequ
 from qtpy.QtCore import Qt, QPoint, QPointF, QEvent, QTimer, QRectF
 from dialog_preferences import (
     KEY_CONFIRM_SAVE_OVERWRITE,
+    KEY_ISOLATE_LABEL_AUDIT,
     KEY_MIXED_RESOLUTION_TIER,
     is_suppressed,
     set_suppressed,
@@ -1915,6 +1916,8 @@ class AnnotationViewer(QMainWindow):
         )
         if not slice_audit.get("issues"):
             return
+        if is_suppressed(KEY_ISOLATE_LABEL_AUDIT):
+            return
         dialog = QMessageBox(self)
         dialog.setIcon(QMessageBox.Icon.Warning)
         dialog.setWindowTitle("Isolate Regions")
@@ -1925,7 +1928,11 @@ class AnnotationViewer(QMainWindow):
             "the setup page."
         )
         dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dont_show = QCheckBox("Don't show this warning again")
+        dialog.setCheckBox(dont_show)
         dialog.exec()
+        if dont_show.isChecked():
+            set_suppressed(KEY_ISOLATE_LABEL_AUDIT, True)
 
     def prev_image(self):
         if self.current_index > 0:

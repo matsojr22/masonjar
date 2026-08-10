@@ -6,6 +6,22 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.34
+
+**What's new**
+
+- **Don’t show again on the post-Save Isolate Regions warning:** After saving annotations with mixed or mismatched label resolution, the Isolate Regions notice can be dismissed permanently (restore under **Settings → Dialogs**). Dock warnings still appear.
+
+**Commit subject**
+
+Let users dismiss the post-Save Isolate Regions warning
+
+**Commit body**
+
+Add Don’t-show-again for the Viewer/Editor notice that appears after Save when label resolution may affect Isolate Regions, using the same dialog preferences as the other Adjust suppressions.
+
+---
+
 ## v6.0.33
 
 **What's new**

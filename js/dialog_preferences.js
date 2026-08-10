@@ -13,12 +13,15 @@ var FILENAME = "dialog_preferences.json";
 
 var KEY_MIXED_RESOLUTION_TIER = "adjust.mixed_resolution_tier";
 var KEY_CONFIRM_SAVE_OVERWRITE = "adjust.confirm_save_overwrite";
+var KEY_ISOLATE_LABEL_AUDIT = "adjust.isolate_label_audit";
 
 var KEY_LABELS = {};
 KEY_LABELS[KEY_MIXED_RESOLUTION_TIER] =
 	"Viewer/Editor: mixed-resolution tier change notice";
 KEY_LABELS[KEY_CONFIRM_SAVE_OVERWRITE] =
 	"Viewer/Editor: confirm before overwriting annotation on Save";
+KEY_LABELS[KEY_ISOLATE_LABEL_AUDIT] =
+	"Viewer/Editor: Isolate Regions notice after Save";
 
 function prefsPath(homeRoot) {
 	return path.join(homeDir.masonHomePath(homeRoot), FILENAME);
@@ -100,6 +103,7 @@ module.exports = {
 	FILENAME: FILENAME,
 	KEY_MIXED_RESOLUTION_TIER: KEY_MIXED_RESOLUTION_TIER,
 	KEY_CONFIRM_SAVE_OVERWRITE: KEY_CONFIRM_SAVE_OVERWRITE,
+	KEY_ISOLATE_LABEL_AUDIT: KEY_ISOLATE_LABEL_AUDIT,
 	KEY_LABELS: KEY_LABELS,
 	prefsPath: prefsPath,
 	load: load,
