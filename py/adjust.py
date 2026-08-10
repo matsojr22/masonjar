@@ -339,6 +339,12 @@ class AnnotationViewer(QMainWindow):
         self.anno_view.viewport().setAttribute(
             Qt.WidgetAttribute.WA_AcceptTouchEvents, False
         )
+        self.img_view.viewport().setContextMenuPolicy(
+            Qt.ContextMenuPolicy.NoContextMenu
+        )
+        self.anno_view.viewport().setContextMenuPolicy(
+            Qt.ContextMenuPolicy.NoContextMenu
+        )
 
         # --- Paint dock ---
         self.paint_dock = QDockWidget("Paint", self)
@@ -603,6 +609,7 @@ class AnnotationViewer(QMainWindow):
             view.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
             view.setDragMode(QGraphicsView.DragMode.NoDrag)
             view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
             view.setHorizontalScrollBarPolicy(
                 Qt.ScrollBarPolicy.ScrollBarAsNeeded
             )
@@ -922,7 +929,18 @@ class AnnotationViewer(QMainWindow):
             self.area_combo.setCurrentIndex(select_index)
             if line_edit is not None:
                 line_edit.setText(self.area_combo.currentText())
+        elif select_id is not None:
+            # Keep paint target when id is outside the current tier/level list
+            # (right-click pick, tier swap). Do not clobber to regions[0].
+            self.area_combo.setCurrentIndex(-1)
+            if line_edit is not None:
+                node = get_region(int(select_id), self.catalog)
+                if node:
+                    line_edit.setText(self._region_display_text(node))
+                else:
+                    line_edit.clear()
         elif regions and not search_query.strip():
+            # Init only: no prior selection → default first region in list.
             self.area_combo.setCurrentIndex(0)
             if line_edit is not None:
                 line_edit.setText(self.area_combo.currentText())
@@ -2163,25 +2181,21 @@ class AnnotationViewer(QMainWindow):
                 self.draw_on_image(self.last_draw_point)
                 return True
             if event.button() == Qt.MouseButton.RightButton:
-                # select region
+                # Select paint target from clicked atlas label.
                 point = event.pos()
                 image_point = self.view_to_image_coordinates(source.parent(), point)
-                label_value = self.current_label[image_point.y(), image_point.x()]
-                self.selected_region_id = label_value
-                node = (
-                    get_region(int(label_value), self.catalog)
-                    if self.catalog
-                    else None
-                )
-                if node:
-                    self.selected_region_name = self._region_display_text(node)
-                    self._sync_area_combo_to_region(label_value)
-                else:
-                    self.selected_region_name = self.structure_map.get(
-                        label_value, {}
-                    ).get("name", "Unknown region")
+                if (
+                    image_point.x() < 0
+                    or image_point.y() < 0
+                    or image_point.x() >= self.current_label.shape[1]
+                    or image_point.y() >= self.current_label.shape[0]
+                ):
+                    self.status_bar.showMessage("Out of bounds")
+                    return True
+                label_value = int(self.current_label[image_point.y(), image_point.x()])
+                self.set_paint_region(label_value)
+                self._sync_area_combo_to_region(label_value)
                 self.repaint_selected_only()
-                self._update_paint_target_strip()
                 return True
 
         elif event.type() == QEvent.Type.MouseMove and is_view_vp:

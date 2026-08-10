@@ -6,6 +6,22 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.35
+
+**What's new**
+
+- **Right-click region pick in Viewer/Editor:** Clicking a labeled area now keeps that region as the paint target even when Hierarchy is on a coarser tier (for example Functional areas while the annotation still has cortical layers). Previously the pick could snap back to the first region in the Hierarchy list.
+
+**Commit subject**
+
+Fix right-click region pick in Viewer/Editor
+
+**Commit body**
+
+Stop the Area hierarchy rebuild from overwriting a right-clicked atlas label with the first region in the current tier list when that label is outside the list.
+
+---
+
 ## v6.0.34
 
 **What's new**
