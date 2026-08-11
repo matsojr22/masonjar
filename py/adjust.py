@@ -745,8 +745,8 @@ class AnnotationViewer(QMainWindow):
         node = exact_display or exact_acronym or contains
         if not node:
             return
-        self._sync_area_combo_to_region(node["id"])
         self.set_paint_region(node["id"])
+        self._sync_area_combo_to_region(node["id"])
         disp = self._region_display_text(node)
         self.area_search_box.blockSignals(True)
         self.area_search_box.setText(disp)
@@ -1018,13 +1018,32 @@ class AnnotationViewer(QMainWindow):
             self.repaint_selected_only()
         self._update_paint_target_strip()
 
+    def _tier_id_containing_region(self, region_id: int) -> str | None:
+        """Finest semantic tier whose picker list contains region_id, or None."""
+        if not self.catalog:
+            return None
+        rid = int(region_id)
+        # Finest-first so laminar picks land on Cortical layers when possible.
+        preference = ("layers", "parts", "subareas", "areas", "regions", "major")
+        by_id = {t["id"]: t for t in list_tiers(self.catalog)}
+        for tier_id in preference:
+            tier = by_id.get(tier_id)
+            if tier and rid in tier.get("region_ids", []):
+                return tier_id
+        return None
+
     def _sync_area_combo_to_region(self, region_id):
-        """After right-click pick, align hierarchy/area combos with the slice label."""
+        """Align Hierarchy/Level and Area combo with a picked atlas id.
+
+        Programmatic tier/level switches use blockSignals so the mixed-resolution
+        warning only fires on user-driven combo changes.
+        """
         if not self.catalog:
             return
         node = get_region(int(region_id), self.catalog)
         if not node:
             return
+        rid = int(node["id"])
         if self.ccf_advanced:
             level = node["st_level"]
             for i in range(self.level_combo.count()):
@@ -1033,6 +1052,24 @@ class AnnotationViewer(QMainWindow):
                     self.level_combo.setCurrentIndex(i)
                     self.level_combo.blockSignals(False)
                     break
+        else:
+            current = self._current_tier_id()
+            tiers = list_tiers(self.catalog)
+            current_ids: set[int] = set()
+            for tier in tiers:
+                if tier["id"] == current:
+                    current_ids = set(tier.get("region_ids") or [])
+                    break
+            if rid not in current_ids:
+                target = self._tier_id_containing_region(rid)
+                if target and target != current:
+                    for i in range(self.tier_combo.count()):
+                        if self.tier_combo.itemData(i) == target:
+                            self.tier_combo.blockSignals(True)
+                            self.tier_combo.setCurrentIndex(i)
+                            self.tier_combo.blockSignals(False)
+                            self.current_tier_id = target
+                            break
         self._rebuild_area_combo(select_id=node["id"])
 
     def _current_slice_id(self) -> str:

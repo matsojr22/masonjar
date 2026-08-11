@@ -6,6 +6,22 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v6.0.36
+
+**What's new**
+
+- **Hierarchy follows region pick:** Right-clicking a labeled area (or committing a Search match) now switches Hierarchy — or CCF Level in advanced mode — to a list that contains that region, and selects it in the Area dropdown. Paint target and Hierarchy stay in sync; the mixed-resolution warning still only appears when you change Hierarchy yourself.
+
+**Commit subject**
+
+Sync Hierarchy to the region you pick in Viewer/Editor
+
+**Commit body**
+
+When right-click or Search selects an atlas label outside the current Hierarchy tier, switch to the finest matching tier (or CCF level) without firing the mixed-tier dialog, then select that region in the Area list.
+
+---
+
 ## v6.0.35
 
 **What's new**
