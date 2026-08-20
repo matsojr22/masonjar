@@ -24,3 +24,4 @@ pytorch-msssim
 timm
 segment-anything-py
 aicspylibczi~=3.3.1
+basicpy>=1.2.0

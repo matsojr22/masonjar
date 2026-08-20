@@ -189,6 +189,9 @@ function formatChoiceLabel(role, rel, projectJson, bundleRoot) {
 			label += " (from CZI import)";
 		}
 	}
+	if (role === "max" && /\/basic\//.test(String(rel || "").replace(/\\/g, "/"))) {
+		label += " (BaSiC shading)";
+	}
 	return label;
 }
 

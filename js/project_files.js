@@ -339,16 +339,66 @@ function bindActiveRunControls(containerId) {
 	}
 
 	renderImportInputRows(container, bundleRoot, proj);
+	renderBasicCompletedRows(container, bundleRoot, proj);
 	renderDetectQcScoutRow(container, bundleRoot, proj);
 	if (!hasRows && !(proj.settings && proj.settings.czi_import)) {
 		var hasQc =
 			proj.processing &&
 			proj.processing.detect_qc &&
 			proj.processing.detect_qc.output_rel;
-		if (!hasQc) {
+		var hasBasic =
+			(proj.processing && proj.processing.basic) ||
+			fs.existsSync(
+				require("path").join(bundleRoot, "data", "counting", "00_dapi_basic"),
+			);
+		if (!hasQc && !hasBasic) {
 			container.classList.add("d-none");
 		}
 	}
+}
+
+function renderBasicCompletedRows(container, bundleRoot, proj) {
+	if (!container || !bundleRoot || !proj) {
+		return;
+	}
+	var basic = (proj.processing && proj.processing.basic) || null;
+	var dapiBasic = pathJoin(bundleRoot, "data", "counting", "00_dapi_basic");
+	var nDapi = 0;
+	try {
+		if (fs.existsSync(dapiBasic)) {
+			nDapi = fs
+				.readdirSync(dapiBasic)
+				.filter(function (n) {
+					return /\.png$/i.test(n);
+				}).length;
+		}
+	} catch (_e) {}
+	if (nDapi > 0) {
+		appendReadOnlyImportRow(
+			container,
+			"DAPI (BaSiC shading)",
+			nDapi + " corrected PNG(s) in 00_dapi_basic (display only — Align warp still uses 00_dapi)",
+		);
+	}
+	if (basic && Array.isArray(basic.channels)) {
+		var done = basic.channels.filter(function (c) {
+			return c && c.status === "done";
+		});
+		if (done.length) {
+			appendReadOnlyImportRow(
+				container,
+				"Shading correction (BaSiC)",
+				done.length +
+					" channel(s) last finished " +
+					(basic.last_run_at || ""),
+			);
+		}
+	}
+}
+
+function pathJoin() {
+	var path = require("path");
+	return path.join.apply(path, arguments);
 }
 
 function renderDetectQcScoutRow(container, bundleRoot, proj) {

@@ -46,6 +46,7 @@ const TAIL_LIMIT = 50;
 const SIGNAL_DATASET_STEPS = [
     "sharpen",
     "tophat",
+    "basic",
     "detect",
     "detect_qc",
     "intensity",
@@ -139,7 +140,8 @@ function runPython(deps, opts) {
                     return;
                 }
                 if (message.startsWith("LOG: sharpen_done ") ||
-                    message.startsWith("LOG: tophat_done ")) {
+                    message.startsWith("LOG: tophat_done ") ||
+                    message.startsWith("LOG: basic_done ")) {
                     completedCount++;
                     opts.onLine(message.slice(4));
                     if (opts.onProgress) {
@@ -885,7 +887,7 @@ function buildDetectLikeArgs(deps, params, indir, finalOut, sliceListPath, qcOnl
     return args;
 }
 function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t;
     const params = (plan.params && plan.params[stepId]) || {};
     const meta = readProjectMeta(proj.path);
     const roles = meta.roles;
@@ -994,6 +996,75 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
             paths,
         };
     }
+    if (stepId === "basic") {
+        const stems = (0, batch_paths_1.listImageSliceStems)(paths.indir || "");
+        const { writeBase, signalBranch, roleBase } = maxWriteBase(proj, roles, paths.indir || "");
+        const inputDatasetRel = relFromBase(roleBase, paths.indir || "");
+        const parsed = maxDatasetsModule().parseSourceRunRel(inputDatasetRel, signalBranch);
+        const slug = buildRunSlug("basic", {
+            sortedStems: stems,
+            smoothness: Number((_g = params.smoothness_flatfield) !== null && _g !== void 0 ? _g : 1),
+            sourceKind: parsed.source_kind,
+            sourceRunRel: parsed.source_run_rel,
+        });
+        const finalOut = resolveRunLeaf(writeBase, "basic", slug);
+        fs.mkdirSync(finalOut, { recursive: true });
+        const meta = path.join(proj.path, ".masonjar");
+        fs.mkdirSync(meta, { recursive: true });
+        const dapiAbs = (0, batch_paths_1.resolveRolePath)(proj.path, roles, "dapi");
+        const channels = [
+            {
+                id: "signal:" + signalBranch,
+                role: "signal",
+                enabled: true,
+                signal_branch: signalBranch,
+                source_abs: paths.indir || "",
+                source_run_rel: inputDatasetRel,
+                output_abs: finalOut,
+                preview_suffix: signalBranch,
+                params: {
+                    get_darkfield: params.get_darkfield !== false,
+                    smoothness_flatfield: Number((_h = params.smoothness_flatfield) !== null && _h !== void 0 ? _h : 1),
+                    smoothness_darkfield: Number((_j = params.smoothness_darkfield) !== null && _j !== void 0 ? _j : 1),
+                    working_size: Number((_k = params.working_size) !== null && _k !== void 0 ? _k : 128),
+                    sort_intensity: !!params.sort_intensity,
+                },
+            },
+        ];
+        if (dapiAbs && fs.existsSync(dapiAbs)) {
+            channels.unshift({
+                id: "dapi",
+                role: "dapi",
+                enabled: true,
+                source_abs: dapiAbs,
+                output_abs: path.join(proj.path, "data", "counting", "00_dapi_basic"),
+                preview_suffix: "dapi",
+                params: {
+                    get_darkfield: params.get_darkfield !== false,
+                    smoothness_flatfield: Number((_l = params.smoothness_flatfield) !== null && _l !== void 0 ? _l : 1),
+                    smoothness_darkfield: Number((_m = params.smoothness_darkfield) !== null && _m !== void 0 ? _m : 1),
+                    working_size: Number((_o = params.working_size) !== null && _o !== void 0 ? _o : 128),
+                    sort_intensity: !!params.sort_intensity,
+                },
+            });
+        }
+        const configPath = path.join(meta, "basic_batch_run_config.json");
+        fs.writeFileSync(configPath, JSON.stringify({
+            bundle_root: proj.path,
+            channels,
+            force_refit: !!params.force_refit,
+            start_fresh: !!params.start_fresh,
+            resume: true,
+        }, null, 2), "utf8");
+        return {
+            scriptName: "basic_correct.py",
+            args: ["-j", configPath],
+            finalOutAbs: finalOut,
+            finalOutRel: relFromBase(roleBase, finalOut),
+            branch: "basic",
+            paths,
+        };
+    }
     if (stepId === "detect" || stepId === "detect_qc") {
         const method = String(params.method || "somata");
         const customModel = String(params.customModel || "").trim();
@@ -1012,7 +1083,7 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
                         projectData.processing &&
                         projectData.processing.detect_qc;
             }
-            catch (_m) {
+            catch (_u) {
                 detectQc = null;
             }
         }
@@ -1026,10 +1097,10 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
         }
         const slug = buildDetectRunSlug({
             sortedStems: stems,
-            confidence: Number((_g = params.confidence) !== null && _g !== void 0 ? _g : 0.5),
-            tile: Number((_h = params.tile) !== null && _h !== void 0 ? _h : 640),
-            area: Number((_j = params.area) !== null && _j !== void 0 ? _j : 200),
-            eccentricity: Number((_k = params.eccentricity) !== null && _k !== void 0 ? _k : 0.2),
+            confidence: Number((_p = params.confidence) !== null && _p !== void 0 ? _p : 0.5),
+            tile: Number((_q = params.tile) !== null && _q !== void 0 ? _q : 640),
+            area: Number((_r = params.area) !== null && _r !== void 0 ? _r : 200),
+            eccentricity: Number((_s = params.eccentricity) !== null && _s !== void 0 ? _s : 0.2),
             intensityMin: resolvedIntensity,
             inputDatasetRel,
             modelBranch,
@@ -1176,7 +1247,7 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
             const d = (0, batch_paths_1.loadProjectJson)(proj.path);
             settings = (d.settings || {});
         }
-        catch (_o) {
+        catch (_v) {
             settings = {};
         }
         const cziImport = (settings.czi_import || {});
@@ -1200,7 +1271,7 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
         if (!annodir) {
             return null;
         }
-        const pParams = (((_l = plan.params) === null || _l === void 0 ? void 0 : _l.parcellation) || {});
+        const pParams = (((_t = plan.params) === null || _t === void 0 ? void 0 : _t.parcellation) || {});
         const cfg = {
             annotation_dir: annodir,
             tier_id: pParams.ccfAdvanced ? null : pParams.tierId || "areas",
@@ -1512,7 +1583,7 @@ function runBatchQueue(deps, plan, callbacks) {
                     status = "cancelled";
                     reason = "Cancelled by user";
                 }
-                else if ((stepId === "sharpen" || stepId === "tophat") &&
+                else if ((stepId === "sharpen" || stepId === "tophat" || stepId === "basic") &&
                     result.error) {
                     const outputsExist = !!job.finalOutAbs &&
                         fs.existsSync(job.finalOutAbs) &&

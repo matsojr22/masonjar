@@ -510,6 +510,7 @@ function defaultProcessing() {
 			detect: "merge",
 			max: "merge",
 			sharpen: "merge",
+			basic: "merge",
 		},
 		step_failures: {
 			align: {},

@@ -535,6 +535,17 @@ class AlignmentController:
         )
         self.tissue_mask_checkbox.stateChanged.connect(self._on_tissue_mask_toggled)
 
+        self.basic_display_checkbox = QCheckBox(
+            "Display BaSiC-corrected DAPI (preview only)"
+        )
+        self.basic_display_checkbox.setToolTip(
+            "Shows 00_dapi_basic or _previews/*_dapi_basic when present. "
+            "Alignment warp and prediction still use uncorrected 00_dapi."
+        )
+        self.basic_display_checkbox.stateChanged.connect(
+            lambda _s: self.update_display()
+        )
+
         self.tissue_mask_mode_combo = QComboBox()
         for mode_id, label in WARP_MODE_CHOICES:
             self.tissue_mask_mode_combo.addItem(label, mode_id)
@@ -624,6 +635,8 @@ class AlignmentController:
                 QLabel("Gap warp strategy"),
                 self.tissue_mask_mode_combo,
                 self.tissue_mask_status,
+                align_section_heading("Display"),
+                self.basic_display_checkbox,
             ]
         )
         self._options_dock = self.viewer.window.add_dock_widget(
@@ -1340,12 +1353,35 @@ class AlignmentController:
 
         return (target_width, target_height)
 
+    def _resolve_align_display_dapi(self, filename: str):
+        """Prefer BaSiC-corrected DAPI for display when the toggle is on."""
+        primary = Path(self.input_path) / filename
+        toggle = getattr(self, "basic_display_checkbox", None)
+        if toggle is None or not toggle.isChecked():
+            return primary
+        stem = Path(filename).stem
+        if ".ome." in filename.lower():
+            stem = filename.split(".")[0]
+        counting = Path(self.input_path).parent
+        candidates = [
+            counting / "00_dapi_basic" / f"{stem}.png",
+            counting / "00_dapi_basic" / filename,
+            counting / "_previews" / f"{stem}_dapi_basic.png",
+        ]
+        for cand in candidates:
+            if cand.is_file():
+                return cand
+        return primary
+
     def update_display(self):
         """Update the viewer to current section"""
         self.viewer.grid.enabled = False
 
+        display_path = self._resolve_align_display_dapi(
+            self.file_list[self.current_section]
+        )
         sample_img = cv2.imread(
-            str(Path(self.input_path) / self.file_list[self.current_section]),
+            str(display_path),
             cv2.IMREAD_GRAYSCALE,
         )
 

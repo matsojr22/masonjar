@@ -54,6 +54,13 @@ var RUN_STEP_CONFIG = {
 		inputRoles: ["max"],
 		scriptRoles: { indir: "max", outdir: "max" },
 	},
+	basic: {
+		stepId: "basic",
+		outputRole: "max",
+		branch: "basic",
+		inputRoles: ["max"],
+		scriptRoles: { indir: "max", outdir: "max" },
+	},
 	align: {
 		stepId: "align",
 		outputRole: "slices",
@@ -325,6 +332,15 @@ function buildRunSlug(stepId, context) {
 		}
 		return sanitizeSlugPart(topPrefix + "_" + span + gammaTok + topSrc + subset);
 	}
+	if (stepId === "basic") {
+		var basicSrc = "";
+		if (context.sourceKind && context.sourceKind !== "max" && context.sourceRunRel) {
+			basicSrc = "_from_" + shortRefToken(context.sourceRunRel);
+		}
+		var sm =
+			context.smoothness != null ? "_s" + decToken(context.smoothness) : "";
+		return sanitizeSlugPart(span + "_basic" + sm + basicSrc + subset);
+	}
 	if (stepId === "align") {
 		var spacing = context.spacing != null ? "_sp" + String(context.spacing) : "";
 		var layoutTok = "_auto";
@@ -429,7 +445,7 @@ function dedupeModelBranchRunRel(rel) {
 	return rel;
 }
 
-var MAX_KIND_DIRS = ["max", "sharpen", "tophat"];
+var MAX_KIND_DIRS = ["max", "sharpen", "tophat", "basic"];
 
 function inferSignalBranchForMaxFamily(activeRel, indirAbs) {
 	activeRel = normalizeRelPath(activeRel || "");
@@ -846,7 +862,7 @@ function hasRunMarkers(dirPath, stepId) {
 			return true;
 		}
 		if (
-			(stepId === "max" || stepId === "sharpen" || stepId === "tophat") &&
+			(stepId === "max" || stepId === "sharpen" || stepId === "tophat" || stepId === "basic") &&
 			(IMAGE_EXT_RE.test(n) || n.toLowerCase().indexOf(".ome.") !== -1)
 		) {
 			return true;
@@ -868,7 +884,7 @@ function hasRunMarkers(dirPath, stepId) {
 }
 
 function discoveryMaxDepth(stepId) {
-	if (stepId === "max" || stepId === "sharpen" || stepId === "tophat") {
+	if (stepId === "max" || stepId === "sharpen" || stepId === "tophat" || stepId === "basic") {
 		return 3;
 	}
 	return 2;

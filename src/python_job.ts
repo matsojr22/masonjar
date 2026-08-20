@@ -175,6 +175,7 @@ export const WORKER_ALLOWLIST = new Set([
   "max.py",
   "sharpen.py",
   "top_hat.py",
+  "basic_correct.py",
   "region.py",
   "count.py",
   "collate.py",

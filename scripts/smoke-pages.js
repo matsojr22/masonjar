@@ -31,6 +31,7 @@ const PAGES = [
 	"parcellation_wizard.html",
 	"tophat_wizard.html",
 	"sharpen_wizard.html",
+	"basic_wizard.html",
 	"tissue_cleanup_wizard.html",
 	"align.html",
 	"adjust.html",
@@ -110,6 +111,14 @@ const DOM_ASSERTIONS = {
 		"sharpenRadius",
 		"sharpenEqualize",
 		"preprocessPreviewImg",
+	],
+	"basic_wizard.html": [
+		"step0",
+		"attrProceed",
+		"step1",
+		"channelSelect",
+		"previewFilterBtn",
+		"processStart",
 	],
 	"tissue_cleanup_wizard.html": [
 		"step1",

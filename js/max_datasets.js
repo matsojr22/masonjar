@@ -5,11 +5,12 @@ var path = require("path");
 var pipelineRuns = require("./pipeline_runs");
 var project = require("./project");
 
-var KIND_DIRS = ["max", "sharpen", "tophat"];
+var KIND_DIRS = ["max", "sharpen", "tophat", "basic"];
 var KIND_LABELS = {
 	max: "Max projection",
 	sharpen: "Sharpen",
 	tophat: "Top-hat",
+	basic: "BaSiC shading",
 };
 
 var IMAGE_EXT_RE = /\.(tif|tiff|png|jpe?g)$/i;

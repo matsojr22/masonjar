@@ -1148,6 +1148,8 @@ const PIPELINE_RUN_CHANNELS = new Set([
     "runTophatPreview",
     "runTophat",
     "runSharpen",
+    "runBasicPreview",
+    "runBasic",
     "runParcellation",
     "runDapiCleanup",
     "runTissueCleanupAuto",
@@ -2395,6 +2397,7 @@ function spawnPreprocessBatch(event, scriptName, args, resultChannel, killChanne
         }
         if (message.includes("SHARPEN_NO_OUTPUT") ||
             message.includes("TOPHAT_NO_OUTPUT") ||
+            message.includes("BASIC_NO_OUTPUT") ||
             message.includes("LOG: no input")) {
             runFailed = true;
             failMessage = message.trim();
@@ -2410,7 +2413,8 @@ function spawnPreprocessBatch(event, scriptName, args, resultChannel, killChanne
             });
         }
         else if (message.startsWith("LOG: sharpen_done ") ||
-            message.startsWith("LOG: tophat_done ")) {
+            message.startsWith("LOG: tophat_done ") ||
+            message.startsWith("LOG: basic_done ")) {
             completedCount++;
             if (total > 0) {
                 event.sender.send("updateLoad", [
@@ -2469,6 +2473,40 @@ ipcMain.on("runSharpen", function (event, data) {
         }
     }
     spawnPreprocessBatch(event, "sharpen.py", args, "sharpenResult", "killSharpen", "sharpen", "Launching sharpen…");
+});
+ipcMain.on("runBasicPreview", function (event, data) {
+    var _a, _b, _c, _d;
+    const params = (data.length > 5 && data[5]) || {};
+    const args = ["--preview"];
+    appendFlagPathArg(args, "--image", String(data[0] || ""));
+    args.push("--x", String((_a = data[1]) !== null && _a !== void 0 ? _a : 0), "--y", String((_b = data[2]) !== null && _b !== void 0 ? _b : 0), "--w", String((_c = data[3]) !== null && _c !== void 0 ? _c : 512), "--height", String((_d = data[4]) !== null && _d !== void 0 ? _d : 512));
+    if (params.get_darkfield === false || params.get_darkfield === "false") {
+        args.push("--no-darkfield");
+    }
+    else {
+        args.push("--get-darkfield");
+    }
+    args.push("--smoothness-flatfield", String(params.smoothness_flatfield != null ? params.smoothness_flatfield : 1));
+    args.push("--smoothness-darkfield", String(params.smoothness_darkfield != null ? params.smoothness_darkfield : 1));
+    args.push("--working-size", String(params.working_size != null ? params.working_size : 128));
+    if (params.sort_intensity) {
+        args.push("--sort-intensity");
+    }
+    const previewDir = params.previewDir != null ? String(params.previewDir).trim() : "";
+    if (previewDir.length > 0) {
+        appendFlagPathArg(args, "--preview-dir", previewDir);
+    }
+    const fitDir = params.fitDir != null ? String(params.fitDir).trim() : "";
+    if (fitDir.length > 0) {
+        appendFlagPathArg(args, "--fit-dir", fitDir);
+    }
+    spawnPreprocessPreview(event, "basic_correct.py", args, "basicPreviewResult", "killBasicPreview");
+});
+ipcMain.on("runBasic", function (event, data) {
+    const args = [];
+    const first = data[0] != null ? String(data[0]).trim() : "";
+    appendFlagPathArg(args, "-j", first);
+    spawnPreprocessBatch(event, "basic_correct.py", args, "basicResult", "killBasic", "basic", "Launching BaSiC shading correction…");
 });
 // Parcellation (bulk CCF rollup)
 ipcMain.on("runParcellation", function (event, data) {

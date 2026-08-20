@@ -390,6 +390,14 @@ class AnnotationViewer(QMainWindow):
         self.channel_combo.currentIndexChanged.connect(self._on_channel_combo_changed)
         header_toolbar.addWidget(QLabel("Channel:", self))
         header_toolbar.addWidget(self.channel_combo)
+        self.basic_channel_toggle = QCheckBox("BaSiC corrected", self)
+        self.basic_channel_toggle.setToolTip(
+            "Show BaSiC-corrected low-res preview when available "
+            "(_previews/*_basic.png or 00_dapi_basic). Display only."
+        )
+        self.basic_channel_toggle.setEnabled(False)
+        self.basic_channel_toggle.toggled.connect(self._on_basic_channel_toggled)
+        header_toolbar.addWidget(self.basic_channel_toggle)
 
         self.prev_button = QPushButton("Previous", self)
         self.prev_button.clicked.connect(self.prev_image)
@@ -523,12 +531,72 @@ class AnnotationViewer(QMainWindow):
         self.channel_combo.blockSignals(False)
         name, path = self.channel_sources[default_index]
         self.switch_channel(path, name)
+        self._refresh_basic_toggle_state()
         return True
+
+    def _basic_sibling_path(self, path: Path) -> Path | None:
+        """Return BaSiC-corrected sibling preview/DAPI path if it exists."""
+        path = Path(path)
+        stem = path.stem
+        parent = path.parent
+        # _previews/{sliceId}_{suffix}.png → {sliceId}_{suffix}_basic.png
+        if parent.name == "_previews" or parent.name.lower() == "_previews":
+            candidate = parent / f"{stem}_basic.png"
+            if candidate.is_file():
+                return candidate
+            return None
+        # 00_dapi/{sliceId}.png → 00_dapi_basic/{sliceId}.png
+        if "00_dapi" in parent.name and "basic" not in parent.name.lower():
+            sibling_dir = parent.parent / "00_dapi_basic"
+            candidate = sibling_dir / path.name
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _refresh_basic_toggle_state(self):
+        toggle = self.__dict__.get("basic_channel_toggle")
+        if toggle is None:
+            return
+        path = getattr(self, "active_channel_path", None)
+        if path is None and self.channel_sources:
+            path = self.channel_sources[self.channel_combo.currentIndex()][1]
+        sibling = self._basic_sibling_path(Path(path)) if path else None
+        toggle.blockSignals(True)
+        if sibling is None:
+            toggle.setChecked(False)
+            toggle.setEnabled(False)
+        else:
+            toggle.setEnabled(True)
+            # Keep checked state if still valid
+            if toggle.isChecked():
+                pass
+            toggle.setEnabled(True)
+        toggle.blockSignals(False)
+
+    def _on_basic_channel_toggled(self, checked: bool):
+        if self.channel_combo.currentIndex() < 0:
+            return
+        name, path = self.channel_sources[self.channel_combo.currentIndex()]
+        if checked:
+            sibling = self._basic_sibling_path(Path(path))
+            if sibling is not None:
+                self.switch_channel(sibling, f"{name} (BaSiC)")
+                return
+        self.switch_channel(path, name)
 
     def _on_channel_combo_changed(self, index: int):
         if index < 0 or index >= len(self.channel_sources):
             return
         name, path = self.channel_sources[index]
+        self._refresh_basic_toggle_state()
+        if getattr(self, "basic_channel_toggle", None) and self.basic_channel_toggle.isChecked():
+            sibling = self._basic_sibling_path(Path(path))
+            if sibling is not None:
+                self.switch_channel(sibling, f"{name} (BaSiC)")
+                return
+            self.basic_channel_toggle.blockSignals(True)
+            self.basic_channel_toggle.setChecked(False)
+            self.basic_channel_toggle.blockSignals(False)
         self.switch_channel(path, name)
 
 

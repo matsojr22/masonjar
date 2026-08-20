@@ -12,6 +12,10 @@ var CATEGORIES = {
 			{ label: "Max Projection", href: "./max.html" },
 			{ label: "Sharpen", href: "./sharpen_wizard.html" },
 			{ label: "Top-hat filter", href: "./tophat_wizard.html" },
+			{
+				label: "BaSiCPy Shading Correction",
+				href: "./basic_wizard.html",
+			},
 			{ label: "Re-import sections from CZI", href: "./czi_wizard.html?flow=reextract" },
 			{
 				label: "Semi-manual tissue edge cleanup",

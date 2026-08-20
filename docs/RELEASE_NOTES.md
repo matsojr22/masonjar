@@ -6,6 +6,29 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v7.0.0
+
+**What's new**
+
+- **BaSiCPy Shading Correction:** New Image preprocessing wizard corrects uneven illumination per channel using the BaSiCPy package (MIT). Attribution screen → tune each channel → process with resume if a run was interrupted → summary. Writes corrected signal leaves under max datasets (`…/basic/…`), DAPI copies in `00_dapi_basic`, and low-res `*_basic` previews for viewers. Align warping still uses uncorrected `00_dapi`.
+- **Viewer toggles:** Viewer/Editor and Align Napari can show BaSiC-corrected previews when available (display only).
+- **Completed tasks:** Workspace hub lists BaSiC outputs after a successful run.
+- **Batch:** Shading correction is available as a batch step (depends on max projection).
+
+**Credits**
+
+- Algorithm: Peng et al., Nat Commun 8:14836 (2017). Software: BaSiCPy (peng-lab), MIT License. Mason Jar does not run MATLAB BaSiC.
+
+**Commit subject**
+
+Add BaSiCPy shading correction wizard and viewer toggles
+
+**Commit body**
+
+Ship BaSiCPy-based per-channel shading correction with attribution, resume/repair, project tracking, Adjust/Napari display toggles, and batch integration. Align warp remains on uncorrected DAPI.
+
+---
+
 ## v6.0.36
 
 **What's new**

@@ -137,6 +137,7 @@ const TAIL_LIMIT = 50;
 const SIGNAL_DATASET_STEPS = [
   "sharpen",
   "tophat",
+  "basic",
   "detect",
   "detect_qc",
   "intensity",
@@ -332,7 +333,8 @@ function runPython(
         }
         if (
           message.startsWith("LOG: sharpen_done ") ||
-          message.startsWith("LOG: tophat_done ")
+          message.startsWith("LOG: tophat_done ") ||
+          message.startsWith("LOG: basic_done ")
         ) {
           completedCount++;
           opts.onLine(message.slice(4));
@@ -1405,6 +1407,91 @@ function buildJob(
     };
   }
 
+  if (stepId === "basic") {
+    const stems = listImageSliceStems(paths.indir || "");
+    const { writeBase, signalBranch, roleBase } = maxWriteBase(
+      proj,
+      roles,
+      paths.indir || "",
+    );
+    const inputDatasetRel = relFromBase(roleBase, paths.indir || "");
+    const parsed = maxDatasetsModule().parseSourceRunRel(
+      inputDatasetRel,
+      signalBranch,
+    );
+    const slug = buildRunSlug("basic", {
+      sortedStems: stems,
+      smoothness: Number(params.smoothness_flatfield ?? 1),
+      sourceKind: parsed.source_kind,
+      sourceRunRel: parsed.source_run_rel,
+    });
+    const finalOut = resolveRunLeaf(writeBase, "basic", slug);
+    fs.mkdirSync(finalOut, { recursive: true });
+    const meta = path.join(proj.path, ".masonjar");
+    fs.mkdirSync(meta, { recursive: true });
+    const dapiAbs = resolveRolePath(proj.path, roles, "dapi");
+    const channels: Record<string, unknown>[] = [
+      {
+        id: "signal:" + signalBranch,
+        role: "signal",
+        enabled: true,
+        signal_branch: signalBranch,
+        source_abs: paths.indir || "",
+        source_run_rel: inputDatasetRel,
+        output_abs: finalOut,
+        preview_suffix: signalBranch,
+        params: {
+          get_darkfield: params.get_darkfield !== false,
+          smoothness_flatfield: Number(params.smoothness_flatfield ?? 1),
+          smoothness_darkfield: Number(params.smoothness_darkfield ?? 1),
+          working_size: Number(params.working_size ?? 128),
+          sort_intensity: !!params.sort_intensity,
+        },
+      },
+    ];
+    if (dapiAbs && fs.existsSync(dapiAbs)) {
+      channels.unshift({
+        id: "dapi",
+        role: "dapi",
+        enabled: true,
+        source_abs: dapiAbs,
+        output_abs: path.join(proj.path, "data", "counting", "00_dapi_basic"),
+        preview_suffix: "dapi",
+        params: {
+          get_darkfield: params.get_darkfield !== false,
+          smoothness_flatfield: Number(params.smoothness_flatfield ?? 1),
+          smoothness_darkfield: Number(params.smoothness_darkfield ?? 1),
+          working_size: Number(params.working_size ?? 128),
+          sort_intensity: !!params.sort_intensity,
+        },
+      });
+    }
+    const configPath = path.join(meta, "basic_batch_run_config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          bundle_root: proj.path,
+          channels,
+          force_refit: !!params.force_refit,
+          start_fresh: !!params.start_fresh,
+          resume: true,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    return {
+      scriptName: "basic_correct.py",
+      args: ["-j", configPath],
+      finalOutAbs: finalOut,
+      finalOutRel: relFromBase(roleBase, finalOut),
+      branch: "basic",
+      paths,
+    };
+  }
+
   if (stepId === "detect" || stepId === "detect_qc") {
     const method = String(params.method || "somata");
     const customModel = String(params.customModel || "").trim();
@@ -2122,7 +2209,7 @@ export async function runBatchQueue(
         status = "cancelled";
         reason = "Cancelled by user";
       } else if (
-        (stepId === "sharpen" || stepId === "tophat") &&
+        (stepId === "sharpen" || stepId === "tophat" || stepId === "basic") &&
         result.error
       ) {
         const outputsExist =
