@@ -8,10 +8,15 @@ var pipelineGate = require("./pipeline_gate");
 var pipelineRuns = require("./pipeline_runs");
 var maxDatasets = require("./max_datasets");
 var projectIndexBusy = require("./project_index_busy");
+var preprocessWizard = require("./preprocess_wizard");
 
 var META = ".masonjar";
 var CONFIG_NAME = "basic_run_config.json";
 var PROGRESS_NAME = "basic_apply_progress.json";
+var DEFAULT_VIEW_W = 512;
+var DEFAULT_VIEW_H = 512;
+var PREVIEW_READY_HINT =
+	"Pan/zoom the image, adjust display levels, then click Preview correction.";
 
 var state = {
 	step: 0,
@@ -19,11 +24,30 @@ var state = {
 	visited: {},
 	paramsByChannel: {},
 	running: false,
+	previewBusy: false,
 	lastOutputs: [],
-	zoom: 1,
+	scale: 1,
 	panX: 0,
 	panY: 0,
+	viewW: DEFAULT_VIEW_W,
+	viewH: DEFAULT_VIEW_H,
+	baseNaturalW: 0,
+	baseNaturalH: 0,
+	fullNaturalW: 0,
+	fullNaturalH: 0,
+	showingFiltered: false,
+	lastFilterRoi: null,
+	lastFullResFilterRoi: null,
+	sourceAbs: "",
+	baseAbs: "",
+	displayMin: 0,
+	displayMax: 255,
 };
+
+var baseBitmap = null;
+var filteredBitmap = null;
+var pendingPreviewAfterDims = false;
+var lastPreviewProgressPct = 0;
 
 function bundleRoot() {
 	return project.isActive() ? project.getBundleRoot() : "";
@@ -341,21 +365,13 @@ function updateVisitHelp() {
 	}
 }
 
-function applyDisplayWindow() {
-	var img = document.getElementById("preprocessPreviewImg");
-	if (!img) return;
-	var mn = Number((document.getElementById("displayMin") || {}).value || 0);
-	var mx = Number((document.getElementById("displayMax") || {}).value || 255);
-	if (mx <= mn) mx = mn + 1;
-	var scale = 255 / (mx - mn);
-	var intercept = -mn * scale;
-	img.style.filter =
-		"brightness(" +
-		(scale * 100) / 100 +
-		") contrast(1) " +
-		"opacity(1)";
-	// CSS filter is limited; use brightness approx
-	img.style.filter = "brightness(" + (1 + (128 - (mn + mx) / 2) / 255) + ")";
+function applyDisplayWindowToUi() {
+	state.displayMin = Number((document.getElementById("displayMin") || {}).value || 0);
+	state.displayMax = Number((document.getElementById("displayMax") || {}).value || 255);
+	if (state.displayMax <= state.displayMin) {
+		state.displayMax = state.displayMin + 1;
+	}
+	renderPreviewComposite();
 }
 
 function applyTransform() {
@@ -367,17 +383,103 @@ function applyTransform() {
 		"px," +
 		state.panY +
 		"px) scale(" +
-		state.zoom +
+		(state.scale || 1) +
 		")";
+}
+
+function updatePreviewZoomWarning() {
+	var el = document.getElementById("preprocessPreviewZoomWarning");
+	if (!el) return;
+	preprocessWizard.computePreviewZoomPolicy(state);
+	if (
+		!state.showingFiltered &&
+		state.previewZoomHint &&
+		!preprocessWizard.isPreviewZoomEligible(state)
+	) {
+		el.textContent = state.previewZoomHint;
+		el.classList.remove("d-none");
+	} else {
+		el.textContent = "";
+		el.classList.add("d-none");
+	}
+}
+
+function showPreviewLoading(on) {
+	var el = document.getElementById("preprocessPreviewLoading");
+	var vp = document.getElementById("preprocessPreviewViewport");
+	if (el) el.classList.toggle("d-none", !on);
+	if (vp) vp.classList.toggle("preprocess-preview-loading-active", !!on);
+	if (on) {
+		lastPreviewProgressPct = 0;
+		var bar = document.getElementById("preprocessPreviewProgress");
+		var txt = document.getElementById("preprocessPreviewProgressText");
+		if (bar) bar.style.width = "0%";
+		if (txt) txt.textContent = "0%";
+	}
+}
+
+function renderPreviewComposite() {
+	var previewImg = document.getElementById("preprocessPreviewImg");
+	if (!previewImg) {
+		applyTransform();
+		return;
+	}
+	var bmp = state.showingFiltered && filteredBitmap ? filteredBitmap : baseBitmap;
+	if (!bmp) {
+		applyTransform();
+		return;
+	}
+	var w = bmp.width || bmp.naturalWidth;
+	var h = bmp.height || bmp.naturalHeight;
+	if (!w || !h) {
+		applyTransform();
+		return;
+	}
+	var canvas = document.createElement("canvas");
+	canvas.width = w;
+	canvas.height = h;
+	var ctx = canvas.getContext("2d");
+	ctx.imageSmoothingEnabled = false;
+	ctx.drawImage(bmp, 0, 0);
+	var imgData = ctx.getImageData(0, 0, w, h);
+	preprocessWizard.applyDisplayWindow(imgData, state.displayMin, state.displayMax);
+	ctx.putImageData(imgData, 0, 0);
+	previewImg.src = canvas.toDataURL("image/png");
+	applyTransform();
+}
+
+function clearFilteredOverlay() {
+	state.showingFiltered = false;
+	state.filteredBitmap = null;
+	state.lastFilterRoi = null;
+	state.lastFullResFilterRoi = null;
+	filteredBitmap = null;
+	if (baseBitmap) {
+		preprocessWizard.fitViewportToImage(state);
+		renderPreviewComposite();
+	}
+}
+
+function clearFilterOnViewChange() {
+	if (!state.showingFiltered) return;
+	clearFilteredOverlay();
+	var status = document.getElementById("preprocessPreviewStatus");
+	if (!preprocessWizard.isPreviewZoomEligible(state)) {
+		updatePreviewZoomWarning();
+	} else if (status) {
+		status.textContent =
+			"Pan/zoom cleared filter preview — click Preview correction to refresh.";
+	}
 }
 
 function loadPreviewImage() {
 	var sel = document.getElementById("sliceSelect");
-	var img = document.getElementById("preprocessPreviewImg");
-	if (!sel || !img || !sel.value) return;
+	var previewImg = document.getElementById("preprocessPreviewImg");
+	if (!sel || !previewImg || !sel.value) return;
 	var ch = currentChannel();
-	var filePath = sel.value;
-	// Prefer low-res _previews when channel has one
+	var sourceAbs = sel.value;
+	state.sourceAbs = sourceAbs;
+	var filePath = sourceAbs;
 	if (ch) {
 		var sid = sliceIdFromPath(filePath);
 		var prev = path.join(
@@ -389,28 +491,94 @@ function loadPreviewImage() {
 		);
 		if (fs.existsSync(prev)) filePath = prev;
 	}
-	img.src = "file:///" + filePath.replace(/\\/g, "/");
-	state.zoom = 1;
+	state.baseAbs = filePath;
+	clearFilteredOverlay();
+	state.scale = 1;
 	state.panX = 0;
 	state.panY = 0;
-	applyTransform();
+	state.fullNaturalW = 0;
+	state.fullNaturalH = 0;
+	var status = document.getElementById("preprocessPreviewStatus");
+	if (status) status.textContent = PREVIEW_READY_HINT;
+
+	var vp = document.getElementById("preprocessPreviewViewport");
+	if (vp) {
+		var rect = vp.getBoundingClientRect();
+		state.viewW = Math.max(200, Math.floor(rect.width) || DEFAULT_VIEW_W);
+		state.viewH = Math.max(200, Math.floor(rect.height) || DEFAULT_VIEW_H);
+	}
+
+	preprocessWizard.loadFullResDimensions(sourceAbs, function (fw, fh) {
+		state.fullNaturalW = fw;
+		state.fullNaturalH = fh;
+		preprocessWizard.computePreviewZoomPolicy(state);
+		updatePreviewZoomWarning();
+		if (pendingPreviewAfterDims) {
+			pendingPreviewAfterDims = false;
+			if (fw > 0 && fh > 0) {
+				requestPreview();
+			} else if (status) {
+				status.textContent = "Could not read full-resolution image dimensions.";
+			}
+		}
+	});
+
+	var img = new Image();
+	img.onload = function () {
+		baseBitmap = img;
+		state.baseNaturalW = img.naturalWidth;
+		state.baseNaturalH = img.naturalHeight;
+		preprocessWizard.fitViewportToImage(state);
+		preprocessWizard.computePreviewZoomPolicy(state);
+		updatePreviewZoomWarning();
+		renderPreviewComposite();
+	};
+	img.onerror = function () {
+		baseBitmap = null;
+		if (status) status.textContent = "Could not load slice image.";
+	};
+	img.src = preprocessWizard.fileUrlForPath(filePath) + "?t=" + Date.now();
 }
 
 function requestPreview() {
 	saveCurrentChannelParams();
 	var sel = document.getElementById("sliceSelect");
 	var ch = currentChannel();
-	if (!sel || !sel.value || !ch) return;
 	var status = document.getElementById("preprocessPreviewStatus");
+	if (!sel || !sel.value || !ch || state.previewBusy || state.running) return;
+
+	var resolved = preprocessWizard.resolvePreviewRequest(
+		state,
+		filteredBitmap,
+		sel.value
+	);
+	if (!resolved.ready) {
+		if (resolved.reason === "zoom_too_far") {
+			updatePreviewZoomWarning();
+			return;
+		}
+		pendingPreviewAfterDims = true;
+		if (status) status.textContent = "Loading full image dimensions…";
+		return;
+	}
+
+	pendingPreviewAfterDims = false;
+	state.lastFilterRoi = resolved.previewRoi || null;
+	state.lastFullResFilterRoi = resolved.roi || null;
+	state.previewBusy = true;
+	showPreviewLoading(true);
+	var previewBtn = document.getElementById("previewFilterBtn");
+	if (previewBtn) previewBtn.disabled = true;
 	if (status) status.textContent = "Running BaSiC preview…";
-	setBusy(true);
+
 	var params = readParamsFromUi();
+	var roi = resolved.roi;
 	ipcRenderer.send("runBasicPreview", [
-		sel.value,
-		0,
-		0,
-		512,
-		512,
+		resolved.filterAbs || sel.value,
+		roi.x,
+		roi.y,
+		roi.w,
+		roi.h,
 		{
 			previewDir: ensureMeta(),
 			fitDir: ch.source_abs,
@@ -605,21 +773,38 @@ function onRunFinished(result) {
 function wirePreviewPan() {
 	var vp = document.getElementById("preprocessPreviewViewport");
 	if (!vp) return;
+	var rect = vp.getBoundingClientRect();
+	state.viewW = Math.max(200, Math.floor(rect.width) || DEFAULT_VIEW_W);
+	state.viewH = Math.max(200, Math.floor(rect.height) || DEFAULT_VIEW_H);
+
 	var dragging = false;
 	var lastX = 0;
 	var lastY = 0;
-	vp.addEventListener("wheel", function (ev) {
-		ev.preventDefault();
-		var factor = ev.deltaY < 0 ? 1.1 : 0.9;
-		state.zoom = Math.max(0.2, Math.min(8, state.zoom * factor));
-		applyTransform();
-	});
+	vp.addEventListener(
+		"wheel",
+		function (ev) {
+			ev.preventDefault();
+			clearFilterOnViewChange();
+			var r = vp.getBoundingClientRect();
+			var mx = ev.clientX - r.left;
+			var my = ev.clientY - r.top;
+			var delta = ev.deltaY > 0 ? 0.9 : 1.1;
+			preprocessWizard.applyCursorAnchoredZoom(state, mx, my, delta);
+			applyTransform();
+			updatePreviewZoomWarning();
+		},
+		{ passive: false }
+	);
 	vp.addEventListener("mousedown", function (ev) {
+		clearFilterOnViewChange();
 		dragging = true;
 		lastX = ev.clientX;
 		lastY = ev.clientY;
 	});
 	window.addEventListener("mouseup", function () {
+		if (dragging) {
+			updatePreviewZoomWarning();
+		}
 		dragging = false;
 	});
 	window.addEventListener("mousemove", function (ev) {
@@ -681,8 +866,8 @@ function wire() {
 			el.addEventListener("input", saveCurrentChannelParams);
 		}
 	});
-	document.getElementById("displayMin").addEventListener("input", applyDisplayWindow);
-	document.getElementById("displayMax").addEventListener("input", applyDisplayWindow);
+	document.getElementById("displayMin").addEventListener("input", applyDisplayWindowToUi);
+	document.getElementById("displayMax").addEventListener("input", applyDisplayWindowToUi);
 	document.getElementById("previewFilterBtn").addEventListener("click", requestPreview);
 	document.getElementById("step1Next").addEventListener("click", function () {
 		saveCurrentChannelParams();
@@ -702,29 +887,73 @@ function wire() {
 	wirePreviewPan();
 
 	ipcRenderer.on("basicPreviewResult", function (_e, payload) {
-		setBusy(false);
+		state.previewBusy = false;
+		showPreviewLoading(false);
+		var previewBtn = document.getElementById("previewFilterBtn");
+		if (previewBtn) previewBtn.disabled = !!state.running;
 		var status = document.getElementById("preprocessPreviewStatus");
 		if (!payload || !payload.ok) {
 			if (status) {
 				status.textContent =
 					"Preview failed: " + ((payload && payload.error) || "unknown");
 			}
+			updatePreviewZoomWarning();
 			return;
 		}
-		var img = document.getElementById("preprocessPreviewImg");
-		if (img && payload.previewPath) {
-			img.src =
-				"file:///" +
-				String(payload.previewPath).replace(/\\/g, "/") +
-				"?t=" +
-				Date.now();
+		if (!payload.previewPath) {
+			updatePreviewZoomWarning();
+			return;
 		}
-		if (status) status.textContent = "Preview ready (native ROI correction).";
+		var filt = new Image();
+		filt.onload = function () {
+			filteredBitmap = filt;
+			state.filteredBitmap = filt;
+			state.showingFiltered = true;
+			preprocessWizard.fitViewportToDimensions(
+				state,
+				filt.naturalWidth,
+				filt.naturalHeight
+			);
+			renderPreviewComposite();
+			if (status) {
+				status.textContent =
+					"Corrected ROI (" +
+					(payload.width || filt.naturalWidth) +
+					"x" +
+					(payload.height || filt.naturalHeight) +
+					" px) — pan/zoom clears preview; click Preview correction again.";
+			}
+			updatePreviewZoomWarning();
+		};
+		filt.onerror = function () {
+			state.showingFiltered = false;
+			filteredBitmap = null;
+			if (status) status.textContent = "Could not load corrected preview.";
+			updatePreviewZoomWarning();
+		};
+		filt.src =
+			preprocessWizard.fileUrlForPath(String(payload.previewPath)) +
+			"?t=" +
+			Date.now();
 	});
 	ipcRenderer.on("basicResult", function (_e, result) {
 		onRunFinished(result || { ok: false, message: "no result" });
 	});
 	ipcRenderer.on("updateLoad", function (_e, response) {
+		if (state.previewBusy && state.step === 1) {
+			var previewPct = Number(response[0]) || 0;
+			if (previewPct >= lastPreviewProgressPct) {
+				lastPreviewProgressPct = previewPct;
+				var previewBar = document.getElementById("preprocessPreviewProgress");
+				var previewTxt = document.getElementById("preprocessPreviewProgressText");
+				if (previewBar) previewBar.style.width = String(previewPct) + "%";
+				if (previewTxt) {
+					previewTxt.textContent =
+						String(previewPct) + "% - " + (response[1] || "Preview…");
+				}
+			}
+			return;
+		}
 		if (!state.running && state.step !== 2) return;
 		var pct = Array.isArray(response) ? response[0] : 0;
 		var msg = Array.isArray(response) ? response[1] : "";

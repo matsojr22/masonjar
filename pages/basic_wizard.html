@@ -124,9 +124,30 @@
             <a class="btn btn-outline-secondary ms-2" href="./workspace_menu.html">Cancel</a>
           </div>
           <div class="col-md-8">
+            <div
+              id="preprocessPreviewZoomWarning"
+              class="alert alert-warning d-none text-start mb-2"
+              role="alert"
+            ></div>
             <div id="preprocessPreviewViewport" class="preprocess-preview-pane border rounded">
               <div id="preprocessPreviewTransform" class="preprocess-preview-transform">
                 <img id="preprocessPreviewImg" alt="slice preview" draggable="false" />
+              </div>
+              <div
+                id="preprocessPreviewLoading"
+                class="preprocess-preview-loading d-none"
+                aria-live="polite"
+              >
+                <div class="preprocess-preview-loading-inner">
+                  <div class="progress mt-3" style="height: 8px">
+                    <div
+                      id="preprocessPreviewProgress"
+                      class="progress-bar progress-bar-striped progress-bar-animated"
+                      style="width: 0%"
+                    ></div>
+                  </div>
+                  <p id="preprocessPreviewProgressText" class="small mb-0 mt-2">0%</p>
+                </div>
               </div>
             </div>
             <p id="preprocessPreviewStatus" class="small text-muted mt-2">

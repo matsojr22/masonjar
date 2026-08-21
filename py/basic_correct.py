@@ -167,20 +167,36 @@ def _slice_stem(path: Path) -> str:
     return path.stem
 
 
+def _list_image_files_any(dir_path: Path) -> list[Path]:
+    """PNG/TIFF/JPEG listing for DAPI dirs and preview fit stacks."""
+    if not dir_path.is_dir():
+        return []
+    return sorted(
+        [
+            p
+            for p in dir_path.iterdir()
+            if p.is_file()
+            and p.suffix.lower() in (".png", ".tif", ".tiff", ".jpg", ".jpeg")
+        ],
+        key=lambda p: p.name,
+    )
+
+
+def _list_fit_images(fit_dir: Path) -> list[Path]:
+    """Prefer processable TIFFs; fall back to PNG+TIFF for DAPI preview fits."""
+    tiffs = list_input_files(fit_dir, None)
+    if tiffs:
+        return tiffs
+    return _list_image_files_any(fit_dir)
+
+
 def _list_channel_sources(channel: dict[str, Any]) -> list[Path]:
     source = Path(str(channel.get("source_abs") or "").strip())
     if not source.is_dir():
         raise FileNotFoundError(f"source not found: {source}")
     role = str(channel.get("role") or "signal")
     if role == "dapi":
-        files = sorted(
-            [
-                p
-                for p in source.iterdir()
-                if p.is_file() and p.suffix.lower() in (".png", ".tif", ".tiff", ".jpg", ".jpeg")
-            ],
-            key=lambda p: p.name,
-        )
+        files = _list_image_files_any(source)
     else:
         files = list_input_files(source, None)
     slice_list = channel.get("slice_list") or []
@@ -261,7 +277,10 @@ def run_preview(args) -> int:
             "sort_intensity": args.sort_intensity,
         }
     )
-    x, y, w, h = int(args.x), int(args.y), int(args.w), int(args.height)
+    height = getattr(args, "height", None)
+    if height is None:
+        height = getattr(args, "h", 512)
+    x, y, w, h = int(args.x), int(args.y), int(args.w), int(height)
     try:
         img_h, img_w = read_image_size(path)
         w = max(8, min(w, img_w))
@@ -271,9 +290,12 @@ def run_preview(args) -> int:
         _progress(5, "Loading preview stack…")
         # Fit on downscaled full slice + neighbors if provided via --fit-dir
         fit_dir = Path(args.fit_dir.strip()) if args.fit_dir else path.parent
-        files = list_input_files(fit_dir, None)
-        if path not in files:
-            files = [path] + files
+        files = _list_fit_images(fit_dir)
+        # Prefer selected image first; Path equality can fail across resolve styles
+        resolved = path.resolve()
+        files = [path] + [
+            p for p in files if p.resolve() != resolved and p != path
+        ]
         # Cap fit stack for preview speed
         files = files[: min(24, len(files))]
         stack, _ = _load_stack(files, max_n=24)
@@ -579,10 +601,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--preview", action="store_true")
     parser.add_argument("--image", default="")
     parser.add_argument("--fit-dir", default="")
-    parser.add_argument("-x", type=int, default=0)
-    parser.add_argument("-y", type=int, default=0)
-    parser.add_argument("-w", type=int, default=512)
-    parser.add_argument("--height", type=int, default=512)
+    parser.add_argument("-x", "--x", type=int, default=0)
+    parser.add_argument("-y", "--y", type=int, default=0)
+    parser.add_argument("-w", "--w", type=int, default=512)
+    parser.add_argument("--height", "--h", type=int, default=512)
     parser.add_argument("--preview-dir", default="")
     parser.add_argument("--get-darkfield", action="store_true", default=True)
     parser.add_argument("--no-darkfield", action="store_true")

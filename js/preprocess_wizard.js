@@ -1574,6 +1574,7 @@ module.exports = {
 	capFullResRoi: capFullResRoi,
 	previewRoiFromFullRes: previewRoiFromFullRes,
 	applyCursorAnchoredZoom: applyCursorAnchoredZoom,
+	loadFullResDimensions: loadFullResDimensions,
 	PREVIEW_PIXEL_BUDGET: PREVIEW_PIXEL_BUDGET,
 	PREVIEW_ZOOM_WARNING: PREVIEW_ZOOM_WARNING,
 	isProcessableTiffName: isProcessableTiffName,

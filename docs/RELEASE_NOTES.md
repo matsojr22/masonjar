@@ -6,6 +6,23 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v7.0.2
+
+**What's new**
+
+- **BaSiC Preview works again:** Preview correction no longer fails immediately with a Python exit error. The preview accepts the same ROI arguments as Sharpen/Top-hat.
+- **Tune pan/zoom matches other preprocess tools:** The preview window uses the visible viewport (not a fixed corner crop). After Preview, pan/zoom clears the corrected ROI and restores navigation so a new Preview loads the new region—same behavior as Sharpen.
+
+**Commit subject**
+
+Fix BaSiC preview ROI and Tune viewport pan
+
+**Commit body**
+
+Accept Sharpen-style preview CLI flags, fit BaSiC on DAPI PNGs, and reuse the shared preprocess viewport ROI contract so pan no longer slides a fixed crop.
+
+---
+
 ## v7.0.1
 
 **What's new**
