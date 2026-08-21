@@ -6,6 +6,24 @@ Do not put file paths, test names, or IPC implementation details here—keep rel
 
 ---
 
+## v7.0.1
+
+**What's new**
+
+- **BaSiC wizard finds DAPI and max after CZI import:** Channel discovery now uses the open project bundle path (same as Sharpen), so Proceed no longer reports empty datasets when files are present.
+- **Leave Tune:** Back to attribution, Back to preprocessing, and Cancel (workspace) are available on step 1.
+- **Completed tasks tracking:** Successful BaSiC runs correctly update project processing state for the workspace hub.
+
+**Commit subject**
+
+Fix BaSiC wizard channel discovery and Tune exit
+
+**Commit body**
+
+Use getBundleRoot for discovery like other preprocess wizards, add Tune leave links, and persist processing.basic on the real project object.
+
+---
+
 ## v7.0.0
 
 **What's new**

@@ -26,8 +26,12 @@ var state = {
 };
 
 function bundleRoot() {
-	var p = project.getProject();
-	return p && p.root ? p.root : "";
+	return project.isActive() ? project.getBundleRoot() : "";
+}
+
+function projectRoles() {
+	var proj = project.getProject();
+	return (proj && proj.roles) || pipelineRuns.CANONICAL_ROLES;
 }
 
 function metaDir() {
@@ -124,6 +128,7 @@ function setBusy(busy) {
 	[
 		"processStart",
 		"step1Next",
+		"step1BackAttr",
 		"step2Back",
 		"previewFilterBtn",
 		"channelSelect",
@@ -166,7 +171,7 @@ function sliceIdFromPath(p) {
 function discoverChannels() {
 	var root = bundleRoot();
 	var channels = [];
-	var roles = project.getProject().roles || pipelineRuns.CANONICAL_ROLES;
+	var roles = projectRoles();
 	var dapiAbs = pipelineRuns.resolveRoleBaseAbsForBundle(root, roles, "dapi");
 	if (dapiAbs && fs.existsSync(dapiAbs) && listImageFiles(dapiAbs).length) {
 		channels.push({
@@ -180,8 +185,7 @@ function discoverChannels() {
 		});
 	}
 	var branches = maxDatasets.listSignalBranches(root) || [];
-	branches.forEach(function (b) {
-		var branch = b.branch || b;
+	branches.forEach(function (branch) {
 		var datasets = maxDatasets.listDatasetsForBranch(root, branch) || [];
 		var prefer =
 			maxDatasets.defaultDatasetForBranch(root, branch, { preferKind: "max" }) ||
@@ -431,11 +435,7 @@ function buildOutputAbsForSignal(ch) {
 			.smoothness_flatfield,
 	});
 	var branchRoot = path.join(
-		pipelineRuns.resolveRoleBaseAbsForBundle(
-			root,
-			project.getProject().roles,
-			"max"
-		),
+		pipelineRuns.resolveRoleBaseAbsForBundle(root, projectRoles(), "max"),
 		branch
 	);
 	return pipelineRuns.resolveRunLeaf(branchRoot, "basic", slug);
@@ -544,8 +544,10 @@ function startProcess() {
 
 function updateProjectTracking(ok) {
 	var proj = project.getProject();
-	if (!proj || !proj.data) return;
-	if (!proj.data.processing) proj.data.processing = project.defaultProcessing();
+	if (!proj) return;
+	if (!proj.processing) {
+		proj.processing = project.defaultProcessing();
+	}
 	var basic = {
 		last_run_at: new Date().toISOString(),
 		interrupted: !ok,
@@ -559,7 +561,7 @@ function updateProjectTracking(ok) {
 			};
 		}),
 	};
-	proj.data.processing.basic = basic;
+	proj.processing.basic = basic;
 	var setActive = document.getElementById("setActiveMax");
 	if (ok && setActive && setActive.checked) {
 		var signalOut = (state.lastOutputs || []).find(function (o) {
@@ -568,7 +570,7 @@ function updateProjectTracking(ok) {
 		if (signalOut && signalOut.output_abs) {
 			var maxBase = pipelineRuns.resolveRoleBaseAbsForBundle(
 				bundleRoot(),
-				proj.roles,
+				projectRoles(),
 				"max"
 			);
 			var rel = path
@@ -578,9 +580,9 @@ function updateProjectTracking(ok) {
 			pipelineRuns.setActiveRunRel("max", rel);
 		}
 	}
-	project.saveProject();
+	project.saveProjectJson();
 	try {
-		project.refreshProjectIndex();
+		project.refreshProjectIndex(bundleRoot());
 	} catch (_e) {}
 }
 
@@ -636,9 +638,22 @@ function wire() {
 		discoverChannels();
 		fillChannelSelect();
 		if (!state.channels.length) {
-			alert("No DAPI or signal max datasets found in this project.");
+			var root = bundleRoot();
+			alert(
+				"No DAPI or signal max datasets found in this project.\n\n" +
+					"Bundle root: " +
+					(root || "(empty — is a project open?)")
+			);
 		}
 	});
+	var step1BackAttr = document.getElementById("step1BackAttr");
+	if (step1BackAttr) {
+		step1BackAttr.addEventListener("click", function () {
+			if (state.running) return;
+			saveCurrentChannelParams();
+			setStep(0);
+		});
+	}
 	document.getElementById("channelSelect").addEventListener("change", function () {
 		onChannelChanged();
 		state.visited[currentChannelId()] = true;
