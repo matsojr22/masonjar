@@ -1,6 +1,8 @@
 # Mason Jar User Guide
 
-This is the usage manual for Mason Jar. It explains how to install the app, how a project is organized, how information moves from one tool to the next, and the exact steps for every tool, including Batch and Settings.
+This document is an AI-generated summary to help users understand the functions available in Mason Jar. Treat it as that: a guide to what the tools are for, not a substitute for checking the screen in front of you and using your judgement when operating on your dataset.
+
+This is the usage manual for Mason Jar. It explains how to install the app, how a project is organized, how information moves from one tool to the next, and the steps for every tool, including Batch and Settings.
 
 Open this same manual in the app from the start screen (**Guide**) or from **Credits**.
 
@@ -30,7 +32,7 @@ Mason Jar is a fork of Bell Jar. It keeps the same scientific pipeline and adds 
 - About 20 GB of free disk for the app environment (Python, models, embeddings), plus room for your projects.
 - 32 GB of RAM minimum. 64 GB is recommended.
 - A recent desktop CPU (Intel, Apple Silicon, or AMD Ryzen).
-- A GPU with at least 6 GB of VRAM. Cell detection on Windows and Linux expects CUDA.
+- A GPU with at least 6 GB of VRAM. Cell detection on Windows and Linux expects CUDA. (fallback to CPU can be extremely slow)
 
 The app environment is separate from your project folders. Do not put the app inside a path that contains spaces or unusual characters if you are launching a portable build.
 
@@ -116,7 +118,7 @@ Use this when you already have folders of scans, DAPI, max images, or annotation
 2. **Sources.** Map each role to a source folder. For a legacy brain, scan the `M###` root first so Mason Jar can find `counting/`. Click **Next**.
 3. **Review.** Check the mapping. Click **Next** to import.
 4. **Import.** Wait until the copy finishes.
-5. **Finish.** Open the workspace. If the bundle has no CZI orientation history, you may be offered **Orient slices** before alignment.
+5. **Finish.** Open the workspace. If the bundle has no CZI orientation history, the app may offer **Orient slices**. That offer is the deprecated tool under **Deprecated & Experimental**, not the supported path. Do not run it. Facing has to be set correctly on the orient step of **Import from Zeiss CZI**. If it was not, the chance of fixing the project later is near zero.
 
 ### Load, recents, and the workspace
 
@@ -142,7 +144,7 @@ On the workspace, **Processing subset (project)** limits later tools to chosen s
 
 Legacy mode is a classic Bell Jar tree (`M528/counting/00_dapi/`), not `M528_masonjar/data/counting/`. A `.masonjar` bundle will not scan correctly in legacy mode.
 
-Fully available: Max Projection, Align Sections, Viewer/Editor, DAPI cleanup, Collate Counts, Export dual-channel ROI TIFs.
+Fully available: Max Projection, Align Sections, Viewer/Editor, Collate Counts, Export dual-channel ROI TIFs. DAPI cleanup can also be opened here, but it is a deprecated tool and is not recommended.
 
 Limited (you type paths yourself; dataset pickers and slice subsets are absent): Cell Detection, Count Brain, Isolate Regions.
 
@@ -158,7 +160,7 @@ Each tool reads a folder and writes the folder the next tool expects. In a bundl
 | --- | --- | --- |
 | CZI files on disk (outside the bundle) | Your microscope export | Import from Zeiss CZI, and later Re-import |
 | `data/original_scans/` | CZI extract (z-stacks) | Max Projection; also overwritten when you apply orientation or tissue cleanup |
-| `data/counting/00_dapi/` | CZI extract and geometry (counterstain PNGs) | Align Sections. Tissue cleanup and DAPI cleanup edit these PNGs |
+| `data/counting/00_dapi/` | CZI extract and the CZI orient step (counterstain PNGs) | Align Sections. Tissue edge cleanup can edit these PNGs. Do not use deprecated DAPI cleanup or Orient slices for this |
 | `data/counting/00_dapi_basic/` | BaSiC shading (display copies only) | Your eyes. **Align still warps `00_dapi`, not this folder** |
 | `data/counting/01_slices/` | Align Sections (annotation `.pkl` files) | Viewer/Editor, Parcellation, Count Brain, Isolate Regions |
 | `data/counting/03_max/` | CZI import (signal max) and Max Projection. Sharpen, Top-hat, and BaSiC add sibling datasets here | Sharpen, Top-hat, BaSiC, Cell Detection, Isolate Regions |
@@ -167,15 +169,22 @@ Each tool reads a folder and writes the folder the next tool expects. In a bundl
 | `data/counting/07_pkls/` | Isolate Regions (ROI `.pkl`, optional `dapi_roi`) | Export dual-channel ROI TIFs |
 | `data/counting/08_dual/` | Dual-channel export (`*_dual.tif`) | ImageJ or your own figure tools |
 
-Low-resolution preview PNGs live under `_previews`. Orient and the CZI orient step show those previews, then write the same rotation or flip onto `00_dapi`, every preview, the z-stacks, and the max TIFFs for that section.
+Low-resolution preview PNGs live under `_previews`. The orient step inside **Import from Zeiss CZI** shows those previews, then writes the same rotation or flip onto `00_dapi`, every preview, the z-stacks, and the max TIFFs for that section.
+
+**Deprecated & Experimental** is not part of the current pipeline. That menu holds two old tools, kept only for legacy users who still want them:
+
+- **Orient slices** is no longer recommended. Running it breaks every project it is applied to. Do not use it to fix facing.
+- **DAPI cleanup** is no longer recommended. It remains only for legacy users who still want that old tool.
+
+Orientation has to be correct on the orient step inside **Import from Zeiss CZI**, before you leave that wizard. If it is wrong or skipped, the chance of recovering the project later is near zero. **Re-import sections from CZI** extracts a section again; it is not a dependable repair for facing that was confirmed wrong at import. Counterstain edges use **Semi-manual tissue edge cleanup**.
 
 **Flat layout.** Several tools have **Write outputs directly to the output folder (legacy flat layout)**. Leave it off for a `.masonjar` bundle so each run stays in its own subfolder and the project index can tell runs apart. Turn it on only when you are matching an old Bell Jar folder that has no run subfolders.
 
 ### Recommended order
 
 1. Create the project (CZI import, or migrate / blank).
-2. Confirm orientation (part of CZI import, or **Orient slices** if you are repairing it).
-3. Optional: tissue edge cleanup or DAPI cleanup on `00_dapi` **before** alignment.
+2. Confirm orientation on the orient step inside **Import from Zeiss CZI** before you finish the wizard. Check every section. If facing is wrong when you leave import, the chance of recovering the project later is near zero. Do not open **Orient slices**.
+3. Optional: **Semi-manual tissue edge cleanup** on `00_dapi` before alignment.
 4. **Align Sections** on `00_dapi`. Finish in Napari so warped annotations are written.
 5. **Viewer/Editor** if labels need paint or search fixes. Optional **Parcellation (bulk)** if you want a coarser atlas tier.
 6. Optional signal prep: Sharpen, Top-hat, and/or BaSiC on the max dataset you will detect.
@@ -189,7 +198,7 @@ Low-resolution preview PNGs live under `_previews`. Orient and the CZI orient st
 
 - If CZI import already wrote signal max TIFFs, do not run **Max Projection** again unless you add new z-stacks.
 - Sharpen, Top-hat, and BaSiC are optional. Detection can use the plain max dataset.
-- Parcellation, tissue cleanup, DAPI cleanup, and dual-channel export are optional.
+- Parcellation, tissue edge cleanup, and dual-channel export are optional.
 - Align Sections and Viewer/Editor cannot be skipped if you need region counts. Count Brain has nothing to assign cells to without annotation `.pkl` files.
 - Batch never runs Align or Viewer/Editor. Do those yourself on each brain, then batch the rest.
 
@@ -248,7 +257,7 @@ The same files as the matching single-project tool, inside each bundle. The summ
 
 | Step | Reads | Writes | Same as |
 | --- | --- | --- | --- |
-| Apply orientation | Saved per-slice rotate/flip from CZI import | `00_dapi`, `_previews`, `original_scans`, `03_max` | Confirm geometry / Orient |
+| Apply orientation | Saved per-slice rotate/flip from CZI import | `00_dapi`, `_previews`, `original_scans`, `03_max` | The orient step inside CZI import, not deprecated Orient slices |
 | Parcellation | Annotation `.pkl` in `01_slices` | Those annotations, in place | Parcellation (bulk) |
 | Max projection | `original_scans/` | `03_max/` | Max Projection |
 | Sharpen | A max-family dataset | A new max-family dataset | Sharpen |
@@ -287,7 +296,7 @@ Z-stacks go to `original_scans/`. Counterstain PNGs go to `00_dapi/`. Signal max
 
 ### Before you start
 
-Know which channel is the counterstain (DAPI or equivalent) and which channel is the primary signal for detection. Other signal channels can still be kept.
+Know which channel is the counterstain (DAPI or equivalent) and which channel is the primary signal for detection. Other signal channels can still be kept. Plan to set rotation and flip on the orient step before you leave the wizard. That is the only reliable time to get facing right.
 
 ### Step-by-step
 
@@ -296,7 +305,7 @@ Know which channel is the counterstain (DAPI or equivalent) and which channel is
 3. **Scan.** **Add folder** for each CZI directory. **Re-probe all** if you change folders. Set **Slice number follows** if the sort is wrong. Read mosaic and channel warnings. Click **Next** when the file table looks right (the button stays off until a probe succeeds).
 4. **Channels / Renaming.** Choose **Keep scene names** or **Rename on import** (contiguous `Project_s###` IDs). For each channel index, set a role and click **Apply to all**. Uncheck **Keep** to skip a channel. Set **Primary signal** to the channel detection should default to. If an axon channel is kept, choose 8-bit or 16-bit. Click **Next**.
 5. **Extract.** Wait. **Cancel extraction** stops the job. When it finishes, click **Continue to Orient**.
-6. **Orient.** The grid shows preview PNGs. Set **Display channel**. Rotate or flip tiles. **Copy first tile geometry to all** when every section needs the same correction. Click **Confirm geometry**.
+6. **Orient.** The grid shows preview PNGs. Set **Display channel**. Rotate or flip every tile that needs it. **Copy first tile geometry to all** only when every section needs the same correction. Click **Confirm geometry** only after the facing is right. This is the step that must be correct. If you confirm the wrong rotation, or leave this step without checking, the chance of recovering the project later is near zero.
 7. **Finish.** Geometry is written onto DAPI PNGs, previews, z-stacks, and max TIFFs. Then choose **Start atlas alignment**, **Preprocess tools**, **Open workspace**, or **Hub**.
 
 ### Outputs
@@ -305,7 +314,7 @@ A new bundle, extracted images, a max dataset for kept signal channels, and a ge
 
 ### If something goes wrong
 
-If the probe lists the wrong slice order, change **Slice number follows** and look at the renaming table before you extract. If orientation history is missing later, the orient step tells you to set rotation manually. **Repair previews** appears when preview files and full-resolution files disagree.
+If the probe lists the wrong slice order, change **Slice number follows** and look at the renaming table before you extract. **Repair previews** appears when preview files and full-resolution files disagree. A missing or wrong orientation after you leave this wizard is not something later tools can reliably undo. Do not open deprecated **Orient slices** to try.
 
 ## Re-import sections from CZI
 
@@ -336,7 +345,7 @@ Workspace → **Re-import sections from CZI…**, or Image preprocessing → **R
 1. Optionally check **Show blank DAPI only**. **Select all** or **Clear all**, then pick sections. Click **Next**.
 2. Choose channels. Source paths must still exist. Click **Next**.
 3. Read the confirm table (section, channel, source CZI, outputs). Check **Overwrite selected files on disk**. Click **Run re-import**.
-4. Review orientation for the re-imported sections if the wizard offers it, then **Confirm geometry**.
+4. If the wizard shows an orient step for the sections you just re-extracted, set their facing and **Confirm geometry** before you leave. That does not repair a project whose original import orientation was wrong. The chance of recovering that later is near zero.
 
 ### Outputs
 
@@ -552,83 +561,63 @@ Apply is destructive. If a section looks wrong afterward, restore from `tissue_c
 
 ## Orient slices
 
+**Do not run this tool.** It is under Image preprocessing → **Deprecated & Experimental**. It is no longer recommended. Running it breaks every project it is applied to. It is kept only so legacy users can still open the old screen.
+
 ### What this tool does
 
-Shows low-resolution previews so you can rotate or flip each section, then writes that geometry onto DAPI PNGs, all previews, z-stacks, and max TIFFs.
+It shows low-resolution previews and can rotate or flip sections, then write that geometry onto DAPI PNGs, previews, z-stacks, and max TIFFs. That write is what breaks the project.
 
 ### Why it is in Mason Jar
 
-The atlas predictor assumes a conventional facing. This tool is how you repair facing after import. It lives under **Deprecated & Experimental** because the CZI wizard already includes the same step. Use it when you need to redo geometry, not as the normal first step.
+It is not the way to fix facing. The same idea used to live here before the CZI import wizard took over orientation. The menu entry remains for legacy users who still want the old tool. New and current projects must not use it.
 
 ### Expected inputs
 
-- An open project with indexed DAPI previews or CZI import settings.
-- Preview PNGs named like `{sliceId}_dapi.png`.
+An open project. Do not point it at one.
 
 ### What it writes and what uses it next
 
-The same files Align and detection will read. One rotation is stored **per section**, not per channel. **Check Orientation Consistency** audits whether channels disagree.
+It overwrites project files. Align and detection then read the damaged result. There is no supported follow-on step.
 
 ### Before you start
 
-Image preprocessing → **Orient slices**. If the page says to open a project with DAPI previews, load the bundle first.
-
-### Step-by-step
-
-1. Set **Display channel**.
-2. Rotate or flip tiles. Use **Copy first tile geometry to all** when the series shares one error.
-3. Click **Apply geometry** and wait for the log to finish.
-4. If previews are missing, use **Repair previews** or **Re-import sections from CZI…**.
-5. Use **Check Orientation Consistency** when you suspect one channel was rotated and another was not.
-6. **Finalize only** appears when geometry was chosen but not yet baked into every file.
-
-### Outputs
-
-Updated `00_dapi`, `_previews`, z-stacks, and max TIFFs, plus a geometry history record.
+Do not start it. Facing has to be set on the orient step inside **Import from Zeiss CZI**. If that was skipped or confirmed wrong, the chance of recovering the project later is near zero. This screen will not fix it.
 
 ### If something goes wrong
 
-If there is no saved history, signal previews can look like the raw CZI orientation. Set the rotation yourself and apply. A red geometry banner means a previous apply was interrupted; use **Rebuild geometry** rather than aligning the half-rotated brain.
+If you already ran it, do not run it again and do not click **Apply geometry**, **Finalize only**, or **Rebuild geometry**. Re-import the sections from CZI, or restore the project from a copy made before this tool ran.
 
 ## Check Orientation Consistency
 
+This screen is opened from deprecated **Orient slices**. It is not a recommended step, and it is not the supported way to repair a project. Do not open **Orient slices** to reach it.
+
 ### What this tool does
 
-Audits orientation across channels for the whole section series and, only when it finds mismatches, offers a repair.
+It audits orientation across channels and can offer a repair that rewrites files.
 
 ### Why it is in Mason Jar
 
-A counterstain and a signal channel that face different directions will not overlay in Viewer/Editor or in counts.
+It belongs to the old orient tool, which is kept only for legacy users. A channel that was extracted wrong should be fixed with **Re-import sections from CZI**, not by walking through Orient slices.
 
 ### Expected inputs
 
-- The open project's previews and full-resolution images for every kept channel.
+The open project's previews and full-resolution images. Prefer re-import instead of feeding this screen.
 
 ### What it writes and what uses it next
 
-Nothing, until you confirm a repair. A repair rewrites the mismatched channel files so they match the chosen orientation. Align and detection then see a consistent series.
+An audit report until a repair is confirmed. A confirmed repair rewrites channel files. That path is not supported.
 
 ### Before you start
 
-Open it from **Orient slices** → **Check Orientation Consistency**.
-
-### Step-by-step
-
-1. **Audit** runs as soon as the page opens. Wait for the progress bar.
-2. **Results** lists sections that match and sections that do not.
-3. **Review** shows thumbnail pairs.
-4. **Confirm** only if you want the repair applied.
-5. **Repair** writes files. Return to Orient or the workspace when it finishes.
-
-### Outputs
-
-An audit report on screen. Files change only after you confirm a repair.
+Use **Re-import sections from CZI** for a bad extract. Do not start from **Orient slices**.
 
 ### If something goes wrong
 
-If the audit cannot read a channel, re-import that channel from CZI, then audit again. Do not confirm a repair you have not looked at in the thumbnail step.
+If a channel is missing or facing the wrong way, re-import that channel from CZI. Do not confirm a repair from this screen as a substitute.
 
 ## DAPI cleanup
+
+**Not recommended.** This tool is under Image preprocessing → **Deprecated & Experimental**. It is kept only for legacy users who still want the old tool. Current projects should use **Semi-manual tissue edge cleanup** for counterstain edges, and the CZI import orient step for facing.
 
 ### What this tool does
 
@@ -636,7 +625,7 @@ Converts counterstain previews to a cleaner grayscale PNG: optional tissue isola
 
 ### Why it is in Mason Jar
 
-Align's predictor is easier to place on a clean counterstain. Prefer tissue edge cleanup when the problem is a neighboring sliver. This tool is under **Deprecated & Experimental** because it rewrites the PNGs Align reads; use it when the counterstain itself is the problem.
+It is not part of the current pipeline. The menu entry remains so a legacy user can still open the old screen. Tissue edge cleanup is the supported way to edit counterstain boundaries.
 
 ### Expected inputs
 
@@ -650,7 +639,7 @@ PNG files. Align and Viewer/Editor expect PNG in `00_dapi`, not TIFF. In-place m
 
 ### Before you start
 
-Image preprocessing → **DAPI cleanup**. Do it before Align, or re-run Align after.
+Do not open this for a current project. The steps below only describe the old screen for a legacy user who still chooses to open it.
 
 ### Step-by-step
 
@@ -1071,7 +1060,7 @@ Settings is on the start screen. It does not process images. It changes how the 
 
 **macOS says the app cannot be opened.** The release is not notarized. Open it once from the Finder with **Open**, or follow Apple's unsigned-app instructions.
 
-**A tool button is missing or grey.** You are in legacy mode, or no project is loaded. Read **View limitations** on the workspace. Migrate to a `.masonjar` bundle for Sharpen, Top-hat, tissue cleanup, Orient, Parcellation, CZI, and Batch.
+**A tool button is missing or grey.** You are in legacy mode, or no project is loaded. Read **View limitations** on the workspace. Migrate to a `.masonjar` bundle for Sharpen, Top-hat, tissue edge cleanup, Parcellation, CZI import, and Batch. Do not migrate in order to use **Orient slices** or **DAPI cleanup**.
 
 **Align seems frozen.** Napari locks the window on purpose while warping. Use the Mason Jar progress panel and the application log. Do not change files in `00_dapi` or the output folder until it finishes.
 
