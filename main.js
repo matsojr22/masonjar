@@ -1488,19 +1488,11 @@ ipcMain.on("openFileDialog", function (event, data) {
         console.log(err);
     });
 });
-function openPDF(relativePath) {
-    const pdfPath = path.join(appDir, relativePath);
-    shell
-        .openPath(pdfPath)
-        .then(() => {
-        console.log("Guide opened");
-    })
-        .catch((error) => {
-        console.log(error);
-    });
-}
-ipcMain.on("openGuide", function (event, data) {
-    openPDF("docs/belljar_guide.pdf");
+ipcMain.on("openGuide", function (event, _data) {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) {
+        win.loadFile("pages/user_guide.html");
+    }
 });
 ipcMain.on("openPathInShell", function (event, absPath) {
     const target = String(absPath || "").trim();

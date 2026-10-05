@@ -1752,20 +1752,11 @@ ipcMain.on("openFileDialog", function (event: any, data: any) {
     });
 });
 
-function openPDF(relativePath: string) {
-  const pdfPath = path.join(appDir, relativePath);
-  shell
-    .openPath(pdfPath)
-    .then(() => {
-      console.log("Guide opened");
-    })
-    .catch((error: any) => {
-      console.log(error);
-    });
-}
-
-ipcMain.on("openGuide", function (event: any, data: any) {
-  openPDF("docs/belljar_guide.pdf");
+ipcMain.on("openGuide", function (event: any, _data: any) {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win) {
+    win.loadFile("pages/user_guide.html");
+  }
 });
 
 ipcMain.on("openPathInShell", function (event: any, absPath: string) {

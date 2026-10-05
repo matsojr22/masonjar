@@ -368,7 +368,7 @@ function writeManifest(version, targets, artifacts) {
 		"",
 		"## GitHub release checklist",
 		"",
-		"1. Add human copy: `docs/RELEASE_NOTES.md` section `## v" + version + "` (see `docs/COMMIT_AND_RELEASE.md`).",
+		"1. Add human copy: `~/.masonjar/RELEASE_NOTES.md` section `## v" + version + "`.",
 		"2. Suggested commit: `node scripts/release-message.js`",
 		"3. Tag: `v" + version + "` (must match package.json).",
 		"4. Publish: `node scripts/publish-release.js` (Windows zip) or `--all-platforms` for macOS DMGs too.",
@@ -511,7 +511,7 @@ function main() {
 
 	if (!opts.local) {
 		console.log(
-			"\nBefore publish: edit docs/RELEASE_NOTES.md for v" +
+			"\nBefore publish: edit ~/.masonjar/RELEASE_NOTES.md for v" +
 				version +
 				" (human-facing What's new).",
 		);
@@ -519,16 +519,21 @@ function main() {
 			const releaseNotes = require("./release_notes");
 			const notes = releaseNotes.readReleaseNotes(version);
 			if (notes && notes.whatsNew) {
-				console.log("  RELEASE_NOTES.md: section found for v" + version);
+				console.log(
+					"  ~/.masonjar/RELEASE_NOTES.md: section found for v" + version,
+				);
 			} else {
 				console.warn(
 					"  WARNING: no **What's new** for v" +
 						version +
-						" in docs/RELEASE_NOTES.md — publish will fail until you add it.",
+						" in ~/.masonjar/RELEASE_NOTES.md — publish will fail until you add it.",
 				);
 			}
 		} catch (e) {
-			console.warn("  Could not check RELEASE_NOTES.md:", e.message || e);
+			console.warn(
+				"  Could not check ~/.masonjar/RELEASE_NOTES.md:",
+				e.message || e,
+			);
 		}
 		console.log(
 			"  Commit: node scripts/release-message.js",

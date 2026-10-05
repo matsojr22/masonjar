@@ -14,7 +14,7 @@ Legacy Bell Jar **project** bundles (`*.belljar`, `project.belljar`, `.belljar/`
 
 # Usage
 
-See `docs/belljar_guide.pdf` in the repository for workflow instructions and a guide to each tool. The guide retains upstream Bell Jar branding; Mason Jar behavior is the same unless noted in release notes.
+See [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) for workflow instructions and a guide to each tool. In the app, open **Guide** from the home screen (or Credits).
 
 # Requirements
 

@@ -1,6 +1,6 @@
 "use strict";
 
-/** Deterministic parent-area colors from Allen CCF ontology (see docs/isolate_regions_style.md). */
+/** Deterministic parent-area colors from Allen CCF ontology. */
 var GROUP_STYLE_LEVEL = 6;
 
 function parseIdPath(idPath) {

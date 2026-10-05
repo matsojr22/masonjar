@@ -2,7 +2,7 @@
 "use strict";
 
 /**
- * Print a suggested git commit message from docs/RELEASE_NOTES.md for package.json version.
+ * Print a suggested git commit message from ~/.masonjar/RELEASE_NOTES.md for package.json version.
  */
 
 const fs = require("fs");
@@ -23,7 +23,11 @@ function main() {
 	const notes = releaseNotes.requireReleaseNotes(version);
 	const msg = releaseNotes.suggestedCommitMessage(notes);
 
-	console.log("Suggested commit for v" + version + " (from docs/RELEASE_NOTES.md):\n");
+	console.log(
+		"Suggested commit for v" +
+			version +
+			" (from ~/.masonjar/RELEASE_NOTES.md):\n",
+	);
 	console.log("Subject:");
 	console.log(msg.subject);
 	console.log("\nBody:");

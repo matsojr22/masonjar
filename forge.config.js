@@ -12,6 +12,10 @@ module.exports = {
 			"README.md",
 			"LICENSE",
 			"^python/", // top-level python/ package only — not node_modules/python-shell
+			"^scripts/",
+			"^patches/",
+			"^docs/",
+			"legacy_atlas.nrrd",
 			"vendor",
 			".cursor",
 			".gitmodules",

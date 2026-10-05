@@ -1,14 +1,15 @@
 "use strict";
 
 /**
- * Parse docs/RELEASE_NOTES.md for human-facing release and commit copy.
+ * Parse ~/.masonjar/RELEASE_NOTES.md for human-facing release and commit copy.
+ * Maintainer-only: this file is not shipped in the public repo.
  */
 
 const fs = require("fs");
 const path = require("path");
+const homeDir = require("../js/home_dir");
 
-const REPO_ROOT = path.join(__dirname, "..");
-const RELEASE_NOTES_PATH = path.join(REPO_ROOT, "docs", "RELEASE_NOTES.md");
+const RELEASE_NOTES_PATH = path.join(homeDir.masonHomePath(), "RELEASE_NOTES.md");
 
 function sectionHeadingPattern(name) {
 	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -91,7 +92,7 @@ function requireReleaseNotes(version) {
 				version +
 				". Add a ## v" +
 				version +
-				" section with **What's new** in docs/RELEASE_NOTES.md (see docs/COMMIT_AND_RELEASE.md).",
+				" section with **What's new** in ~/.masonjar/RELEASE_NOTES.md.",
 		);
 	}
 	return notes;

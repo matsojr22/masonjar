@@ -147,6 +147,13 @@ docs/AGENT_HANDOFF.md
 docs/PREVIEW_FILTER_EVIDENCE.md
 docs/SHARPEN_BELLJAR_DIFF.md
 docs/plan.md
+docs/PROC_POOL_HANDOFF.md
+docs/LAB_NETWORK.md
+docs/COMMIT_AND_RELEASE.md
+docs/RELEASE_NOTES.md
+docs/isolate_regions_style.md
+docs/belljar_guide.pdf
+legacy_atlas.nrrd
 scripts/sharpen-debug-probe.py
 scripts/sharpen-phase1-trace.py
 scripts/compare-*.py
