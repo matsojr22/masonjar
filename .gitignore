@@ -142,6 +142,7 @@ CLAUDE.md
 python/ESTIMATOR_IMPROVEMENTS.md
 
 # --- Local-only (maintainer machine; do not commit) ---
+development/
 AGENTS.md
 docs/AGENT_HANDOFF.md
 docs/PREVIEW_FILTER_EVIDENCE.md

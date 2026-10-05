@@ -14,7 +14,7 @@ Legacy Bell Jar **project** bundles (`*.belljar`, `project.belljar`, `.belljar/`
 
 # Usage
 
-See [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) for workflow instructions and a guide to each tool. In the app, open **Guide** from the home screen (or Credits).
+See [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) for the full usage manual: projects, how data moves between tools, batch, and a step-by-step protocol for every tool. In the app, open **Guide** from the home screen (or Credits).
 
 # Requirements
 

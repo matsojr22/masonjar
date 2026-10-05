@@ -14,7 +14,8 @@ module.exports = {
 			"^python/", // top-level python/ package only — not node_modules/python-shell
 			"^scripts/",
 			"^patches/",
-			"^docs/",
+			"^docs/(?!USER_GUIDE\\.md$)",
+			"^development/",
 			"legacy_atlas.nrrd",
 			"vendor",
 			".cursor",
