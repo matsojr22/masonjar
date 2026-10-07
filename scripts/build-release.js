@@ -512,6 +512,16 @@ function main() {
 		}
 	}
 
+	const releaseLockPack = require("./release_lock_pack");
+	const lockPrep = releaseLockPack.prepareReleaseLock(REPO_ROOT);
+	if (!lockPrep.ok) {
+		console.error(lockPrep.error);
+		process.exit(1);
+	}
+	if (lockPrep.wrote) {
+		console.log("Embedded release lock into release_lock.secret.js");
+	}
+
 	const failed = [];
 	for (const target of targets) {
 		r = runNodeForge(target);

@@ -27,40 +27,62 @@ function prefsPath(homeRoot) {
 	return path.join(homeDir.masonHomePath(homeRoot), FILENAME);
 }
 
+function releaseLockApi() {
+	try {
+		return require("../release_lock");
+	} catch (_err) {
+		return null;
+	}
+}
+
+function normalizePrefs(raw) {
+	if (!raw || typeof raw !== "object") {
+		return defaultPrefs();
+	}
+	var suppressed = raw.suppressed && typeof raw.suppressed === "object"
+		? raw.suppressed
+		: {};
+	var out = { app_version: String(raw.app_version || ""), suppressed: {} };
+	Object.keys(suppressed).forEach(function (k) {
+		out.suppressed[k] = !!suppressed[k];
+	});
+	return out;
+}
+
 function defaultPrefs(appVersion) {
 	return { app_version: String(appVersion || ""), suppressed: {} };
 }
 
 function load(homeRoot) {
+	var home = homeDir.masonHomePath(homeRoot);
+	var rl = releaseLockApi();
+	if (rl && rl.hasReleaseLock()) {
+		return normalizePrefs(rl.readSettings(home, "dialog_preferences"));
+	}
 	var filePath = prefsPath(homeRoot);
 	if (!fs.existsSync(filePath)) {
 		return defaultPrefs();
 	}
 	try {
-		var raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
-		if (!raw || typeof raw !== "object") {
-			return defaultPrefs();
-		}
-		var suppressed = raw.suppressed && typeof raw.suppressed === "object"
-			? raw.suppressed
-			: {};
-		var out = { app_version: String(raw.app_version || ""), suppressed: {} };
-		Object.keys(suppressed).forEach(function (k) {
-			out.suppressed[k] = !!suppressed[k];
-		});
-		return out;
+		return normalizePrefs(JSON.parse(fs.readFileSync(filePath, "utf8")));
 	} catch (_err) {
 		return defaultPrefs();
 	}
 }
 
 function save(prefs, homeRoot) {
-	var filePath = prefsPath(homeRoot);
-	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	var payload = {
 		app_version: String((prefs && prefs.app_version) || ""),
 		suppressed: (prefs && prefs.suppressed) || {},
 	};
+	var home = homeDir.masonHomePath(homeRoot);
+	var rl = releaseLockApi();
+	if (rl && rl.hasReleaseLock()) {
+		rl.writeSettings(home, "dialog_preferences", payload);
+		return;
+	}
+	var filePath = prefsPath(homeRoot);
+	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	fs.writeFileSync(filePath, JSON.stringify(payload, null, 2) + "\n", "utf8");
 }
 

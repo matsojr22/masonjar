@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import atexit
+import base64
+import hashlib
+import hmac
 import json
 import os
 import socket
@@ -11,6 +14,9 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
+
+_SHADOW_PREFIX = "mj-shadow-"
+_HMAC_SKIP = {"masonjar_hmac", "throttled_bytes_total", "throttled_mbps_1m"}
 
 _SMALL_FILE_BYTES = int(os.environ.get("MASONJAR_IO_SMALL_FILE_BYTES", str(256 * 1024)))
 _CHUNK_BYTES = int(os.environ.get("MASONJAR_IO_CHUNK_BYTES", str(2 * 1024 * 1024)))
@@ -106,6 +112,68 @@ def _resolve_max_mbps(cfg: dict[str, Any], link_mbps: float) -> float:
         return max(min_mbps, link_mbps * headroom)
 
 
+def _release_key() -> bytes:
+    raw = os.environ.get("MASONJAR_RELEASE_KEY", "").strip()
+    if not raw:
+        return b""
+    try:
+        key = base64.b64decode(raw)
+    except Exception:
+        return b""
+    return key if len(key) == 32 else b""
+
+
+def _registry_mac_message(entry: dict[str, Any]) -> bytes:
+    payload = {k: entry[k] for k in sorted(entry) if k not in _HMAC_SKIP}
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _stamp_registry_hmac(entry: dict[str, Any]) -> dict[str, Any]:
+    key = _release_key()
+    entry.pop("masonjar_hmac", None)
+    if not key:
+        return entry
+    entry["masonjar_hmac"] = hmac.new(key, _registry_mac_message(entry), hashlib.sha256).hexdigest()
+    return entry
+
+
+def _registry_entry_trusted(entry: dict[str, Any]) -> bool:
+    key = _release_key()
+    if not key:
+        return True
+    got = entry.get("masonjar_hmac")
+    if not isinstance(got, str):
+        return False
+    expected = hmac.new(key, _registry_mac_message(entry), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, got)
+
+
+def _fresh_registry_entry(path: Path, now: float, delete_stale: bool) -> dict[str, Any] | None:
+    try:
+        with open(path, encoding="utf-8") as f:
+            entry = json.load(f)
+        if not isinstance(entry, dict):
+            raise TypeError("registry entry")
+        hb = entry.get("last_heartbeat")
+        if not hb:
+            if delete_stale:
+                path.unlink(missing_ok=True)
+            return None
+        age = now - _parse_iso(str(hb))
+        if age > _STALE_SECONDS:
+            if delete_stale:
+                path.unlink(missing_ok=True)
+            return None
+        return entry
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        if delete_stale:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return None
+
+
 def _list_active_jobs() -> list[dict[str, Any]]:
     reg = _registry_dir()
     if not reg.is_dir():
@@ -113,24 +181,30 @@ def _list_active_jobs() -> list[dict[str, Any]]:
     now = time.time()
     active: list[dict[str, Any]] = []
     for path in reg.glob("*.json"):
-        try:
-            with open(path, encoding="utf-8") as f:
-                entry = json.load(f)
-            hb = entry.get("last_heartbeat")
-            if not hb:
-                path.unlink(missing_ok=True)
-                continue
-            age = now - _parse_iso(hb)
-            if age > _STALE_SECONDS:
-                path.unlink(missing_ok=True)
-                continue
-            active.append(entry)
-        except (OSError, json.JSONDecodeError, TypeError):
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        if path.name.startswith(_SHADOW_PREFIX):
+            continue
+        entry = _fresh_registry_entry(path, now, True)
+        if not entry or not _registry_entry_trusted(entry):
+            continue
+        active.append(entry)
     return active
+
+
+def _count_peer_jobs() -> int:
+    raw = os.environ.get("MASONJAR_IO_PEER_REGISTRY", "").strip()
+    if not raw:
+        return 0
+    reg = Path(raw)
+    if not reg.is_dir():
+        return 0
+    now = time.time()
+    count = 0
+    for path in reg.glob("*.json"):
+        if path.name.startswith(_SHADOW_PREFIX):
+            continue
+        if _fresh_registry_entry(path, now, False):
+            count += 1
+    return count
 
 
 def _parse_iso(value: str) -> float:
@@ -151,7 +225,7 @@ def compute_limit_mbps() -> float:
     headroom = float(cfg.get("headroom", 0.85))
     min_mbps = float(cfg.get("min_mbps_per_job", 25))
     max_mbps = _resolve_max_mbps(cfg, link_mbps)
-    active = max(1, len(_list_active_jobs()))
+    active = max(1, len(_list_active_jobs()) + _count_peer_jobs())
     budget = link_mbps * headroom
     raw = budget / active
     return min(max_mbps, max(min_mbps, raw))
@@ -206,6 +280,7 @@ def _write_registry() -> None:
     }
     if app_instance_id:
         entry["app_instance_id"] = app_instance_id
+    _stamp_registry_hmac(entry)
     path = reg / f"{_job_id}.json"
     tmp = path.with_suffix(f".{os.getpid()}.tmp")
     with open(tmp, "w", encoding="utf-8") as f:

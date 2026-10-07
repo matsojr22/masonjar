@@ -40,8 +40,10 @@ exports.killAllPythonJobs = exports.runPythonJob = exports.describePythonShellFa
  * through a long-lived in-process worker (py/masonjar_worker.py).
  */
 const fs = __importStar(require("fs"));
+const os = __importStar(require("os"));
 const path = __importStar(require("path"));
 const io_fairshare_1 = require("./io_fairshare");
+const release_lock_1 = require("./release_lock");
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { PythonShell } = require("python-shell");
 const activeJobs = new Map();
@@ -235,6 +237,7 @@ function finalizeJob(record, exit, homeDir) {
     catch (_err) {
         // ignore
     }
+    absorbDialogSnapshot(record, homeDir);
     if (record.killChannel && record.ipcMain) {
         try {
             record.ipcMain.removeAllListeners(record.killChannel);
@@ -443,22 +446,71 @@ function shutdownWorker() {
         workerStartPromise = null;
     });
 }
+function decoratePythonEnv(env) {
+    (0, release_lock_1.applyReleaseLockPythonEnv)(env);
+    const peer = (0, io_fairshare_1.peerRegistryDir)();
+    if (peer) {
+        env.MASONJAR_IO_PEER_REGISTRY = peer;
+    }
+}
+function attachDialogSnapshot(env, homeDir) {
+    if (!(0, release_lock_1.hasReleaseLock)()) {
+        return null;
+    }
+    const dest = path.join(os.tmpdir(), "MasonJar", `dialog-prefs-${process.pid}-${Date.now()}-${jobSeq}.json`);
+    try {
+        (0, release_lock_1.writeDialogPrefsSnapshot)(homeDir, dest);
+        env.MASONJAR_DIALOG_PREFS = dest;
+        const mtime = fs.statSync(dest).mtimeMs;
+        return { path: dest, mtime };
+    }
+    catch (_err) {
+        return null;
+    }
+}
+function absorbDialogSnapshot(record, homeDir) {
+    const dest = record.dialogSnapshot;
+    if (!dest) {
+        return;
+    }
+    try {
+        const mtime = fs.statSync(dest).mtimeMs;
+        if (mtime > (record.dialogSnapshotMtime || 0) + 1) {
+            (0, release_lock_1.absorbDialogPrefsSnapshot)(homeDir, dest);
+        }
+    }
+    catch (_err) {
+        // Retry next launch.
+    }
+    try {
+        fs.unlinkSync(dest);
+    }
+    catch (_err) {
+        // ignore
+    }
+}
 function resolveFairshareHandle(opts) {
+    let resolved;
     if (opts.fairshareEnv) {
-        return {
+        resolved = {
             jobId: String(opts.fairshareEnv.MASONJAR_IO_JOB_ID || ""),
             env: Object.assign({}, opts.fairshareEnv),
             release: () => undefined,
         };
     }
-    if (opts.label && opts.label.length > 0) {
-        return (0, io_fairshare_1.createHeavyJobHandle)(opts.ioFairshareDir, opts.homeDir, opts.label, opts.baseEnv);
+    else if (opts.label && opts.label.length > 0) {
+        resolved = (0, io_fairshare_1.createHeavyJobHandle)(opts.ioFairshareDir, opts.homeDir, opts.label, opts.baseEnv);
     }
-    return {
-        jobId: "",
-        env: Object.assign({}, opts.baseEnv),
-        release: () => undefined,
-    };
+    else {
+        resolved = {
+            jobId: "",
+            env: Object.assign({}, opts.baseEnv),
+            release: () => undefined,
+        };
+    }
+    decoratePythonEnv(resolved.env);
+    const snap = attachDialogSnapshot(resolved.env, opts.homeDir);
+    return Object.assign(Object.assign({}, resolved), { dialogSnapshot: snap ? snap.path : null, dialogSnapshotMtime: snap ? snap.mtime : 0 });
 }
 function runViaWorker(opts) {
     const jobId = `w${++jobSeq}_${Date.now()}`;
@@ -470,6 +522,8 @@ function runViaWorker(opts) {
         via: "worker",
         pyshell: null,
         releaseFairshare: fair.release,
+        dialogSnapshot: fair.dialogSnapshot,
+        dialogSnapshotMtime: fair.dialogSnapshotMtime,
         killChannel: opts.killChannel,
         ipcMain: opts.ipcMain,
         onKill: opts.onKill,
@@ -536,6 +590,8 @@ function runViaShell(opts) {
         via: "shell",
         pyshell,
         releaseFairshare: fair.release,
+        dialogSnapshot: fair.dialogSnapshot,
+        dialogSnapshotMtime: fair.dialogSnapshotMtime,
         killChannel: opts.killChannel,
         ipcMain: opts.ipcMain,
         onKill: opts.onKill,

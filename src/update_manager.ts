@@ -3,6 +3,7 @@ import os from "os";
 import path from "path";
 import https from "https";
 import { spawn, execSync } from "child_process";
+import { hasReleaseLock, readSettings, writeSettings } from "./release_lock";
 
 const semver = require("semver");
 const serverFetch = require("node-fetch");
@@ -68,17 +69,29 @@ export function updatePreferencesPath(homeDir: string): string {
   return path.join(homeDir, "update_preferences.json");
 }
 
+function normalizeUpdatePreferences(raw: Partial<UpdatePreferences> | null): UpdatePreferences {
+  if (!raw || typeof raw !== "object") {
+    return { ...DEFAULT_PREFS };
+  }
+  return {
+    allow_prerelease: !!raw.allow_prerelease,
+    keep_version_backups: !!raw.keep_version_backups,
+  };
+}
+
 export function loadUpdatePreferences(homeDir: string): UpdatePreferences {
+  if (hasReleaseLock()) {
+    return normalizeUpdatePreferences(
+      readSettings(homeDir, "update_preferences") as Partial<UpdatePreferences> | null,
+    );
+  }
   const filePath = updatePreferencesPath(homeDir);
   try {
     if (!fs.existsSync(filePath)) {
       return { ...DEFAULT_PREFS };
     }
     const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<UpdatePreferences>;
-    return {
-      allow_prerelease: !!raw.allow_prerelease,
-      keep_version_backups: !!raw.keep_version_backups,
-    };
+    return normalizeUpdatePreferences(raw);
   } catch {
     return { ...DEFAULT_PREFS };
   }
@@ -99,6 +112,10 @@ export function saveUpdatePreferences(
         ? !!patch.keep_version_backups
         : current.keep_version_backups,
   };
+  if (hasReleaseLock()) {
+    writeSettings(homeDir, "update_preferences", next);
+    return next;
+  }
   fs.mkdirSync(homeDir, { recursive: true });
   fs.writeFileSync(updatePreferencesPath(homeDir), JSON.stringify(next, null, 2));
   return next;
@@ -794,6 +811,10 @@ export function cleanInstallEpochMarkerPath(homeDir: string): string {
 
 export function readCleanInstallEpochMarker(homeDir: string): number {
   try {
+    if (hasReleaseLock()) {
+      const raw = readSettings(homeDir, "clean_install_epoch") as { epoch?: unknown } | null;
+      return normalizeCleanInstallEpoch(raw && raw.epoch);
+    }
     const filePath = cleanInstallEpochMarkerPath(homeDir);
     if (!fs.existsSync(filePath)) {
       return 0;
@@ -806,10 +827,15 @@ export function readCleanInstallEpochMarker(homeDir: string): number {
 }
 
 export function writeCleanInstallEpochMarker(homeDir: string, epoch: number): void {
+  const payload = { epoch: normalizeCleanInstallEpoch(epoch) };
+  if (hasReleaseLock()) {
+    writeSettings(homeDir, "clean_install_epoch", payload);
+    return;
+  }
   fs.mkdirSync(homeDir, { recursive: true });
   fs.writeFileSync(
     cleanInstallEpochMarkerPath(homeDir),
-    JSON.stringify({ epoch: normalizeCleanInstallEpoch(epoch) }, null, 2),
+    JSON.stringify(payload, null, 2),
     "utf8",
   );
 }

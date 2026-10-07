@@ -5,8 +5,15 @@
  * through a long-lived in-process worker (py/masonjar_worker.py).
  */
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
-import { createHeavyJobHandle } from "./io_fairshare";
+import { createHeavyJobHandle, peerRegistryDir } from "./io_fairshare";
+import {
+  absorbDialogPrefsSnapshot,
+  applyReleaseLockPythonEnv,
+  hasReleaseLock,
+  writeDialogPrefsSnapshot,
+} from "./release_lock";
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { PythonShell } = require("python-shell");
@@ -86,6 +93,8 @@ type JobRecord = {
   via: "shell" | "worker";
   pyshell: InstanceType<typeof PythonShell> | null;
   releaseFairshare: () => void;
+  dialogSnapshot?: string | null;
+  dialogSnapshotMtime?: number;
   killChannel?: string;
   ipcMain?: RunPythonJobOptions["ipcMain"];
   onKill?: () => void;
@@ -303,6 +312,7 @@ function finalizeJob(record: JobRecord, exit: PythonJobExit, homeDir: string): v
   } catch (_err) {
     // ignore
   }
+  absorbDialogSnapshot(record, homeDir);
   if (record.killChannel && record.ipcMain) {
     try {
       record.ipcMain.removeAllListeners(record.killChannel);
@@ -535,30 +545,90 @@ async function shutdownWorker(): Promise<void> {
   workerStartPromise = null;
 }
 
+function decoratePythonEnv(env: NodeJS.ProcessEnv): void {
+  applyReleaseLockPythonEnv(env);
+  const peer = peerRegistryDir();
+  if (peer) {
+    env.MASONJAR_IO_PEER_REGISTRY = peer;
+  }
+}
+
+function attachDialogSnapshot(
+  env: NodeJS.ProcessEnv,
+  homeDir: string,
+): { path: string; mtime: number } | null {
+  if (!hasReleaseLock()) {
+    return null;
+  }
+  const dest = path.join(
+    os.tmpdir(),
+    "MasonJar",
+    `dialog-prefs-${process.pid}-${Date.now()}-${jobSeq}.json`,
+  );
+  try {
+    writeDialogPrefsSnapshot(homeDir, dest);
+    env.MASONJAR_DIALOG_PREFS = dest;
+    const mtime = fs.statSync(dest).mtimeMs;
+    return { path: dest, mtime };
+  } catch (_err) {
+    return null;
+  }
+}
+
+function absorbDialogSnapshot(record: JobRecord, homeDir: string): void {
+  const dest = record.dialogSnapshot;
+  if (!dest) {
+    return;
+  }
+  try {
+    const mtime = fs.statSync(dest).mtimeMs;
+    if (mtime > (record.dialogSnapshotMtime || 0) + 1) {
+      absorbDialogPrefsSnapshot(homeDir, dest);
+    }
+  } catch (_err) {
+    // Retry next launch.
+  }
+  try {
+    fs.unlinkSync(dest);
+  } catch (_err) {
+    // ignore
+  }
+}
+
 function resolveFairshareHandle(opts: RunPythonJobOptions): {
   jobId: string;
   env: NodeJS.ProcessEnv;
   release: () => void;
+  dialogSnapshot: string | null;
+  dialogSnapshotMtime: number;
 } {
+  let resolved: { jobId: string; env: NodeJS.ProcessEnv; release: () => void };
   if (opts.fairshareEnv) {
-    return {
+    resolved = {
       jobId: String(opts.fairshareEnv.MASONJAR_IO_JOB_ID || ""),
       env: { ...opts.fairshareEnv },
       release: () => undefined,
     };
-  }
-  if (opts.label && opts.label.length > 0) {
-    return createHeavyJobHandle(
+  } else if (opts.label && opts.label.length > 0) {
+    resolved = createHeavyJobHandle(
       opts.ioFairshareDir,
       opts.homeDir,
       opts.label,
       opts.baseEnv,
     );
+  } else {
+    resolved = {
+      jobId: "",
+      env: { ...opts.baseEnv },
+      release: () => undefined,
+    };
   }
+  decoratePythonEnv(resolved.env);
+  const snap = attachDialogSnapshot(resolved.env, opts.homeDir);
   return {
-    jobId: "",
-    env: { ...opts.baseEnv },
-    release: () => undefined,
+    ...resolved,
+    dialogSnapshot: snap ? snap.path : null,
+    dialogSnapshotMtime: snap ? snap.mtime : 0,
   };
 }
 
@@ -573,6 +643,8 @@ function runViaWorker(opts: RunPythonJobOptions): PythonJobHandle {
     via: "worker",
     pyshell: null,
     releaseFairshare: fair.release,
+    dialogSnapshot: fair.dialogSnapshot,
+    dialogSnapshotMtime: fair.dialogSnapshotMtime,
     killChannel: opts.killChannel,
     ipcMain: opts.ipcMain,
     onKill: opts.onKill,
@@ -656,6 +728,8 @@ function runViaShell(opts: RunPythonJobOptions): PythonJobHandle {
     via: "shell",
     pyshell,
     releaseFairshare: fair.release,
+    dialogSnapshot: fair.dialogSnapshot,
+    dialogSnapshotMtime: fair.dialogSnapshotMtime,
     killChannel: opts.killChannel,
     ipcMain: opts.ipcMain,
     onKill: opts.onKill,

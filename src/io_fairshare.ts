@@ -3,6 +3,14 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { execSync } from "child_process";
+import {
+  applyReleaseLockPythonEnv,
+  hasReleaseLock,
+  readSettings,
+  registryEntryTrusted,
+  stampRegistryEntry,
+  writeSettings,
+} from "./release_lock";
 
 export interface IoFairshareSharedConfig {
   enabled: boolean;
@@ -31,6 +39,7 @@ export interface IoFairshareRegistryEntry {
   app_instance_id?: string;
   throttled_bytes_total?: number;
   throttled_mbps_1m?: number;
+  masonjar_hmac?: string;
 }
 
 export interface IoFairshareStatus {
@@ -94,6 +103,39 @@ export function defaultCoordinatorDir(): string {
 
 export function userConfigPath(homeDir: string): string {
   return path.join(homeDir, "io_fairshare.json");
+}
+
+export const PFA_SHADOW_PREFIX = "mj-shadow-";
+
+/** Override with MASONJAR_IO_PEER_REGISTRY in tests. The real folder is used from Electron. */
+export function peerRegistryDir(): string | null {
+  if (process.env.MASONJAR_IO_PEER_REGISTRY != null) {
+    const override = process.env.MASONJAR_IO_PEER_REGISTRY.trim();
+    return override || null;
+  }
+  const electron = !!(
+    process.versions && (process.versions as { electron?: string }).electron
+  );
+  if (!electron) {
+    return null;
+  }
+  return pfaFairshareRegistryDir();
+}
+
+/** PFA Jar's registry folder. Null when this platform has no known path. */
+export function pfaFairshareRegistryDir(): string | null {
+  if (process.platform === "win32") {
+    const programData =
+      process.env.ProgramData || path.join("C:", "ProgramData");
+    return path.join(programData, "PFAJar", "io-fairshare", "registry");
+  }
+  if (process.platform === "darwin") {
+    return path.join(
+      "/Library/Application Support/PFAJar/io-fairshare",
+      "registry",
+    );
+  }
+  return null;
 }
 
 function sharedConfigPath(coordinatorDir: string): string {
@@ -378,6 +420,13 @@ export function saveSharedConfig(
 }
 
 export function loadUserConfig(homeDir: string): IoFairshareUserConfig {
+  if (hasReleaseLock()) {
+    const raw = readSettings(homeDir, "io_fairshare");
+    if (!raw || typeof raw !== "object") {
+      return {};
+    }
+    return raw as IoFairshareUserConfig;
+  }
   return readJsonFile<IoFairshareUserConfig>(userConfigPath(homeDir)) || {};
 }
 
@@ -386,6 +435,10 @@ export function saveUserConfig(
   patch: IoFairshareUserConfig,
 ): IoFairshareUserConfig {
   const merged = { ...loadUserConfig(homeDir), ...patch };
+  if (hasReleaseLock()) {
+    writeSettings(homeDir, "io_fairshare", merged);
+    return merged;
+  }
   fs.mkdirSync(homeDir, { recursive: true });
   writeJsonAtomic(userConfigPath(homeDir), merged);
   return merged;
@@ -423,11 +476,14 @@ export function listRegistryEntries(
   const now = Date.now();
   const out: IoFairshareRegistryEntry[] = [];
   for (const name of fs.readdirSync(dir)) {
-    if (!name.endsWith(".json")) {
+    if (!name.endsWith(".json") || name.startsWith(PFA_SHADOW_PREFIX)) {
       continue;
     }
     const full = path.join(dir, name);
     const entry = readJsonFile<IoFairshareRegistryEntry>(full);
+    if (entry && !registryEntryTrusted(entry as unknown as Record<string, unknown>)) {
+      continue;
+    }
     if (!entry || !entry.last_heartbeat) {
       try {
         fs.unlinkSync(full);
@@ -448,6 +504,92 @@ export function listRegistryEntries(
     out.push(entry);
   }
   return out;
+}
+
+function entryIsFresh(entry: IoFairshareRegistryEntry | null, staleSeconds: number): boolean {
+  if (!entry || !entry.last_heartbeat) {
+    return false;
+  }
+  const ageMs = Date.now() - Date.parse(entry.last_heartbeat);
+  return Number.isFinite(ageMs) && ageMs <= staleSeconds * 1000;
+}
+
+/** Count another app's registry files. Does not delete them. Skips our shadows. */
+export function countPeerJobs(peerRegistryDir: string, staleSeconds: number): number {
+  if (!peerRegistryDir || !fs.existsSync(peerRegistryDir)) {
+    return 0;
+  }
+  let count = 0;
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(peerRegistryDir);
+  } catch (_err) {
+    return 0;
+  }
+  for (const name of names) {
+    if (!name.endsWith(".json") || name.startsWith(PFA_SHADOW_PREFIX)) {
+      continue;
+    }
+    const entry = readJsonFile<IoFairshareRegistryEntry>(path.join(peerRegistryDir, name));
+    if (entryIsFresh(entry, staleSeconds)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/** Mirror our live jobs into PFA Jar's registry so their throttle counts them. */
+export function syncJobShadows(ourCoordinator: string, peerRegistryDir: string): void {
+  if (!peerRegistryDir) {
+    return;
+  }
+  let ours: IoFairshareRegistryEntry[] = [];
+  try {
+    ours = listRegistryEntries(ourCoordinator, 30);
+  } catch (_err) {
+    ours = [];
+  }
+  if (ours.length === 0 && !fs.existsSync(peerRegistryDir)) {
+    return;
+  }
+  try {
+    fs.mkdirSync(peerRegistryDir, { recursive: true });
+  } catch (_err) {
+    return;
+  }
+  const live = new Set<string>();
+  for (const entry of ours) {
+    const shadowId = PFA_SHADOW_PREFIX + entry.job_id;
+    live.add(shadowId + ".json");
+    const shadow: IoFairshareRegistryEntry = {
+      ...entry,
+      job_id: shadowId,
+      label: entry.label || "masonjar",
+      last_heartbeat: new Date().toISOString(),
+    };
+    delete (shadow as { masonjar_hmac?: string }).masonjar_hmac;
+    try {
+      writeJsonAtomic(path.join(peerRegistryDir, shadowId + ".json"), shadow);
+    } catch (_err) {
+      // Their folder may not be writable. Our own throttle still runs.
+    }
+  }
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(peerRegistryDir);
+  } catch (_err) {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(PFA_SHADOW_PREFIX) || !name.endsWith(".json") || live.has(name)) {
+      continue;
+    }
+    try {
+      fs.unlinkSync(path.join(peerRegistryDir, name));
+    } catch (_err) {
+      // ignore
+    }
+  }
 }
 
 export function computeJobLimitMbps(
@@ -543,9 +685,18 @@ export function getIoFairshareStatus(
   const enabled = isFairshareEnabled(coordinatorDir, homeDir);
   const linkMbps = resolveLinkMbps(shared, user);
   const entries = listRegistryEntries(coordinatorDir, shared.stale_seconds);
-  const activeJobs = Math.max(1, entries.length);
+  const peerDir = peerRegistryDir();
+  if (peerDir) {
+    try {
+      syncJobShadows(coordinatorDir, peerDir);
+    } catch (_err) {
+      // Their folder may be missing or unwritable.
+    }
+  }
+  const peerJobs = peerDir ? countPeerJobs(peerDir, shared.stale_seconds) : 0;
+  const combinedJobs = entries.length + peerJobs;
   const budget = linkMbps * shared.headroom;
-  const limit = computeJobLimitMbps(shared, linkMbps, entries.length || 1);
+  const limit = computeJobLimitMbps(shared, linkMbps, combinedJobs || 1);
   const maxCap = resolveMaxMbps(shared, linkMbps);
   const localJobs = entries
     .filter((e) => e.pid === process.pid || e.hostname === os.hostname())
@@ -557,7 +708,7 @@ export function getIoFairshareStatus(
     link_mbps: linkMbps,
     headroom: shared.headroom,
     budget_mbps: budget,
-    active_jobs: entries.length,
+    active_jobs: combinedJobs,
     limit_mbps: enabled ? limit : maxCap,
     min_mbps_per_job: shared.min_mbps_per_job,
     max_mbps_per_job: maxCap,
@@ -595,7 +746,8 @@ export function registerJob(
     if (appInstanceId) {
       entry.app_instance_id = appInstanceId;
     }
-    writeJsonAtomic(path.join(registryDir(coordinatorDir), `${jobId}.json`), entry);
+    writeRegistryFile(coordinatorDir, jobId, entry);
+    mirrorShadows(coordinatorDir);
   } catch (err) {
     warnRegistryBestEffort(
       `io-fairshare: registry register failed (${jobId}): ${(err as Error).message}`,
@@ -611,7 +763,8 @@ export function touchJob(coordinatorDir: string, jobId: string): void {
       return;
     }
     entry.last_heartbeat = new Date().toISOString();
-    writeJsonAtomic(filePath, entry);
+    writeRegistryFile(coordinatorDir, jobId, entry);
+    mirrorShadows(coordinatorDir);
   } catch (err) {
     warnRegistryBestEffort(
       `io-fairshare: registry heartbeat failed (${jobId}): ${(err as Error).message}`,
@@ -666,6 +819,28 @@ export function endNodeJobTracking(coordinatorDir: string, jobId: string): void 
     activeNodeJobs.delete(jobId);
   }
   unregisterJob(coordinatorDir, jobId);
+  mirrorShadows(coordinatorDir);
+}
+
+function writeRegistryFile(
+  coordinatorDir: string,
+  jobId: string,
+  entry: IoFairshareRegistryEntry,
+): void {
+  const stamped = stampRegistryEntry(entry as unknown as Record<string, unknown>);
+  writeJsonAtomic(path.join(registryDir(coordinatorDir), `${jobId}.json`), stamped);
+}
+
+function mirrorShadows(coordinatorDir: string): void {
+  const peer = peerRegistryDir();
+  if (!peer) {
+    return;
+  }
+  try {
+    syncJobShadows(coordinatorDir, peer);
+  } catch (_err) {
+    // Their folder may be missing or unwritable.
+  }
 }
 
 export function applyIoFairsharePythonEnv(
@@ -676,6 +851,11 @@ export function applyIoFairsharePythonEnv(
   jobLabel: string,
 ): NodeJS.ProcessEnv {
   const env = { ...baseEnv };
+  applyReleaseLockPythonEnv(env);
+  const peer = peerRegistryDir();
+  if (peer) {
+    env.MASONJAR_IO_PEER_REGISTRY = peer;
+  }
   if (!isFairshareEnabled(coordinatorDir, homeDir)) {
     env.MASONJAR_IO_FAIRSHARE = "0";
     return env;

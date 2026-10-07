@@ -19,6 +19,7 @@ const os_1 = __importDefault(require("os"));
 const path_1 = __importDefault(require("path"));
 const https_1 = __importDefault(require("https"));
 const child_process_1 = require("child_process");
+const release_lock_1 = require("./release_lock");
 const semver = require("semver");
 const serverFetch = require("node-fetch");
 exports.GITHUB_REPO = "matsojr22/masonjar";
@@ -30,17 +31,26 @@ function updatePreferencesPath(homeDir) {
     return path_1.default.join(homeDir, "update_preferences.json");
 }
 exports.updatePreferencesPath = updatePreferencesPath;
+function normalizeUpdatePreferences(raw) {
+    if (!raw || typeof raw !== "object") {
+        return Object.assign({}, DEFAULT_PREFS);
+    }
+    return {
+        allow_prerelease: !!raw.allow_prerelease,
+        keep_version_backups: !!raw.keep_version_backups,
+    };
+}
 function loadUpdatePreferences(homeDir) {
+    if ((0, release_lock_1.hasReleaseLock)()) {
+        return normalizeUpdatePreferences((0, release_lock_1.readSettings)(homeDir, "update_preferences"));
+    }
     const filePath = updatePreferencesPath(homeDir);
     try {
         if (!fs_1.default.existsSync(filePath)) {
             return Object.assign({}, DEFAULT_PREFS);
         }
         const raw = JSON.parse(fs_1.default.readFileSync(filePath, "utf8"));
-        return {
-            allow_prerelease: !!raw.allow_prerelease,
-            keep_version_backups: !!raw.keep_version_backups,
-        };
+        return normalizeUpdatePreferences(raw);
     }
     catch (_a) {
         return Object.assign({}, DEFAULT_PREFS);
@@ -57,6 +67,10 @@ function saveUpdatePreferences(homeDir, patch) {
             ? !!patch.keep_version_backups
             : current.keep_version_backups,
     };
+    if ((0, release_lock_1.hasReleaseLock)()) {
+        (0, release_lock_1.writeSettings)(homeDir, "update_preferences", next);
+        return next;
+    }
     fs_1.default.mkdirSync(homeDir, { recursive: true });
     fs_1.default.writeFileSync(updatePreferencesPath(homeDir), JSON.stringify(next, null, 2));
     return next;
@@ -665,6 +679,10 @@ function cleanInstallEpochMarkerPath(homeDir) {
 exports.cleanInstallEpochMarkerPath = cleanInstallEpochMarkerPath;
 function readCleanInstallEpochMarker(homeDir) {
     try {
+        if ((0, release_lock_1.hasReleaseLock)()) {
+            const raw = (0, release_lock_1.readSettings)(homeDir, "clean_install_epoch");
+            return normalizeCleanInstallEpoch(raw && raw.epoch);
+        }
         const filePath = cleanInstallEpochMarkerPath(homeDir);
         if (!fs_1.default.existsSync(filePath)) {
             return 0;
@@ -678,8 +696,13 @@ function readCleanInstallEpochMarker(homeDir) {
 }
 exports.readCleanInstallEpochMarker = readCleanInstallEpochMarker;
 function writeCleanInstallEpochMarker(homeDir, epoch) {
+    const payload = { epoch: normalizeCleanInstallEpoch(epoch) };
+    if ((0, release_lock_1.hasReleaseLock)()) {
+        (0, release_lock_1.writeSettings)(homeDir, "clean_install_epoch", payload);
+        return;
+    }
     fs_1.default.mkdirSync(homeDir, { recursive: true });
-    fs_1.default.writeFileSync(cleanInstallEpochMarkerPath(homeDir), JSON.stringify({ epoch: normalizeCleanInstallEpoch(epoch) }, null, 2), "utf8");
+    fs_1.default.writeFileSync(cleanInstallEpochMarkerPath(homeDir), JSON.stringify(payload, null, 2), "utf8");
 }
 exports.writeCleanInstallEpochMarker = writeCleanInstallEpochMarker;
 function cleanInstallRelKey(rel) {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,9 @@ def mason_home_dir() -> Path:
 
 
 def dialog_preferences_path(home: Path | None = None) -> Path:
+    override = os.environ.get("MASONJAR_DIALOG_PREFS", "").strip()
+    if override:
+        return Path(override)
     return (home or mason_home_dir()) / DIALOG_PREFS_FILENAME
 
 

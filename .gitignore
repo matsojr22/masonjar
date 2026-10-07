@@ -143,6 +143,7 @@ python/ESTIMATOR_IMPROVEMENTS.md
 
 # --- Local-only (maintainer machine; do not commit) ---
 development/
+release_lock.secret.js
 AGENTS.md
 docs/AGENT_HANDOFF.md
 docs/PREVIEW_FILTER_EVIDENCE.md

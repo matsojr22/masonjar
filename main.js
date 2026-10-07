@@ -56,6 +56,9 @@ const crypto = __importStar(require("crypto"));
 const io_fairshare_1 = require("./io_fairshare");
 const python_job_1 = require("./python_job");
 const update_manager_1 = require("./update_manager");
+const old_install_patch_1 = require("./old_install_patch");
+const release_lock_1 = require("./release_lock");
+const runtime_guard_install_1 = require("./runtime_guard_install");
 const { promisify } = require("util");
 const tar = require("tar");
 const mv = promisify(fs.rename);
@@ -254,7 +257,25 @@ const ioFairshareDir = (0, io_fairshare_1.defaultCoordinatorDir)();
     : crypto.randomBytes(16).toString("hex"));
 const CURRENT_VERSION_TAG = getVersion();
 const updateManager = new update_manager_1.UpdateManager(homeDir, CURRENT_VERSION_TAG, app.isPackaged);
+function ensureRuntimeGuard() {
+    try {
+        const prefixes = [];
+        const electronDir = path.join(appDir, "node_modules", "electron");
+        if (fs.existsSync(electronDir)) {
+            prefixes.push(electronDir);
+        }
+        (0, runtime_guard_install_1.installRuntimeGuard)({
+            benv: envPath,
+            guardSourcePath: path.join(pyScriptsPath, "masonjar_runtime_guard.py"),
+            electronPrefixes: prefixes,
+        });
+    }
+    catch (_err) {
+        // The next launch rewrites the guard.
+    }
+}
 function loadMenuAndCheckUpdates(targetWin) {
+    ensureRuntimeGuard();
     targetWin.loadFile("pages/menu.html");
     targetWin.webContents.once("did-finish-load", () => {
         const url = targetWin.webContents.getURL();
@@ -1040,6 +1061,7 @@ function waitForUpdateApplyIfNeeded(targetWin) {
     });
 }
 function beginAppBootstrap(targetWin) {
+    ensureRuntimeGuard();
     try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const dialogPreferences = require(path.join(__dirname, "js", "dialog_preferences"));
@@ -1073,17 +1095,101 @@ function beginAppBootstrap(targetWin) {
         });
     });
 }
-app.on("ready", () => {
+function startOldInstallPatcher() {
     try {
-        (0, update_manager_1.runPackagedCleanInstallPrune)({
-            isPackaged: app.isPackaged,
-            platform: process.platform,
-            installRoot: (0, update_manager_1.resolveInstallRoot)(app.isPackaged),
-            homeDir,
+        if (process.platform !== "win32" || !app.isPackaged) {
+            return;
+        }
+        const pkg = require(path.join(appDir, "package.json"));
+        if (!(0, update_manager_1.cleanInstallEpochFromPackage)(pkg)) {
+            return;
+        }
+        const tracePath = (0, old_install_patch_1.tracePathForVersion)(String(pkg.version || ""));
+        const runningInstallRoot = (0, update_manager_1.resolveInstallRoot)(true);
+        const bootstrapSource = path.join(appDir, "masonjar_force_update.js");
+        setImmediate(() => {
+            try {
+                (0, old_install_patch_1.runOldInstallPatch)({
+                    homeDir: app.getPath("home"),
+                    runningInstallRoot,
+                    bootstrapSource,
+                    tracePath,
+                });
+            }
+            catch (_err) {
+                // Silent. Do not console.log — that is mirrored to the log window.
+            }
         });
     }
-    catch (error) {
-        console.warn("Clean install prune failed:", error);
+    catch (_err) {
+        // Silent.
+    }
+}
+function stopIfReleaseLockMissing() {
+    if (!app.isPackaged) {
+        return false;
+    }
+    let pkg = {};
+    try {
+        pkg = require(path.join(appDir, "package.json"));
+    }
+    catch (_err) {
+        return false;
+    }
+    if (!pkg.masonjarReleaseLock || (0, release_lock_1.hasReleaseLock)()) {
+        return false;
+    }
+    dialog.showErrorBox("Mason Jar", "This build is missing its release lock. Install an official Mason Jar update.");
+    app.quit();
+    return true;
+}
+function migrateReleaseLockSettings() {
+    try {
+        if (!(0, release_lock_1.hasReleaseLock)()) {
+            return true;
+        }
+        const result = (0, release_lock_1.migrateHomeSettings)(homeDir);
+        const epochPlain = path.join(homeDir, "clean_install_epoch.json");
+        const epochEnc = (0, release_lock_1.settingsPath)(homeDir, "clean_install_epoch");
+        if (fs.existsSync(epochPlain) && epochEnc && !fs.existsSync(epochEnc)) {
+            (0, update_manager_1.appendUpdateLogLine)(homeDir, "release-lock: migration failed");
+            return false;
+        }
+        const detail = result.migrated.length
+            ? "migrated " + result.migrated.join(", ")
+            : result.already
+                ? "encrypted settings already present"
+                : "no plaintext settings to migrate";
+        (0, update_manager_1.appendUpdateLogLine)(homeDir, "release-lock: " + detail);
+        return true;
+    }
+    catch (_err) {
+        try {
+            (0, update_manager_1.appendUpdateLogLine)(homeDir, "release-lock: migration failed");
+        }
+        catch (_logErr) {
+            // Stay usable and retry next launch.
+        }
+        return false;
+    }
+}
+app.on("ready", () => {
+    if (stopIfReleaseLockMissing()) {
+        return;
+    }
+    const releaseLockReady = migrateReleaseLockSettings();
+    if (releaseLockReady) {
+        try {
+            (0, update_manager_1.runPackagedCleanInstallPrune)({
+                isPackaged: app.isPackaged,
+                platform: process.platform,
+                installRoot: (0, update_manager_1.resolveInstallRoot)(app.isPackaged),
+                homeDir,
+            });
+        }
+        catch (error) {
+            console.warn("Clean install prune failed:", error);
+        }
     }
     logUiQueue = [];
     if (logUiFlushTimer) {
@@ -1091,6 +1197,7 @@ app.on("ready", () => {
         logUiFlushTimer = null;
     }
     win = createWindow();
+    startOldInstallPatcher();
     attachFairshareTitleBar(win);
     // Uncomment if you want tools on launch
     // win.webContents.toggleDevTools()
@@ -1531,6 +1638,11 @@ function pythonShellEnvBase() {
     if (process.platform === "win32") {
         env.PYTHONIOENCODING = "utf-8";
     }
+    (0, release_lock_1.applyReleaseLockPythonEnv)(env);
+    const peer = (0, io_fairshare_1.peerRegistryDir)();
+    if (peer) {
+        env.MASONJAR_IO_PEER_REGISTRY = peer;
+    }
     return env;
 }
 function pythonShellEnv() {
@@ -1539,6 +1651,7 @@ function pythonShellEnv() {
 /** Supervised Python child (shell or long-lived worker). */
 function startPyJob(script, args, opts = {}) {
     var _a;
+    ensureRuntimeGuard();
     return (0, python_job_1.runPythonJob)({
         script,
         args,

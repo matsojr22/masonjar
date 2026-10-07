@@ -237,6 +237,69 @@ function testProjectIndexNodeJobTracking() {
 	fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+function freshJob(id, ageMs) {
+	return {
+		job_id: id,
+		pid: 1,
+		user: "test",
+		hostname: "test",
+		label: "max",
+		started_at: new Date().toISOString(),
+		last_heartbeat: new Date(Date.now() - ageMs).toISOString(),
+	};
+}
+
+function testPeerShadows() {
+	const prev = process.env.MASONJAR_IO_PEER_REGISTRY;
+	const ours = fs.mkdtempSync(path.join(os.tmpdir(), "mj-io-ours-"));
+	const peer = fs.mkdtempSync(path.join(os.tmpdir(), "mj-io-peer-"));
+	try {
+		process.env.MASONJAR_IO_PEER_REGISTRY = peer;
+		fs.mkdirSync(path.join(ours, "registry"), { recursive: true });
+		fs.writeFileSync(
+			path.join(ours, "config.json"),
+			JSON.stringify({
+				enabled: true,
+				link_mbps: 1000,
+				headroom: 0.85,
+				min_mbps_per_job: 25,
+				max_mbps_per_job: "auto",
+				stale_seconds: 30,
+			}),
+		);
+		fs.writeFileSync(
+			path.join(ours, "registry", "ours.json"),
+			JSON.stringify(freshJob("ours", 0)),
+		);
+		fs.writeFileSync(
+			path.join(ours, "registry", "mj-shadow-copy.json"),
+			JSON.stringify(freshJob("mj-shadow-copy", 0)),
+		);
+		fs.writeFileSync(path.join(peer, "theirs.json"), JSON.stringify(freshJob("theirs", 0)));
+		fs.writeFileSync(path.join(peer, "old.json"), JSON.stringify(freshJob("old", 120000)));
+		fs.writeFileSync(
+			path.join(peer, "mj-shadow-leftover.json"),
+			JSON.stringify(freshJob("mj-shadow-leftover", 0)),
+		);
+		const status = ioFairshare.getIoFairshareStatus(ours, path.join(ours, "home"));
+		assert(status.active_jobs === 2, "ours plus their live job, got " + status.active_jobs);
+		assert(fs.existsSync(path.join(peer, "mj-shadow-ours.json")), "shadow written");
+		assert(!fs.existsSync(path.join(peer, "mj-shadow-leftover.json")), "old shadow removed");
+		assert(fs.existsSync(path.join(peer, "theirs.json")), "their job file kept");
+		assert(!fs.existsSync(path.join(peer, "config.json")), "their config is untouched");
+		const onlyOurs = ioFairshare.listRegistryEntries(ours, 30);
+		assert(onlyOurs.length === 1 && onlyOurs[0].job_id === "ours", "shadow files are not our jobs");
+	} finally {
+		if (prev == null) {
+			delete process.env.MASONJAR_IO_PEER_REGISTRY;
+		} else {
+			process.env.MASONJAR_IO_PEER_REGISTRY = prev;
+		}
+		fs.rmSync(ours, { recursive: true, force: true });
+		fs.rmSync(peer, { recursive: true, force: true });
+	}
+}
+
 function main() {
 	testParseLinkSpeed();
 	testComputeJobLimit();
@@ -250,6 +313,7 @@ function main() {
 	testFormatFairshareTitleSuffix();
 	testLocalThrottledMbpsAggregation();
 	testProjectIndexNodeJobTracking();
+	testPeerShadows();
 	console.log("test-io-fairshare: ok");
 }
 
