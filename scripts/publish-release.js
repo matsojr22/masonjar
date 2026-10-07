@@ -248,6 +248,9 @@ function buildGithubReleaseBody(version, opts) {
 				version +
 				"-arm64.dmg` |",
 			"| **macOS (Intel)** | `masonjar-" + version + "-x64.dmg` |",
+			"| **Linux (x64)** | `masonjar-linux-x64-" +
+				version +
+				".zip` — unzip and run `masonjar.sh`. Not tested at this time. |",
 			"",
 			"On macOS, if Gatekeeper blocks the app, use **right-click → Open** on first launch.",
 			"",
