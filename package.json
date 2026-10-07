@@ -1,8 +1,8 @@
 {
   "name": "masonjar",
   "description": "A tool for mouse neurohistology",
-  "version": "8.0.3",
-  "masonjarCleanInstallEpoch": 2,
+  "version": "8.0.4",
+  "masonjarCleanInstallEpoch": 3,
   "masonjarReleaseLock": true,
   "main": "main.js",
   "repository": "matsojr22/masonjar",
