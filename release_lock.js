@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.absorbDialogPrefsSnapshot = exports.writeDialogPrefsSnapshot = exports.registryEntryTrusted = exports.stampRegistryEntry = exports.registryHmac = exports.registryMacMessage = exports.applyReleaseLockPythonEnv = exports.migrateHomeSettings = exports.readSettings = exports.writeSettings = exports.decryptJson = exports.encryptJson = exports.settingsPath = exports.derivedFileName = exports.allKeys = exports.keyBuffer = exports.hasReleaseLock = exports.resetReleaseLockCache = exports.loadReleaseLock = exports.SETTINGS_PLAINTEXT = void 0;
+exports.absorbDialogPrefsSnapshot = exports.writeDialogPrefsSnapshot = exports.registryEntryTrusted = exports.stampRegistryEntry = exports.registryHmac = exports.registryMacMessage = exports.applyReleaseLockPythonEnv = exports.registrySigningKey = exports.migrateHomeSettings = exports.readSettings = exports.writeSettings = exports.decryptJson = exports.encryptJson = exports.settingsPath = exports.derivedFileName = exports.allKeys = exports.keyBuffer = exports.hasReleaseLock = exports.resetReleaseLockCache = exports.loadReleaseLock = exports.SETTINGS_PLAINTEXT = void 0;
 const crypto_1 = __importDefault(require("crypto"));
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
@@ -192,15 +192,21 @@ exports.readSettings = readSettings;
 function migrateHomeSettings(homeDir, material) {
     const mat = material === undefined ? loadReleaseLock() : material;
     if (!mat) {
-        return { migrated: [], already: false };
+        return { migrated: [], already: false, rotated: [] };
     }
     const migrated = [];
+    const rotated = [];
     let already = false;
     for (const logical of Object.keys(exports.SETTINGS_PLAINTEXT)) {
         const existing = candidateSettings(homeDir, logical, mat).some((cand) => fs_1.default.existsSync(cand.filePath));
         if (existing) {
             already = true;
+            const currentPath = settingsPath(homeDir, logical, mat);
+            const hadCurrent = !!(currentPath && fs_1.default.existsSync(currentPath));
             readSettings(homeDir, logical, mat);
+            if (!hadCurrent && currentPath && fs_1.default.existsSync(currentPath)) {
+                rotated.push(logical);
+            }
             continue;
         }
         const plainPath = path_1.default.join(homeDir, exports.SETTINGS_PLAINTEXT[logical]);
@@ -216,9 +222,23 @@ function migrateHomeSettings(homeDir, material) {
             // Retry next launch. Plaintext is left in place.
         }
     }
-    return { migrated, already: already && migrated.length === 0 };
+    return { migrated, already: already && migrated.length === 0, rotated };
 }
 exports.migrateHomeSettings = migrateHomeSettings;
+/** Which embedded key signed this registry row, if any. */
+function registrySigningKey(entry, material) {
+    const mat = material === undefined ? loadReleaseLock() : material;
+    if (!mat || !entry || typeof entry.masonjar_hmac !== "string") {
+        return null;
+    }
+    for (const rec of allKeys(mat)) {
+        if (registryHmac(rec.key, entry) === entry.masonjar_hmac) {
+            return rec;
+        }
+    }
+    return null;
+}
+exports.registrySigningKey = registrySigningKey;
 function applyReleaseLockPythonEnv(env) {
     const mat = loadReleaseLock();
     if (!mat) {
@@ -261,10 +281,8 @@ function registryEntryTrusted(entry, material) {
     if (!mat) {
         return true;
     }
-    if (!entry || typeof entry.masonjar_hmac !== "string") {
-        return false;
-    }
-    return registryHmac(mat.current.key, entry) === entry.masonjar_hmac;
+    const signer = registrySigningKey(entry, mat);
+    return !!signer && signer.id === mat.current.id;
 }
 exports.registryEntryTrusted = registryEntryTrusted;
 function writeDialogPrefsSnapshot(homeDir, dest, material) {

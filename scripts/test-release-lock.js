@@ -101,6 +101,62 @@ function testPackRefusesMissingSecret() {
 	}
 }
 
+function testEncryptDecryptBudget() {
+	const mat = { current: keyRec("budget"), previous: [] };
+	const payloads = {
+		io_fairshare: { enabled: true, link_mbps: "auto" },
+		update_preferences: { allow_prerelease: false, keep_version_backups: true },
+		dialog_preferences: {
+			app_version: "8.0.3",
+			suppressed: { "adjust.confirm_save_overwrite": true },
+		},
+		clean_install_epoch: { epoch: 2 },
+	};
+	const names = Object.keys(payloads);
+	const started = Date.now();
+	for (let i = 0; i < 10; i++) {
+		names.forEach(function (logical) {
+			const blob = rl.encryptJson(mat.current, payloads[logical]);
+			const decoded = rl.decryptJson(mat, blob);
+			assert(decoded && decoded.value, "budget decrypt " + logical);
+		});
+	}
+	const elapsed = Date.now() - started;
+	assert(elapsed < 100, "ten rounds of four settings stayed under 100ms, was " + elapsed);
+}
+
+function testMigrateReportsRotation() {
+	const oldKey = keyRec("old-rot");
+	const newKey = keyRec("new-rot");
+	const home = fs.mkdtempSync(path.join(os.tmpdir(), "mj-lock-rot-"));
+	try {
+		const oldMat = { current: oldKey, previous: [] };
+		rl.writeSettings(home, "io_fairshare", { enabled: true, link_mbps: 40 }, oldMat);
+		rl.writeSettings(
+			home,
+			"dialog_preferences",
+			{ app_version: "8.0.2", suppressed: {} },
+			oldMat,
+		);
+		const rotatedMat = { current: newKey, previous: [oldKey] };
+		const first = rl.migrateHomeSettings(home, rotatedMat);
+		assert(first.rotated.indexOf("io_fairshare") >= 0, "reports rotated io_fairshare");
+		assert(
+			first.rotated.indexOf("dialog_preferences") >= 0,
+			"reports rotated dialog_preferences",
+		);
+		assert(first.migrated.length === 0, "rotation is not a plaintext copy");
+		const value = rl.readSettings(home, "io_fairshare", rotatedMat);
+		assert(value && value.link_mbps === 40, "rotated value kept");
+		const second = rl.migrateHomeSettings(home, rotatedMat);
+		assert(second.rotated.length === 0, "second launch does not rotate again");
+		const kept = rl.readSettings(home, "io_fairshare", rotatedMat);
+		assert(kept && kept.link_mbps === 40, "second launch keeps the new file");
+	} finally {
+		fs.rmSync(home, { recursive: true, force: true });
+	}
+}
+
 function testPythonHmacMatches() {
 	const mat = { current: keyRec("py"), previous: [] };
 	const entry = {
@@ -120,6 +176,23 @@ function testPythonHmacMatches() {
 	assert(rl.registryEntryTrusted(stamped, mat), "stamped entry is trusted");
 	assert(!rl.registryEntryTrusted(entry, mat), "plaintext entry is ignored when a key is set");
 	assert(rl.registryEntryTrusted(entry, null), "no key keeps unsigned rows");
+	const prevKey = keyRec("previous-key");
+	const signedByPrevious = rl.stampRegistryEntry(Object.assign({}, entry), {
+		current: prevKey,
+		previous: [],
+	});
+	const withPrevious = { current: mat.current, previous: [prevKey] };
+	const signer = rl.registrySigningKey(signedByPrevious, withPrevious);
+	assert(signer && signer.id === "previous-key", "previous key still matches");
+	assert(
+		!rl.registryEntryTrusted(signedByPrevious, withPrevious),
+		"previous key is not the current signer",
+	);
+	const otherPrevious = rl.stampRegistryEntry(Object.assign({}, entry), {
+		current: keyRec("someone-else"),
+		previous: [],
+	});
+	assert(!rl.registrySigningKey(otherPrevious, withPrevious), "an unknown key does not match");
 
 	const py = [
 		"import json, os, sys",
@@ -150,6 +223,8 @@ function main() {
 	testRoundTrip();
 	testRotationAndDerivedPath();
 	testMigrateLeavesPlaintextAndDoesNotOverwrite();
+	testMigrateReportsRotation();
+	testEncryptDecryptBudget();
 	testPackRefusesMissingSecret();
 	testPythonHmacMatches();
 	console.log("test-release-lock: ok");

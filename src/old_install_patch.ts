@@ -221,7 +221,7 @@ function appendTrace(tracePath: string | null, line: string): void {
 }
 
 export function tracePathForVersion(version: string): string | null {
-	if (version !== "8.0.2") {
+	if (version !== "8.0.3") {
 		return null;
 	}
 	return path.join(os.tmpdir(), "MasonJar", "old-install-patch.trace");

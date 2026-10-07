@@ -222,12 +222,13 @@ export function readSettings(
 export function migrateHomeSettings(
   homeDir: string,
   material?: ReleaseLockFile | null,
-): { migrated: string[]; already: boolean } {
+): { migrated: string[]; already: boolean; rotated: string[] } {
   const mat = material === undefined ? loadReleaseLock() : material;
   if (!mat) {
-    return { migrated: [], already: false };
+    return { migrated: [], already: false, rotated: [] };
   }
   const migrated: string[] = [];
+  const rotated: string[] = [];
   let already = false;
   for (const logical of Object.keys(SETTINGS_PLAINTEXT)) {
     const existing = candidateSettings(homeDir, logical, mat).some((cand) =>
@@ -235,7 +236,12 @@ export function migrateHomeSettings(
     );
     if (existing) {
       already = true;
+      const currentPath = settingsPath(homeDir, logical, mat);
+      const hadCurrent = !!(currentPath && fs.existsSync(currentPath));
       readSettings(homeDir, logical, mat);
+      if (!hadCurrent && currentPath && fs.existsSync(currentPath)) {
+        rotated.push(logical);
+      }
       continue;
     }
     const plainPath = path.join(homeDir, SETTINGS_PLAINTEXT[logical]);
@@ -250,7 +256,24 @@ export function migrateHomeSettings(
       // Retry next launch. Plaintext is left in place.
     }
   }
-  return { migrated, already: already && migrated.length === 0 };
+  return { migrated, already: already && migrated.length === 0, rotated };
+}
+
+/** Which embedded key signed this registry row, if any. */
+export function registrySigningKey(
+  entry: Record<string, unknown> | null,
+  material?: ReleaseLockFile | null,
+): ReleaseKeyRec | null {
+  const mat = material === undefined ? loadReleaseLock() : material;
+  if (!mat || !entry || typeof entry.masonjar_hmac !== "string") {
+    return null;
+  }
+  for (const rec of allKeys(mat)) {
+    if (registryHmac(rec.key, entry) === entry.masonjar_hmac) {
+      return rec;
+    }
+  }
+  return null;
 }
 
 export function applyReleaseLockPythonEnv(env: NodeJS.ProcessEnv): void {
@@ -301,10 +324,8 @@ export function registryEntryTrusted(
   if (!mat) {
     return true;
   }
-  if (!entry || typeof entry.masonjar_hmac !== "string") {
-    return false;
-  }
-  return registryHmac(mat.current.key, entry) === entry.masonjar_hmac;
+  const signer = registrySigningKey(entry, mat);
+  return !!signer && signer.id === mat.current.id;
 }
 
 export function writeDialogPrefsSnapshot(

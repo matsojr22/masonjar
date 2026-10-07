@@ -6,10 +6,12 @@ import { execSync } from "child_process";
 import {
   applyReleaseLockPythonEnv,
   hasReleaseLock,
+  loadReleaseLock,
   readSettings,
-  registryEntryTrusted,
+  registrySigningKey,
   stampRegistryEntry,
   writeSettings,
+  type ReleaseLockFile,
 } from "./release_lock";
 
 export interface IoFairshareSharedConfig {
@@ -468,6 +470,7 @@ function resolveMaxMbps(
 export function listRegistryEntries(
   coordinatorDir: string,
   staleSeconds: number,
+  material?: ReleaseLockFile | null,
 ): IoFairshareRegistryEntry[] {
   const dir = registryDir(coordinatorDir);
   if (!fs.existsSync(dir)) {
@@ -475,14 +478,30 @@ export function listRegistryEntries(
   }
   const now = Date.now();
   const out: IoFairshareRegistryEntry[] = [];
+  const mat = material === undefined ? loadReleaseLock() : material;
   for (const name of fs.readdirSync(dir)) {
     if (!name.endsWith(".json") || name.startsWith(PFA_SHADOW_PREFIX)) {
       continue;
     }
     const full = path.join(dir, name);
-    const entry = readJsonFile<IoFairshareRegistryEntry>(full);
-    if (entry && !registryEntryTrusted(entry as unknown as Record<string, unknown>)) {
-      continue;
+    let entry = readJsonFile<IoFairshareRegistryEntry>(full);
+    if (entry && mat) {
+      const signer = registrySigningKey(entry as unknown as Record<string, unknown>, mat);
+      if (!signer) {
+        continue;
+      }
+      if (signer.id !== mat.current.id) {
+        const stamped = stampRegistryEntry(
+          { ...(entry as unknown as Record<string, unknown>) },
+          mat,
+        );
+        try {
+          writeJsonAtomic(full, stamped);
+        } catch (_err) {
+          continue;
+        }
+        entry = stamped as unknown as IoFairshareRegistryEntry;
+      }
     }
     if (!entry || !entry.last_heartbeat) {
       try {

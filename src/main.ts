@@ -1259,12 +1259,14 @@ async function waitForUpdateApplyIfNeeded(
 
 function beginAppBootstrap(targetWin: typeof BrowserWindow) {
   ensureRuntimeGuard();
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const dialogPreferences = require(path.join(__dirname, "js", "dialog_preferences"));
-    dialogPreferences.syncAppVersionClearIfChanged(getVersion());
-  } catch (_error) {
-    // ignore
+  if (releaseLockMigrationOk) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const dialogPreferences = require(path.join(__dirname, "js", "dialog_preferences"));
+      dialogPreferences.syncAppVersionClearIfChanged(getVersion());
+    } catch (_error) {
+      // ignore
+    }
   }
   checkLocalDir();
   ensureCoordinatorDir(ioFairshareDir);
@@ -1341,31 +1343,49 @@ function stopIfReleaseLockMissing(): boolean {
   return true;
 }
 
+let releaseLockMigrationOk = true;
+
+function releaseLockLog(message: string, startedMs: number): void {
+  try {
+    appendUpdateLogLine(homeDir, message + " (" + (Date.now() - startedMs) + "ms)");
+  } catch (_err) {
+    // Stay usable and retry next launch.
+  }
+}
+
 function migrateReleaseLockSettings(): boolean {
+  const started = Date.now();
   try {
     if (!hasReleaseLock()) {
+      releaseLockMigrationOk = true;
       return true;
     }
     const result = migrateHomeSettings(homeDir);
     const epochPlain = path.join(homeDir, "clean_install_epoch.json");
     const epochEnc = settingsPath(homeDir, "clean_install_epoch");
     if (fs.existsSync(epochPlain) && epochEnc && !fs.existsSync(epochEnc)) {
-      appendUpdateLogLine(homeDir, "release-lock: migration failed");
+      releaseLockMigrationOk = false;
+      releaseLockLog("release-lock: migration failed", started);
       return false;
     }
-    const detail = result.migrated.length
-      ? "migrated " + result.migrated.join(", ")
+    const parts: string[] = [];
+    if (result.rotated.length) {
+      parts.push("rotated " + result.rotated.join(", "));
+    }
+    if (result.migrated.length) {
+      parts.push("migrated " + result.migrated.join(", "));
+    }
+    const detail = parts.length
+      ? parts.join("; ")
       : result.already
         ? "encrypted settings already present"
         : "no plaintext settings to migrate";
-    appendUpdateLogLine(homeDir, "release-lock: " + detail);
+    releaseLockMigrationOk = true;
+    releaseLockLog("release-lock: " + detail, started);
     return true;
   } catch (_err) {
-    try {
-      appendUpdateLogLine(homeDir, "release-lock: migration failed");
-    } catch (_logErr) {
-      // Stay usable and retry next launch.
-    }
+    releaseLockMigrationOk = false;
+    releaseLockLog("release-lock: migration failed", started);
     return false;
   }
 }
@@ -1376,6 +1396,8 @@ app.on("ready", () => {
   }
   const releaseLockReady = migrateReleaseLockSettings();
   if (releaseLockReady) {
+    const pruneStarted = Date.now();
+    let pruneFailed = false;
     try {
       runPackagedCleanInstallPrune({
         isPackaged: app.isPackaged,
@@ -1384,8 +1406,13 @@ app.on("ready", () => {
         homeDir,
       });
     } catch (error) {
+      pruneFailed = true;
       console.warn("Clean install prune failed:", error);
     }
+    releaseLockLog(
+      "clean-install prune: " + (pruneFailed ? "failed" : "done"),
+      pruneStarted,
+    );
   }
   logUiQueue = [];
   if (logUiFlushTimer) {

@@ -398,21 +398,35 @@ function resolveMaxMbps(shared, linkMbps) {
     }
     return Math.max(shared.min_mbps_per_job, Number(shared.max_mbps_per_job));
 }
-function listRegistryEntries(coordinatorDir, staleSeconds) {
+function listRegistryEntries(coordinatorDir, staleSeconds, material) {
     const dir = registryDir(coordinatorDir);
     if (!fs.existsSync(dir)) {
         return [];
     }
     const now = Date.now();
     const out = [];
+    const mat = material === undefined ? (0, release_lock_1.loadReleaseLock)() : material;
     for (const name of fs.readdirSync(dir)) {
         if (!name.endsWith(".json") || name.startsWith(exports.PFA_SHADOW_PREFIX)) {
             continue;
         }
         const full = path.join(dir, name);
-        const entry = readJsonFile(full);
-        if (entry && !(0, release_lock_1.registryEntryTrusted)(entry)) {
-            continue;
+        let entry = readJsonFile(full);
+        if (entry && mat) {
+            const signer = (0, release_lock_1.registrySigningKey)(entry, mat);
+            if (!signer) {
+                continue;
+            }
+            if (signer.id !== mat.current.id) {
+                const stamped = (0, release_lock_1.stampRegistryEntry)(Object.assign({}, entry), mat);
+                try {
+                    writeJsonAtomic(full, stamped);
+                }
+                catch (_err) {
+                    continue;
+                }
+                entry = stamped;
+            }
         }
         if (!entry || !entry.last_heartbeat) {
             try {

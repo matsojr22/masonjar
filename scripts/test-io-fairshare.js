@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -249,6 +250,38 @@ function freshJob(id, ageMs) {
 	};
 }
 
+function testPreviousKeyRegistryRestamp() {
+	const rl = require(path.join(repoRoot, "release_lock.js"));
+	const oldKey = {
+		id: "old",
+		key: crypto.randomBytes(32).toString("base64"),
+	};
+	const newKey = {
+		id: "new",
+		key: crypto.randomBytes(32).toString("base64"),
+	};
+	const oldMat = { current: oldKey, previous: [] };
+	const rotated = { current: newKey, previous: [oldKey] };
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mj-io-rot-"));
+	const reg = path.join(tmp, "registry");
+	fs.mkdirSync(reg, { recursive: true });
+	const fresh = freshJob("job1", 0);
+	const stamped = rl.stampRegistryEntry(Object.assign({}, fresh), oldMat);
+	fs.writeFileSync(path.join(reg, "job1.json"), JSON.stringify(stamped));
+	fs.writeFileSync(
+		path.join(reg, "other.json"),
+		JSON.stringify(Object.assign({}, freshJob("other", 0), { masonjar_hmac: "not-ours" })),
+	);
+	const live = ioFairshare.listRegistryEntries(tmp, 30, rotated);
+	assert(live.length === 1 && live[0].job_id === "job1", "previous-key row counts after restamp");
+	const onDisk = JSON.parse(fs.readFileSync(path.join(reg, "job1.json"), "utf8"));
+	assert(rl.registryEntryTrusted(onDisk, rotated), "file rewritten with the current key");
+	assert(fs.existsSync(path.join(reg, "other.json")), "unknown hmac is left in place");
+	const again = ioFairshare.listRegistryEntries(tmp, 30, rotated);
+	assert(again.length === 1, "second read still counts the restamped row");
+	fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 function testPeerShadows() {
 	const prev = process.env.MASONJAR_IO_PEER_REGISTRY;
 	const ours = fs.mkdtempSync(path.join(os.tmpdir(), "mj-io-ours-"));
@@ -313,6 +346,7 @@ function main() {
 	testFormatFairshareTitleSuffix();
 	testLocalThrottledMbpsAggregation();
 	testProjectIndexNodeJobTracking();
+	testPreviousKeyRegistryRestamp();
 	testPeerShadows();
 	console.log("test-io-fairshare: ok");
 }

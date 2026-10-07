@@ -117,8 +117,9 @@ function testIdentityAndArm() {
 			!patcher.shouldArmInstall(oldId, null, mainJs),
 			"already armed is skipped",
 		);
-		assert(patcher.tracePathForVersion("8.0.2"), "8.0.2 writes a trace path");
-		assert(!patcher.tracePathForVersion("8.0.3"), "later versions do not trace");
+		assert(!patcher.tracePathForVersion("8.0.2"), "8.0.2 no longer writes a trace path");
+		assert(patcher.tracePathForVersion("8.0.3"), "8.0.3 writes a trace path");
+		assert(!patcher.tracePathForVersion("8.0.4"), "later versions do not trace");
 	} finally {
 		fs.rmSync(tmp, { recursive: true, force: true });
 	}

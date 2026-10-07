@@ -194,7 +194,7 @@ function appendTrace(tracePath, line) {
     }
 }
 function tracePathForVersion(version) {
-    if (version !== "8.0.2") {
+    if (version !== "8.0.3") {
         return null;
     }
     return path_1.default.join(os_1.default.tmpdir(), "MasonJar", "old-install-patch.trace");
