@@ -217,13 +217,45 @@ def suggest_detection_params(
     return {}
 
 
+def suggest_intensity_by_slice(collector: DetectQcCollector) -> dict[str, Any]:
+    """Per-section intensity cutoff from screened boxes (before the intensity filter)."""
+    out: dict[str, Any] = {}
+    for slice_id in sorted(collector.slices):
+        intensities = list(collector.slices[slice_id].intensity)
+        info = estimate_intensity_threshold(intensities)
+        cutoff = info.get("intensity_threshold_estimate") if info.get("bimodal") else None
+        out[slice_id] = {
+            "bimodal": bool(info.get("bimodal")),
+            "intensity_min": int(cutoff) if cutoff is not None else None,
+            "reason": info.get("reason"),
+            "count": len(_finite(intensities)),
+        }
+    return out
+
+
 def _build_summary_lines(
     intensity_info: dict[str, Any],
     screened_records: list[DetectionRecord],
     suggestions: dict[str, Any],
     current_thresholds: dict[str, float],
+    *,
+    mixed: bool = False,
+    per_slice: dict[str, Any] | None = None,
 ) -> list[str]:
     lines: list[str] = []
+    per_slice = per_slice or {}
+    if mixed:
+        suggested = sum(1 for row in per_slice.values() if row.get("intensity_min"))
+        lines.append(
+            "This run used different cutoffs on different sections. "
+            "The plots mark the run-wide defaults. "
+            "The pooled intensity split is not a single threshold to apply again."
+        )
+        if per_slice:
+            lines.append(
+                "Per-section intensity suggestions were recorded for "
+                f"{suggested} of {len(per_slice)} sections."
+            )
     threshold = intensity_info.get("intensity_threshold_estimate")
     if not intensity_info.get("bimodal") or threshold is None:
         reason = intensity_info.get("reason") or "unknown"
@@ -255,7 +287,7 @@ def _build_summary_lines(
         f"Estimated intensity cutoff: {threshold} (0–255 p90). "
         f"{below} of {total} saved detections ({pct}%) fall below this value."
     )
-    if suggestions.get("intensity_min"):
+    if suggestions.get("intensity_min") and not mixed:
         lines.append(
             f"Setting intensity cutoff to {suggestions['intensity_min']} would drop "
             f"dim candidates while keeping brighter somata."
@@ -269,6 +301,8 @@ def _build_summary_lines(
 def analyze_detection_qc(
     collector: DetectQcCollector,
     thresholds: dict[str, float],
+    *,
+    mixed: bool = False,
 ) -> dict[str, Any]:
     """Analyze this run's QC collector; returns analysis block for summary JSON."""
     screened = build_screened_records(collector)
@@ -282,6 +316,7 @@ def analyze_detection_qc(
         threshold if intensity_info.get("bimodal") else None,
         thresholds,
     )
+    per_slice = suggest_intensity_by_slice(collector)
 
     below = above = 0
     if threshold is not None:
@@ -289,7 +324,12 @@ def analyze_detection_qc(
         above = sum(1 for r in screened if r.intensity_p90 >= threshold)
 
     summary_lines = _build_summary_lines(
-        intensity_info, screened, suggestions, thresholds
+        intensity_info,
+        screened,
+        suggestions,
+        thresholds,
+        mixed=mixed,
+        per_slice=per_slice,
     )
 
     return {
@@ -302,6 +342,8 @@ def analyze_detection_qc(
             "above_threshold": above,
         },
         "suggestions": suggestions,
+        "per_slice": per_slice,
+        "mixed": bool(mixed),
         "current": {
             "confidence": thresholds.get("confidence"),
             "area": thresholds.get("area_px2"),

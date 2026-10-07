@@ -3,6 +3,7 @@ import pipeline_io_bootstrap  # noqa: F401
 import pickle
 import os
 import json
+import shutil
 from datetime import datetime, timezone
 from skimage.measure import label, regionprops
 from skimage.filters import threshold_otsu
@@ -172,6 +173,58 @@ def screen_predictions(
 
     return second_pass, pre_ecc_eccentricities, pre_ecc_records
 
+
+def filter_objects_by_confidence(objects, min_confidence):
+    """Keep SAHI objects whose score is at least the cutoff."""
+    cutoff = float(min_confidence)
+    kept = []
+    for obj in objects or []:
+        score = getattr(obj, "score", None)
+        value = getattr(score, "value", score if score is not None else 0)
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if number >= cutoff:
+            kept.append(obj)
+    return kept
+
+
+def resolve_detect_device():
+    force_cpu = os.environ.get("MASONJAR_DETECT_CPU", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if force_cpu:
+        device = "cpu"
+    elif torch.cuda.is_available():
+        device = "cuda:0"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+    if device == "cpu" and not force_cpu:
+        print(
+            f"LOG: detect_device=cpu torch={torch.__version__} "
+            f"cuda_built={torch.backends.cuda.is_built()} "
+            f"cuda_available={torch.cuda.is_available()}",
+            flush=True,
+        )
+    return device
+
+
+def load_detection_model(model_path, confidence_threshold, device=None):
+    if device is None:
+        device = resolve_detect_device()
+    return AutoDetectionModel.from_pretrained(
+        model_type="yolov8",
+        model_path=model_path,
+        confidence_threshold=float(confidence_threshold),
+        device=device,
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Find neurons in images")
     parser.add_argument(
@@ -231,6 +284,11 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
     )
+    parser.add_argument(
+        "--slice-params",
+        default="",
+        help="JSON file of per-slice confidence, area, eccentricity, and intensity_min",
+    )
     args = parser.parse_args()
 
     _limit_detect_threads()
@@ -259,29 +317,17 @@ if __name__ == "__main__":
     }
 
     from slice_index import load_slice_list, slice_id_allowed
-
-    # add mps device if available (MASONJAR_DETECT_CPU=1 forces CPU on Mac when MPS hangs)
-    force_cpu = os.environ.get("MASONJAR_DETECT_CPU", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
+    from detect_param_raw import (
+        load_slice_param_spec,
+        min_confidence_in_spec,
+        params_for_slice,
     )
-    if force_cpu:
-        device = "cpu"
-    elif torch.cuda.is_available():
-        device = "cuda:0"
-    elif torch.backends.mps.is_available():
-        device = "mps"
-    else:
-        device = "cpu"
 
-    if device == "cpu" and not force_cpu:
-        print(
-            f"LOG: detect_device=cpu torch={torch.__version__} "
-            f"cuda_built={torch.backends.cuda.is_built()} "
-            f"cuda_available={torch.cuda.is_available()}",
-            flush=True,
-        )
+    device = resolve_detect_device()
+    slice_params_arg = str(args.slice_params or "").strip()
+    slice_spec = load_slice_param_spec(slice_params_arg) if slice_params_arg else None
+    if slice_spec is not None:
+        shutil.copyfile(slice_params_arg, output_dir / "detect_slice_params.json")
 
     # Pruning
     endings = ["png", "jpg", "jpeg", "tif", "tiff"]
@@ -315,6 +361,7 @@ if __name__ == "__main__":
         "slice_list": args.slice_list.strip() or None,
         "input_files": sorted(files),
         "per_slice_qc": bool(args.per_slice_qc),
+        "slice_params": "detect_slice_params.json" if slice_spec is not None else None,
     }
     with open(output_dir / "run_manifest.json", "w", encoding="utf-8") as mf:
         json.dump(manifest, mf, indent=2)
@@ -328,12 +375,41 @@ if __name__ == "__main__":
         print(f"Using intensity minimum {intensity_min}", flush=True)
     print(f"Found {len(files)} images", flush=True)
     
-    detection_model = AutoDetectionModel.from_pretrained(
-        model_type="yolov8",
-        model_path=model_path,
-        confidence_threshold=confidence_threshold,
-        device=device,
-    )
+    model_confidence = confidence_threshold
+    if slice_spec is not None:
+        model_confidence = min_confidence_in_spec(slice_spec, confidence_threshold)
+        print(
+            f"LOG: detect_slice_params model_confidence={model_confidence:g}",
+            flush=True,
+        )
+    detection_model = load_detection_model(model_path, model_confidence, device)
+
+    fallback_params = {
+        "confidence": confidence_threshold,
+        "area": area_threshold,
+        "eccentricity": eccentricity_threshold,
+        "intensity_min": intensity_min,
+    }
+
+    def _slice_screen_inputs(slice_id, objects):
+        if slice_spec is None:
+            return objects, area_threshold, eccentricity_threshold, intensity_min
+        row = params_for_slice(slice_spec, slice_id, fallback_params)
+        print(
+            "LOG: detect_slice_params"
+            f" slice={slice_id}"
+            f" c={row['confidence']:g}"
+            f" a={row['area']:g}"
+            f" e={row['eccentricity']:g}"
+            f" i={row['intensity_min']:g}",
+            flush=True,
+        )
+        return (
+            filter_objects_by_confidence(objects, row["confidence"]),
+            row["area"],
+            row["eccentricity"],
+            row["intensity_min"],
+        )
 
     written = 0
     failed_reads = 0
@@ -405,29 +481,32 @@ if __name__ == "__main__":
                     f"Screening {len(result.object_prediction_list)} detections on {file} ch{i + 1}…",
                     flush=True,
                 )
+                raw_objects, use_area, use_ecc, use_int = _slice_screen_inputs(
+                    slice_id, result.object_prediction_list
+                )
                 predicted_objects, pre_ecc_ecc, pre_ecc_records = screen_predictions(
-                    result.object_prediction_list,
-                    area_threshold,
-                    eccentricity_threshold=eccentricity_threshold,
+                    raw_objects,
+                    use_area,
+                    eccentricity_threshold=use_ecc,
                     image=chan_img,
                     gray_for_qc=gray_for_qc,
                     sam_model_path=Path(args.sam.strip()).expanduser(),
                 )
                 qc_collector.add_slice_pass(
                     slice_id,
-                    result.object_prediction_list,
+                    raw_objects,
                     predicted_objects,
                     pre_ecc_ecc,
                     pre_ecc_records,
                     gray_for_qc,
                 )
                 predicted_objects, removed_int = filter_objects_by_intensity(
-                    predicted_objects, gray_for_qc, intensity_min
+                    predicted_objects, gray_for_qc, use_int
                 )
-                if intensity_min > 0:
+                if use_int > 0:
                     print(
                         f"LOG: detect_intensity_filter removed={removed_int} "
-                        f"kept={len(predicted_objects)} min={intensity_min:g}",
+                        f"kept={len(predicted_objects)} min={use_int:g}",
                         flush=True,
                     )
                 bboxes = [obj.bbox.to_xyxy() for obj in predicted_objects]
@@ -468,29 +547,32 @@ if __name__ == "__main__":
                 f"Screening {len(result.object_prediction_list)} detections on {file}…",
                 flush=True,
             )
+            raw_objects, use_area, use_ecc, use_int = _slice_screen_inputs(
+                slice_id, result.object_prediction_list
+            )
             predicted_objects, pre_ecc_ecc, pre_ecc_records = screen_predictions(
-                result.object_prediction_list,
-                area_threshold,
+                raw_objects,
+                use_area,
                 image=img,
                 gray_for_qc=gray_for_qc,
                 sam_model_path=Path(args.sam.strip()).expanduser(),
-                eccentricity_threshold=eccentricity_threshold,
+                eccentricity_threshold=use_ecc,
             )
             qc_collector.add_slice_pass(
                 slice_id,
-                result.object_prediction_list,
+                raw_objects,
                 predicted_objects,
                 pre_ecc_ecc,
                 pre_ecc_records,
                 gray_for_qc,
             )
             predicted_objects, removed_int = filter_objects_by_intensity(
-                predicted_objects, gray_for_qc, intensity_min
+                predicted_objects, gray_for_qc, use_int
             )
-            if intensity_min > 0:
+            if use_int > 0:
                 print(
                     f"LOG: detect_intensity_filter removed={removed_int} "
-                    f"kept={len(predicted_objects)} min={intensity_min:g}",
+                    f"kept={len(predicted_objects)} min={use_int:g}",
                     flush=True,
                 )
 
@@ -524,6 +606,7 @@ if __name__ == "__main__":
         output_dir,
         qc_thresholds,
         per_slice_enabled=bool(args.per_slice_qc),
+        mixed=slice_spec is not None,
     )
     manifest["qc_only"] = bool(args.qc_only)
     manifest["qc_artifacts"] = {

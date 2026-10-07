@@ -136,7 +136,24 @@ function buildRunPayload(options) {
 	var form = options.form;
 	var detectionMethod = options.detectionMethod;
 	var mode = pipelineRun.getSelectedRunMode("detect");
-	var params = parseDetectParams(form);
+	var params = options.params
+		? {
+				confidence: Number(options.params.confidence),
+				eccentricity: Number(options.params.eccentricity),
+				area: Number(options.params.area),
+				tile: Number(options.params.tile) || 640,
+				intensityMin: Number(
+					options.params.intensityMin != null
+						? options.params.intensityMin
+						: options.params.intensity_min,
+				),
+				model: options.params.model || "",
+				multichannel: !!options.params.multichannel,
+			}
+		: parseDetectParams(form);
+	if (!isFinite(params.intensityMin) || params.intensityMin < 0) {
+		params.intensityMin = 0;
+	}
 	var sortedStems = listInputSliceStems(form.indir.value);
 	if (project.isActive() && !sortedStems.length) {
 		return { error: "No slices to process (input folder has no images)." };
@@ -166,6 +183,7 @@ function buildRunPayload(options) {
 		subsetCount: sortedStems.length,
 		inputDatasetRel: inputDatasetRel,
 		modelBranch: modelBranch,
+		mixed: !!options.mixed,
 	});
 	var useFlat = form.flatOutput && form.flatOutput.checked;
 	var finalOut = pipelineRuns.resolveStepOutputPath("detect", {
@@ -205,20 +223,26 @@ function buildRunPayload(options) {
 		useFlat: useFlat,
 		perSliceQc: !!(form.perSliceQc && form.perSliceQc.checked),
 		detectionMethod: detectionMethod,
-		ipcArgs: [
-			form.indir.value,
-			finalOut,
-			params.confidence,
-			params.tile,
-			params.model,
-			params.multichannel,
-			detectionMethod,
-			params.area,
-			params.eccentricity,
-			plan.sliceListPath || "",
-			!!(form.perSliceQc && form.perSliceQc.checked),
-			params.intensityMin,
-		],
+		ipcArgs: (function () {
+			var args = [
+				form.indir.value,
+				finalOut,
+				params.confidence,
+				params.tile,
+				params.model,
+				params.multichannel,
+				detectionMethod,
+				params.area,
+				params.eccentricity,
+				plan.sliceListPath || "",
+				!!(form.perSliceQc && form.perSliceQc.checked),
+				params.intensityMin,
+			];
+			if (options.sliceParamsPath) {
+				args.push(options.sliceParamsPath);
+			}
+			return args;
+		})(),
 	};
 }
 

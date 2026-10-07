@@ -1043,6 +1043,40 @@ function recordDetectQcScout(
       if (sug.intensity_min != null) {
         suggestions.intensity_min = Number(sug.intensity_min);
       }
+      const perSlice =
+        summary.analysis &&
+        (summary.analysis as { per_slice?: Record<string, unknown> }).per_slice;
+      const scoutOnly =
+        _plan.steps.length === 1 && _plan.steps[0] === "detect_qc";
+      if (scoutOnly && perSlice && typeof perSlice === "object") {
+        const detectParams = require("./js/detect_params") as {
+          readStore: (projectData: ProjectJsonShape) => {
+            sections: Record<string, unknown>;
+            averages: unknown;
+            suggestions: Record<string, unknown>;
+          };
+          mergeIntensitySuggestions: (
+            store: unknown,
+            perSlice: Record<string, unknown>,
+          ) => {
+            sections: Record<string, unknown>;
+            averages: unknown;
+            suggestions: Record<string, unknown>;
+          };
+        };
+        const merged = detectParams.mergeIntensitySuggestions(
+          detectParams.readStore(projectData),
+          perSlice,
+        );
+        if (!projectData.settings) {
+          projectData.settings = {};
+        }
+        projectData.settings.detection_params = {
+          sections: merged.sections,
+          averages: merged.averages,
+          suggestions: merged.suggestions,
+        };
+      }
     } catch (_err) {
       /* ignore */
     }

@@ -9,6 +9,7 @@ var activeRunControls = require("./active_run_controls");
 var dialogs = require("./dialogs");
 var importHandoff = require("./import_handoff");
 var geometryState = require("./geometry_state");
+var imageOps = require("./image_operations");
 
 var ROLE_DISPLAY_LABELS = {
 	max: "Max projection",
@@ -109,7 +110,25 @@ function renderStepFailures() {
 	section.classList.remove("d-none");
 }
 
-function appendReadOnlyImportRow(container, label, detail) {
+function fillOperationDetail(detailCol, detail, notes) {
+	detailCol.textContent = "";
+	if (detail) {
+		detailCol.appendChild(document.createTextNode(detail));
+	}
+	(notes || []).forEach(function (note) {
+		if (detailCol.childNodes.length) {
+			detailCol.appendChild(document.createTextNode(" · "));
+		}
+		var span = document.createElement("span");
+		if (note.deprecated) {
+			span.className = "text-danger";
+		}
+		span.textContent = note.text;
+		detailCol.appendChild(span);
+	});
+}
+
+function appendReadOnlyImportRow(container, label, detail, notes) {
 	var row = document.createElement("div");
 	row.className = "row align-items-center mb-2";
 	var labelCol = document.createElement("div");
@@ -117,43 +136,84 @@ function appendReadOnlyImportRow(container, label, detail) {
 	labelCol.textContent = label;
 	var detailCol = document.createElement("div");
 	detailCol.className = "col text-start small text-muted";
-	detailCol.textContent = detail;
+	fillOperationDetail(detailCol, detail, notes);
 	row.appendChild(labelCol);
 	row.appendChild(detailCol);
 	container.appendChild(row);
 }
 
-function renderImportInputRows(container, bundleRoot, proj) {
+function renderMaxOperationNote(container, ledger, rel) {
+	var notes = imageOps.notesFor(ledger, imageOps.maxKeyForRel(rel));
+	var row = document.createElement("div");
+	row.className = "row mb-2";
+	var spacer = document.createElement("div");
+	spacer.className = "col-4 col-sm-3";
+	var detailCol = document.createElement("div");
+	detailCol.className = "col text-start small text-muted image-op-note";
+	detailCol.dataset.role = "max";
+	fillOperationDetail(detailCol, "", notes);
+	if (!notes.length) {
+		row.classList.add("d-none");
+	}
+	row.appendChild(spacer);
+	row.appendChild(detailCol);
+	container.appendChild(row);
+	return row;
+}
+
+function refreshMaxOperationNote(row, ledger, rel) {
+	if (!row) {
+		return;
+	}
+	var detailCol = row.querySelector(".image-op-note");
+	var notes = imageOps.notesFor(ledger, imageOps.maxKeyForRel(rel));
+	fillOperationDetail(detailCol, "", notes);
+	row.classList.toggle("d-none", notes.length === 0);
+}
+
+function renderImportInputRows(container, bundleRoot, proj, ledger) {
+	var dapiNotes = imageOps.notesFor(ledger, "dapi");
+	var previewNotes = imageOps.notesFor(ledger, "previews");
+	var showedDapi = false;
+	var showedPreviews = false;
 	var czi = proj.settings && proj.settings.czi_import;
-	if (!czi) {
-		return;
+	if (czi) {
+		var handoff = importHandoff.getImportHandoffState(bundleRoot, proj);
+		if (handoff.fromCziImport && handoff.dapiCount > 0) {
+			var sub = document.createElement("h3");
+			sub.className = "h6 text-muted mb-2 mt-3";
+			sub.textContent = "From CZI import";
+			container.appendChild(sub);
+			appendReadOnlyImportRow(
+				container,
+				"Counterstain (DAPI)",
+				handoff.dapiCount + " PNG preview(s) in 00_dapi",
+				dapiNotes,
+			);
+			showedDapi = true;
+			if (handoff.previewCount > 0) {
+				appendReadOnlyImportRow(
+					container,
+					"Orient previews",
+					handoff.previewCount + " PNG preview(s) in _previews",
+					previewNotes,
+				);
+				showedPreviews = true;
+			}
+			if (handoff.geometryAppliedAt) {
+				appendReadOnlyImportRow(
+					container,
+					"Orient applied",
+					handoff.geometryAppliedAt,
+				);
+			}
+		}
 	}
-	var handoff = importHandoff.getImportHandoffState(bundleRoot, proj);
-	if (!handoff.fromCziImport || handoff.dapiCount === 0) {
-		return;
+	if (!showedDapi && dapiNotes.length) {
+		appendReadOnlyImportRow(container, "Counterstain (DAPI)", "00_dapi", dapiNotes);
 	}
-	var sub = document.createElement("h3");
-	sub.className = "h6 text-muted mb-2 mt-3";
-	sub.textContent = "From CZI import";
-	container.appendChild(sub);
-	appendReadOnlyImportRow(
-		container,
-		"Counterstain (DAPI)",
-		handoff.dapiCount + " PNG preview(s) in 00_dapi",
-	);
-	if (handoff.previewCount > 0) {
-		appendReadOnlyImportRow(
-			container,
-			"Orient previews",
-			handoff.previewCount + " PNG preview(s) in _previews",
-		);
-	}
-	if (handoff.geometryAppliedAt) {
-		appendReadOnlyImportRow(
-			container,
-			"Orient applied",
-			handoff.geometryAppliedAt,
-		);
+	if (!showedPreviews && previewNotes.length) {
+		appendReadOnlyImportRow(container, "Orient previews", "_previews", previewNotes);
 	}
 }
 
@@ -265,6 +325,14 @@ function bindActiveRunControls(containerId) {
 
 	var bundleRoot = project.getBundleRoot();
 	var proj = project.getProject();
+	var ledger = imageOps.displayLedger(bundleRoot);
+	if (imageOps.hasDeprecated(ledger)) {
+		var warn = document.createElement("p");
+		warn.className = "small text-danger mb-2";
+		warn.id = "deprecatedToolWarning";
+		warn.textContent = imageOps.DEPRECATED_WARNING;
+		container.appendChild(warn);
+	}
 	var hasRows = false;
 
 	for (var i = 0; i < pipelineRuns.OUTPUT_ROLES.length; i++) {
@@ -315,8 +383,19 @@ function bindActiveRunControls(containerId) {
 				}
 				select.appendChild(opt);
 			}
+			var maxNote = null;
+			if (role === "max") {
+				maxNote = renderMaxOperationNote(
+					container,
+					ledger,
+					hasActive ? active : "",
+				);
+			}
 			select.addEventListener("change", function () {
 				project.setActiveRunForRole(role, select.value);
+				if (role === "max") {
+					refreshMaxOperationNote(maxNote, ledger, select.value);
+				}
 				project.refreshProjectIndex().catch(function () {});
 			});
 			selectCol.appendChild(select);
@@ -335,12 +414,16 @@ function bindActiveRunControls(containerId) {
 			row.appendChild(labelCol);
 			row.appendChild(selectCol);
 			container.appendChild(row);
+			if (maxNote) {
+				container.appendChild(maxNote);
+			}
 		})(pipelineRuns.OUTPUT_ROLES[i]);
 	}
 
-	renderImportInputRows(container, bundleRoot, proj);
+	renderImportInputRows(container, bundleRoot, proj, ledger);
 	renderBasicCompletedRows(container, bundleRoot, proj);
 	renderDetectQcScoutRow(container, bundleRoot, proj);
+	var hasDetectionParams = renderDetectionParamsRow(container, proj);
 	if (!hasRows && !(proj.settings && proj.settings.czi_import)) {
 		var hasQc =
 			proj.processing &&
@@ -351,10 +434,33 @@ function bindActiveRunControls(containerId) {
 			fs.existsSync(
 				require("path").join(bundleRoot, "data", "counting", "00_dapi_basic"),
 			);
-		if (!hasQc && !hasBasic) {
+		if (!hasQc && !hasBasic && !hasDetectionParams && !imageOps.hasAnyOps(ledger)) {
 			container.classList.add("d-none");
 		}
 	}
+}
+
+function renderDetectionParamsRow(container, proj) {
+	var detectParams = require("./detect_params");
+	var summary = detectParams.completedTasksSummary(detectParams.readStore(proj));
+	if (!summary) {
+		return false;
+	}
+	var row = document.createElement("div");
+	row.className = "row align-items-center mb-2";
+	var labelCol = document.createElement("div");
+	labelCol.className = "col-4 col-sm-3 text-start small";
+	labelCol.textContent = "Detection parameters";
+	var selectCol = document.createElement("div");
+	selectCol.className = "col d-flex align-items-center";
+	var status = document.createElement("span");
+	status.className = "small text-success";
+	status.textContent = summary;
+	selectCol.appendChild(status);
+	row.appendChild(labelCol);
+	row.appendChild(selectCol);
+	container.appendChild(row);
+	return true;
 }
 
 function renderBasicCompletedRows(container, bundleRoot, proj) {

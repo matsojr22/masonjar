@@ -77,7 +77,10 @@ for (var h = 0; h < menuHrefs.length; h++) {
 
 assert.strictEqual(legacyMode.getLegacyStatusForHref("./sharpen_wizard.html"), "blocked");
 assert.strictEqual(legacyMode.getLegacyStatusForHref("./max.html"), "full");
+assert.strictEqual(legacyMode.getLegacyStatusForHref("./detect_start.html"), "partial");
 assert.strictEqual(legacyMode.getLegacyStatusForHref("./detect_wizard.html"), "partial");
+assert.strictEqual(legacyMode.getLegacyStatusForHref("./detect_params_wizard.html"), "partial");
+assert.strictEqual(legacyMode.getLegacyStatusForHref("./detect_adjust_wizard.html"), "partial");
 
 assert.ok(
 	legacyMode.getLegacyPipelineCardSubtitle("preprocess").indexOf("Max") >= 0,

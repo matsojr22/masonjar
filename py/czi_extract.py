@@ -908,6 +908,7 @@ def main() -> int:
     czi_cache.clear()
 
     max_runs: dict[str, str] = dict(max_runs_existing)
+    refreshed_max_rels: list[str] = []
     primary_role = cfg.get("primary_signal_role") or prior_state.get("primary_signal_role") or ""
     skip_max = repair_mode == "previews" and max_runs_on_disk(bundle_root, max_runs)
     if skip_max:
@@ -924,6 +925,7 @@ def main() -> int:
                 continue
             n = refresh_max_slices_in_run(bundle_root, role_key, slice_ids, rel, cfg)
             if n:
+                refreshed_max_rels.append(rel)
                 emit_log(f"  refreshed {n} max TIFF(s) for {role_key} in {rel}")
     else:
         for role_key, slice_ids in extracted_by_role_key.items():
@@ -951,6 +953,14 @@ def main() -> int:
     if repair_mode:
         state["repair_mode"] = repair_mode
     write_import_state(bundle_root, state)
+
+    if repair_mode == "reextract":
+        from image_operations import record_replace, reextract_replace_keys
+
+        record_replace(
+            bundle_root,
+            keys=reextract_replace_keys(extracted_by_role_key, refreshed_max_rels),
+        )
 
     emit_result(
         {

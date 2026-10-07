@@ -444,6 +444,37 @@ function testResolveStepOutputPathMaxCziSibling() {
 	helpers.rmDir(bundle);
 }
 
+function testDiscoverDetectIgnoresScoutAndRawCache() {
+	var bundle = helpers.tmpDir("mj-disc-detect-cache-");
+	var roles = { predictions: "data/counting/05_predictions" };
+	var runDir = path.join(bundle, roles.predictions, "somata", "M528_c0p5");
+	var scoutDir = path.join(bundle, roles.predictions, "somata", "qc_scout", "scout1");
+	var hidden = path.join(bundle, roles.predictions, ".masonjar", "detect_param_raw");
+	fs.mkdirSync(runDir, { recursive: true });
+	fs.mkdirSync(scoutDir, { recursive: true });
+	fs.mkdirSync(hidden, { recursive: true });
+	fs.writeFileSync(path.join(runDir, "Predictions_M528_s001.pkl"), "x");
+	fs.writeFileSync(path.join(scoutDir, "Predictions_M528_s001.pkl"), "x");
+	fs.writeFileSync(path.join(scoutDir, "run_manifest.json"), "{}");
+	fs.writeFileSync(path.join(hidden, "M528_s001.json"), "{}");
+	fs.writeFileSync(path.join(hidden, "run_manifest.json"), "{}");
+	var runs = pipelineRuns.discoverOutputRuns(
+		path.join(bundle, roles.predictions),
+		"detect",
+		2,
+	);
+	var rels = runs.map(function (r) {
+		return r.rel;
+	});
+	assert.ok(rels.indexOf("somata/M528_c0p5") >= 0);
+	assert.ok(
+		rels.every(function (rel) {
+			return rel.indexOf("qc_scout") < 0 && rel.indexOf("detect_param_raw") < 0;
+		}),
+	);
+	helpers.rmDir(bundle);
+}
+
 function testDiscoverDetectRelParity() {
 	var bundle = helpers.tmpDir("mj-disc-detect-");
 	var roles = { predictions: "data/counting/05_predictions" };
@@ -506,6 +537,7 @@ var tests = [
 	testResolveStepOutputPathDetectUsesSignalBranch,
 	testResolveStepOutputPathDetectOverwrite,
 	testResolveStepOutputPathMaxCziSibling,
+	testDiscoverDetectIgnoresScoutAndRawCache,
 	testDiscoverDetectRelParity,
 	testActiveRunScoping,
 	testCollectRunDeleteTargetsDoubled,

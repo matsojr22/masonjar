@@ -125,7 +125,7 @@ Use this when you already have folders of scans, DAPI, max images, or annotation
 1. **Load project file** and choose `M528.masonjar`, or click the project under **Recent projects**.
 2. Click **Continue to tools**. The workspace title is **Pipeline**.
 3. The chip under the title shows which project is open.
-4. **Completed tasks** lists work Mason Jar has already recorded for this project (active runs).
+4. **Completed tasks** lists work Mason Jar has already recorded for this project (active runs). If a deprecated tool edited images in this project, a red line at the top of that list reads: Use of deprecated tools detected on this project. Potential for corrupted data is HIGH!
 5. **Alignment issues** lists sections that failed during alignment, when any exist.
 6. A geometry banner appears when orientation was interrupted. Follow its link rather than guessing which files were rotated.
 7. **Back to start** returns to the hub without closing the project. **Application log** opens the log from here as well.
@@ -164,7 +164,7 @@ Each tool reads a folder and writes the folder the next tool expects. In a bundl
 | `data/counting/00_dapi_basic/` | BaSiC shading (display copies only) | Your eyes. **Align still warps `00_dapi`, not this folder** |
 | `data/counting/01_slices/` | Align Sections (annotation `.pkl` files) | Viewer/Editor, Parcellation, Count Brain, Isolate Regions |
 | `data/counting/03_max/` | CZI import (signal max) and Max Projection. Sharpen, Top-hat, and BaSiC add sibling datasets here | Sharpen, Top-hat, BaSiC, Cell Detection, Isolate Regions |
-| `data/counting/05_predictions/` | Cell Detection (`Predictions_*.pkl` plus optional QC) | Count Brain |
+| `data/counting/05_predictions/` | Cell Detection (`Predictions_*.pkl` plus optional QC). Adjust detections can rewrite those pickles in place | Count Brain |
 | `data/counting/06_quantification/` | Count Brain (`count_results.csv` and related tables) | Collate Counts, and the Batch collate step |
 | `data/counting/07_pkls/` | Isolate Regions (ROI `.pkl`, optional `dapi_roi`) | Export dual-channel ROI TIFs |
 | `data/counting/08_dual/` | Dual-channel export (`*_dual.tif`) | ImageJ or your own figure tools |
@@ -787,7 +787,10 @@ If the section table is empty, Align has not written `01_slices` yet. If paint d
 
 ### What this tool does
 
-Finds cell bodies (or nuclei) in a flat signal image with a tiled detector, then shows QC charts and a suggested intensity cutoff.
+Finds cell bodies (or nuclei) in a flat signal image with a tiled detector. The first page asks whether you already know the cutoffs.
+
+- **Yes, I want to proceed with manually assigning the detection parameters.** Opens the detection wizard. One confidence, area, eccentricity, and intensity cutoff applies to every selected section.
+- **No, I would like to run tests and explore the detection parameters on this dataset.** Opens parameterization. Mason Jar detects one liberal section so you can move the sliders and save a line for that section. **Suggest intensity for every section** writes a scout under `qc_scout/` and stores an intensity suggestion per section. That scout is not the Cell detection run, and it does not replace lines you already saved.
 
 ### Why it is in Mason Jar
 
@@ -798,12 +801,14 @@ Counts need coordinates. The bundled models were trained for fluorescent somata 
 - **Intensity dataset:** **Signal branch** and **Dataset** (plain max, sharpened, top-hat, or BaSiC). The **Input path** should be that folder of TIFFs.
 - **Output path:** `data/counting/05_predictions/` in a bundle.
 - **Detection model:** **Somata** or **Nuclei**.
-- Advanced (collapsed by default): **Tile size** `640`, **Confidence** `0.5`, **Area cutoff** `200`, **Eccentricity** `0.2`, **Intensity cutoff** `0` (off), optional **Custom model** path, and **Multichannel** when the TIFF is multi-channel.
-- Optional **Enable additional per-slice QC plots**.
+- On the manual wizard, advanced settings (collapsed by default): **Tile size** `640`, **Confidence** `0.5`, **Area cutoff** `200`, **Eccentricity** `0.2`, **Intensity cutoff** `0` (off), optional **Custom model** path, and **Multichannel** when the TIFF is multi-channel.
+- Optional **Enable additional per-slice QC plots** on the manual wizard.
 
 ### What it writes and what uses it next
 
-`Predictions_*.pkl` plus a QC package. Count Brain reads the prediction pickles. The summary's suggested cutoff is not applied until you choose to re-run.
+`Predictions_*.pkl` plus a QC package under the predictions run you just finished. Count Brain reads those pickles. A `qc_scout/` folder is only a suggestion pass. Do not count it.
+
+**Save and run detection** on the parameterization page can mix policies. **User defined per section + defaults where missing (suggested intensity)** uses a saved line on sections where you saved one, and the suggested intensity on the others. When sections used different intensity cutoffs, the QC summary’s pooled intensity line is not one cutoff to apply to every section.
 
 ### Before you start
 
@@ -811,23 +816,64 @@ Cell detection → **Cell Detection**. In legacy mode you must type paths; there
 
 ### Step-by-step
 
-1. Select the signal dataset. Confirm input and output paths.
-2. Choose **Somata** or **Nuclei**.
-3. Open **Advanced settings** only when you need to change tile, confidence, area, eccentricity, intensity, or a custom model.
-4. Click **Next — Process**. **Cancel** aborts.
-5. On **Summary**, read the QC gallery. **Use suggested intensity cutoff** returns you to the form with that cutoff filled in so you can process again.
-6. Click **Count Brain** when the predictions look right, or **Back to workspace**.
+1. Choose **Yes** to assign one set of parameters, or **No** to explore them, then **Proceed**.
+2. On the manual wizard, select the signal dataset and confirm input and output paths. Choose **Somata** or **Nuclei**. Open **Advanced settings** only when you need to change tile, confidence, area, eccentricity, intensity, or a custom model. Click **Next — Process**.
+3. On parameterization, wait for the liberal section, move the sliders, and **Save parameters for this section** when a section looks right. **Suggest intensity for every section** fills suggestions for the rest of the series without erasing saved lines. Pick a **Parameter selection**, then **Save and run detection**.
+4. **Cancel** aborts a run in progress.
+5. On **Summary**, read the QC gallery. On a single-cutoff run, **Use suggested intensity cutoff** returns you to the form with that cutoff filled in so you can process again. On a mixed run, do not copy the pooled intensity line onto every section.
+6. Open **Adjust detections** if a finished run needs section-by-section edits, or **Count Brain** when the predictions look right.
 
 ### Outputs
 
-Prediction `.pkl` files and QC figures under the predictions folder.
+Prediction `.pkl` files and QC figures under the predictions folder. Saved parameter lines stay on the project. Scout suggestions stay beside them and do not become the active Cell detection run.
 
 ### If something goes wrong
 
-- Too many dim spots: re-run with a higher intensity cutoff or confidence, or use the suggested cutoff from QC.
+- Too many dim spots: raise the intensity cutoff or confidence, use a saved line, or apply a per-section suggestion. A mixed run’s pooled intensity number is not a single cutoff for the whole brain.
 - **Index out of range** while counting later means the number of prediction files does not match the number of annotations. Detect every section you aligned, and do not mix two datasets in one predictions folder.
 - An empty dataset menu means max images are not indexed. Rescan the project or run Max Projection.
 - Detect QC in Batch is a different mode: it writes `qc_scout/` and does **not** write `Predictions_*.pkl`. Do not point Count at a scout folder.
+
+## Adjust detections
+
+### What this tool does
+
+Opens a finished cell-detection run and lets you change the cutoffs for one section at a time. It is in the Cell detection menu, above **Count Brain**. `qc_scout` is not listed as a detection run and must not be counted.
+
+### Why it is in Mason Jar
+
+A full detection run can leave a few sections too sensitive or too strict. This tool rewrites those sections without starting the detector over for the whole brain.
+
+### Expected inputs
+
+- A finished predictions run (a folder of `Predictions_*.pkl` files).
+- The sliders open on the confidence, area, eccentricity, and intensity cutoffs that section used.
+
+### What it writes and what uses it next
+
+**Save updates to PKL** rewrites that section’s predictions file and box image in place. The first save copies the originals into `adjust_backup/`. Count Brain then reads the updated pickles. **Use scout cutoff** and **Use this cutoff** only move the intensity slider. They do not save.
+
+### Before you start
+
+Finish **Cell Detection** first. **Suggest intensity for every section** is optional. If that scout stored one number for the whole brain and no per-section cutoff, the page says so.
+
+### Step-by-step
+
+1. Choose the detection run and a section.
+2. Read the QC scout suggestion and the cutoff calculated from the boxes in the file. **Use scout cutoff** or **Use this cutoff** moves the intensity slider. **Detect threshold** recalculates a cutoff from the boxes that pass the other sliders.
+3. **Load raw detections for this section** brings back boxes the original run dropped, when that liberal cache still exists.
+4. **Save updates to PKL** writes this section. Walk the other sections the same way.
+5. Open **Count Brain** when the series looks right.
+
+### Outputs
+
+Updated `Predictions_*.pkl` and `BBoxes_*.png` in the same predictions folder. The first save keeps the previous files under `adjust_backup/`.
+
+### If something goes wrong
+
+- The run menu is empty when no finished predictions folder exists. A `qc_scout` folder will not appear there.
+- If the scout line names the whole brain, that number is not a separate cutoff for the section on screen.
+- Saving again overwrites the section you are viewing. The backup folder is written only the first time.
 
 ## Count Brain
 

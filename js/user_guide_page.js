@@ -191,6 +191,7 @@ function buildContents(root) {
 		return;
 	}
 	var nav = document.createElement("nav");
+	nav.id = "guide-toc";
 	nav.className = "user-guide-toc mb-4";
 	nav.setAttribute("aria-label", "Contents");
 	var title = document.createElement("h2");
@@ -234,6 +235,17 @@ function showGuide() {
 	}
 	root.innerHTML = renderMarkdown(markdown);
 	buildContents(root);
+	var contents = document.getElementById("guideContents");
+	if (contents) {
+		contents.addEventListener("click", function (event) {
+			var toc = document.getElementById("guide-toc");
+			if (!toc) {
+				return;
+			}
+			event.preventDefault();
+			toc.scrollIntoView({ block: "start" });
+		});
+	}
 }
 
 if (typeof document !== "undefined") {

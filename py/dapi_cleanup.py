@@ -212,6 +212,7 @@ def main() -> None:
     in_place = input_path.resolve() == output_path.resolve()
     print(f"{len(input_files)}", flush=True)
 
+    succeeded = []
     for file_path in input_files:
         try:
             process_file(
@@ -225,8 +226,14 @@ def main() -> None:
                 saturation_pct=float(args.saturation),
                 use_clahe=bool(args.clahe),
             )
+            succeeded.append(file_path)
         except Exception as exc:
             print(f"Failed to process {file_path.name}. Error: {exc}", flush=True)
+
+    if in_place and succeeded:
+        from image_operations import record_dapi_inplace
+
+        record_dapi_inplace(input_path, succeeded)
 
     print("Done!", flush=True)
 

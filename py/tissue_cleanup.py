@@ -562,6 +562,9 @@ def run_apply(args) -> int:
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
+    from image_operations import record_tissue_cleanup
+
+    record_tissue_cleanup(bundle_root, result)
     emit_result(result)
     print("Done!", flush=True)
     return 0 if result.get("ok") else 1

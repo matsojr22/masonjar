@@ -16,6 +16,7 @@ if str(_PY_DIR) not in sys.path:
 from detect_qc import (
     DetectQcCollector,
     LEGACY_RUN_QC_FILES,
+    QcMetricLists,
     RUN_QC_FILES,
     bbox_area,
     bbox_intensity_p90,
@@ -29,6 +30,7 @@ from detect_qc_analysis import (
     estimate_intensity_threshold,
     filter_objects_by_intensity,
     suggest_detection_params,
+    suggest_intensity_by_slice,
     DetectionRecord,
 )
 
@@ -226,3 +228,49 @@ def test_write_run_histograms_includes_analysis(tmp_path: Path):
     assert "summary_lines" in summary["analysis"]
     sug = summary["analysis"].get("suggestions") or {}
     assert set(sug.keys()) <= {"intensity_min"}
+    assert "per_slice" in summary["analysis"]
+    assert "M528_s001" in summary["analysis"]["per_slice"]
+
+
+def test_suggest_intensity_by_slice_skips_thin_and_unimodal():
+    collector = DetectQcCollector()
+    thin = QcMetricLists()
+    thin.intensity = [40.0] * 10
+    collector.slices["thin"] = thin
+    rng = np.random.default_rng(3)
+    uni = QcMetricLists()
+    uni.intensity = rng.normal(100, 5, 40).tolist()
+    collector.slices["uni"] = uni
+    both = QcMetricLists()
+    both.intensity = np.clip(
+        np.concatenate([rng.normal(35, 4, 80), rng.normal(120, 8, 80)]),
+        0,
+        255,
+    ).tolist()
+    collector.slices["both"] = both
+    out = suggest_intensity_by_slice(collector)
+    assert out["thin"]["intensity_min"] is None
+    assert out["thin"]["reason"] == "too_few_detections"
+    assert out["uni"]["bimodal"] is False
+    assert out["uni"]["intensity_min"] is None
+    assert out["both"]["intensity_min"] is not None
+
+
+def test_mixed_summary_does_not_reapply_pooled_cutoff():
+    collector = DetectQcCollector()
+    metrics = QcMetricLists()
+    metrics.confidence = [0.8] * 5
+    metrics.area = [300.0] * 5
+    metrics.intensity = [40.0] * 5
+    collector.slices["M1_s001"] = metrics
+    collector.run = metrics
+    analysis = analyze_detection_qc(
+        collector,
+        {"confidence": 0.5, "area_px2": 200, "eccentricity": 0.2, "intensity_min": 0},
+        mixed=True,
+    )
+    text = "\n".join(analysis["summary_lines"])
+    assert "not a single threshold to apply again" in text
+    assert "Re-run with this intensity cutoff" not in text
+    assert analysis["mixed"] is True
+    assert "M1_s001" in analysis["per_slice"]

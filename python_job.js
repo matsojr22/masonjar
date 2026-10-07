@@ -122,6 +122,8 @@ exports.WORKER_ALLOWLIST = new Set([
     "count.py",
     "collate.py",
     "find_neurons.py",
+    "detect_param_raw.py",
+    "detect_adjust.py",
     "export_roi_dual_tif.py",
     "apply_parcellation.py",
     "dapi_cleanup.py",

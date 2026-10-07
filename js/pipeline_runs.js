@@ -240,18 +240,6 @@ function buildDetectRunSlug(options) {
 	var t = options.tile;
 	var a = options.area;
 	var e = options.eccentricity;
-	var params =
-		"c" +
-		decToken(c) +
-		"_t" +
-		String(Math.round(t)) +
-		"_a" +
-		String(Math.round(a)) +
-		"_e" +
-		decToken(e);
-	if (options.intensityMin && Number(options.intensityMin) > 0) {
-		params += "_i" + decToken(Number(options.intensityMin));
-	}
 	var span = sliceSpanToken(options.sortedStems || []);
 	var subset = "";
 	if (options.subsetCount && options.subsetCount > 0) {
@@ -269,6 +257,29 @@ function buildDetectRunSlug(options) {
 	var modelTok = "";
 	if (options.modelBranch && options.modelBranch !== "somata") {
 		modelTok = "_m_" + sanitizeSlugPart(options.modelBranch);
+	}
+	if (options.mixed) {
+		return sanitizeSlugPart(
+			span +
+				"_t" +
+				String(Math.round(t || 640)) +
+				"_params_mixed" +
+				inputToken +
+				modelTok +
+				subset,
+		);
+	}
+	var params =
+		"c" +
+		decToken(c) +
+		"_t" +
+		String(Math.round(t)) +
+		"_a" +
+		String(Math.round(a)) +
+		"_e" +
+		decToken(e);
+	if (options.intensityMin && Number(options.intensityMin) > 0) {
+		params += "_i" + decToken(Number(options.intensityMin));
 	}
 	return sanitizeSlugPart(span + "_" + params + inputToken + modelTok + subset);
 }

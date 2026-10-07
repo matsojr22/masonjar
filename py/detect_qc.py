@@ -305,6 +305,7 @@ def _plot_histogram_with_intensity_dots(
     threshold_label: str | None = None,
     xlim: tuple[float, float] | None = None,
     intensity_threshold_line: float | None = None,
+    intensity_line_label: str | None = None,
 ) -> None:
     raw_x = getattr(raw, x_key)
     final_x = getattr(final, x_key)
@@ -370,7 +371,7 @@ def _plot_histogram_with_intensity_dots(
             color="#fd7e14",
             linestyle=":",
             linewidth=1.5,
-            label=f"Intensity split ≈ {intensity_threshold_line:g}",
+            label=intensity_line_label or f"Intensity split ≈ {intensity_threshold_line:g}",
         )
     _scatter_intensity_dots(
         ax2,
@@ -410,7 +411,9 @@ def _plot_eccentricity_with_intensity_dots(
     pre_ecc_records: list[tuple[float, float]],
     *,
     threshold: float | None = None,
+    threshold_label: str | None = None,
     intensity_threshold_line: float | None = None,
+    intensity_line_label: str | None = None,
 ) -> None:
     ecc_values = [float(e) for e, _ in pre_ecc_records]
     intensities = [float(i) for _, i in pre_ecc_records]
@@ -446,7 +449,7 @@ def _plot_eccentricity_with_intensity_dots(
             color="#dc3545",
             linestyle="--",
             linewidth=1.5,
-            label=f"Eccentricity cutoff = {threshold:g}",
+            label=threshold_label or f"Eccentricity cutoff = {threshold:g}",
         )
 
     ax.set_title("Eccentricity (post-area filter)")
@@ -463,7 +466,7 @@ def _plot_eccentricity_with_intensity_dots(
             color="#fd7e14",
             linestyle=":",
             linewidth=1.5,
-            label=f"Intensity split ≈ {intensity_threshold_line:g}",
+            label=intensity_line_label or f"Intensity split ≈ {intensity_threshold_line:g}",
         )
     _scatter_intensity_dots(
         ax2,
@@ -486,11 +489,28 @@ def _plot_eccentricity_with_intensity_dots(
     plt.close(fig)
 
 
+def _cutoff_caption(name: str, value, unit: str, mixed: bool) -> str:
+    shown = value if value is not None else ""
+    if mixed:
+        return f"Run default {name} = {shown}{unit} (sections may differ)"
+    return f"{name[0].upper()}{name[1:]} cutoff = {shown}{unit}"
+
+
+def _intensity_line_caption(value, mixed: bool) -> str | None:
+    if value is None:
+        return None
+    if mixed:
+        return f"Pooled intensity split ≈ {value:g} (not a cutoff to re-apply)"
+    return None
+
+
 def write_slice_histograms(
     collector: DetectQcCollector,
     slice_id: str,
     output_dir: Path,
     thresholds: dict[str, float],
+    *,
+    mixed: bool = False,
 ) -> list[str]:
     output_dir = Path(output_dir)
     slice_dir = output_dir / SLICES_DIR / slice_id
@@ -513,7 +533,7 @@ def write_slice_histograms(
         final,
         x_key="confidence",
         threshold=thresholds.get("confidence"),
-        threshold_label=f"Confidence cutoff = {thresholds.get('confidence')}",
+        threshold_label=_cutoff_caption("confidence", thresholds.get("confidence"), "", mixed),
         xlim=(0, 1),
     )
     _plot_histogram_with_intensity_dots(
@@ -524,12 +544,15 @@ def write_slice_histograms(
         final,
         x_key="area",
         threshold=thresholds.get("area_px2"),
-        threshold_label=f"Area cutoff = {thresholds.get('area_px2')} px²",
+        threshold_label=_cutoff_caption("area", thresholds.get("area_px2"), " px²", mixed),
     )
     _plot_eccentricity_with_intensity_dots(
         slice_dir / files[2],
         pre_ecc_records,
         threshold=thresholds.get("eccentricity"),
+        threshold_label=_cutoff_caption(
+            "eccentricity", thresholds.get("eccentricity"), "", mixed
+        ),
     )
     return [f"{SLICES_DIR}/{slice_id}/{name}" for name in files]
 
@@ -540,14 +563,16 @@ def write_run_histograms(
     thresholds: dict[str, float],
     *,
     per_slice_enabled: bool = False,
+    mixed: bool = False,
 ) -> dict[str, Any]:
     output_dir = Path(output_dir)
     run_files = []
 
     from detect_qc_analysis import analyze_detection_qc
 
-    analysis = analyze_detection_qc(collector, thresholds)
+    analysis = analyze_detection_qc(collector, thresholds, mixed=mixed)
     intensity_line = analysis.get("intensity_threshold_estimate")
+    intensity_caption = _intensity_line_caption(intensity_line, mixed)
 
     confidence_path = output_dir / RUN_QC_FILES[0]
     _plot_histogram_with_intensity_dots(
@@ -558,9 +583,10 @@ def write_run_histograms(
         collector.run,
         x_key="confidence",
         threshold=thresholds.get("confidence"),
-        threshold_label=f"Confidence cutoff = {thresholds.get('confidence')}",
+        threshold_label=_cutoff_caption("confidence", thresholds.get("confidence"), "", mixed),
         xlim=(0, 1),
         intensity_threshold_line=intensity_line,
+        intensity_line_label=intensity_caption,
     )
     run_files.append(RUN_QC_FILES[0])
 
@@ -573,8 +599,9 @@ def write_run_histograms(
         collector.run,
         x_key="area",
         threshold=thresholds.get("area_px2"),
-        threshold_label=f"Area cutoff = {thresholds.get('area_px2')} px²",
+        threshold_label=_cutoff_caption("area", thresholds.get("area_px2"), " px²", mixed),
         intensity_threshold_line=intensity_line,
+        intensity_line_label=intensity_caption,
     )
     run_files.append(RUN_QC_FILES[1])
 
@@ -583,7 +610,11 @@ def write_run_histograms(
         ecc_path,
         collector.pre_ecc_records,
         threshold=thresholds.get("eccentricity"),
+        threshold_label=_cutoff_caption(
+            "eccentricity", thresholds.get("eccentricity"), "", mixed
+        ),
         intensity_threshold_line=intensity_line,
+        intensity_line_label=intensity_caption,
     )
     run_files.append(RUN_QC_FILES[2])
 
@@ -591,7 +622,7 @@ def write_run_histograms(
     if per_slice_enabled:
         for slice_id in sorted(set(collector.slices.keys()) | set(collector.raw_slices.keys())):
             slice_files[slice_id] = write_slice_histograms(
-                collector, slice_id, output_dir, thresholds
+                collector, slice_id, output_dir, thresholds, mixed=mixed
             )
 
     summary = build_summary_payload(

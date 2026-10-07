@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="../css/style.css" />
+    <link
+      rel="stylesheet"
+      href="../node_modules/@fortawesome/fontawesome-free/css/all.css"
+    />
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC"
+      crossorigin="anonymous"
+    />
+    <link rel="stylesheet" href="../css/theme.css" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net/; font-src 'self' https://fonts.gstatic.com; img-src 'self' file: data:;"
+    />
+    <title>Detection parameterization — Mason Jar</title>
+  </head>
+  <body class="wizard-page">
+    <div class="container py-4 workspace-block text-start">
+      <h1>Detection parameterization</h1>
+      <p class="text-muted">
+        Run a liberal detection on one section, then slide the cutoffs and watch the boxes update.
+        Save a line per section, then run cell detection with those parameters.
+      </p>
+
+      <ul class="nav nav-pills mb-3" id="wizardSteps">
+        <li class="nav-item"><span class="nav-link active" data-step="1">1. Explore</span></li>
+        <li class="nav-item"><span class="nav-link disabled" data-step="2">2. Run</span></li>
+        <li class="nav-item"><span class="nav-link disabled" data-step="3">3. Summary</span></li>
+      </ul>
+
+      <div id="step1">
+        <div class="row g-3">
+          <div class="col-md-4">
+            <div class="mb-2">
+              <label class="form-label" for="signalBranchSelect">Signal branch</label>
+              <select id="signalBranchSelect" class="form-select"></select>
+            </div>
+            <div class="mb-2">
+              <label class="form-label" for="sourceDatasetSelect">Source dataset</label>
+              <select id="sourceDatasetSelect" class="form-select"></select>
+            </div>
+            <div class="mb-2">
+              <label class="form-label" for="sliceSelect">Section</label>
+              <select id="sliceSelect" class="form-select"></select>
+            </div>
+            <div class="mb-2">
+              <label class="form-label" for="methodSelect">Model</label>
+              <select id="methodSelect" class="form-select">
+                <option value="somata" selected>Somata</option>
+                <option value="nuclei">Nuclei</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+            <div class="mb-2 d-none" id="customModelRow">
+              <label class="form-label" for="customModel">Custom model (.pt)</label>
+              <div class="input-group input-group-sm">
+                <input type="text" class="form-control" id="customModel" />
+                <button type="button" class="btn btn-outline-secondary" id="browseCustomModel">Browse</button>
+              </div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label" for="tileSize">Tile size</label>
+              <input type="number" class="form-control" id="tileSize" min="32" step="32" value="640" />
+            </div>
+            <button type="button" class="btn btn-outline-primary mb-3" id="runRawDetection">
+              Run raw detection
+            </button>
+
+            <div class="mb-2">
+              <label class="form-label" for="confidenceSlider">
+                Confidence <span id="confidenceValue">0.50</span>
+              </label>
+              <input type="range" class="form-range" id="confidenceSlider" min="0.05" max="0.99" step="0.01" value="0.5" />
+            </div>
+            <div class="mb-2">
+              <label class="form-label" for="areaSlider">
+                Area cutoff <span id="areaValue">200</span>
+              </label>
+              <input type="range" class="form-range" id="areaSlider" min="0" max="2000" step="1" value="200" />
+            </div>
+            <div class="mb-2">
+              <label class="form-label" for="eccentricitySlider">
+                Eccentricity <span id="eccentricityValue">0.20</span>
+              </label>
+              <input type="range" class="form-range" id="eccentricitySlider" min="0" max="1" step="0.01" value="0.2" />
+            </div>
+            <div class="mb-2">
+              <label class="form-label" for="intensitySlider">
+                Intensity cutoff <span id="intensityValue">0</span>
+              </label>
+              <input type="range" class="form-range" id="intensitySlider" min="0" max="255" step="1" value="0" />
+            </div>
+            <p id="boxCount" class="small text-muted">No raw detections yet.</p>
+            <div class="d-flex flex-wrap gap-2 mb-2">
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="setDefaults">Set to defaults</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="detectThreshold">Detect threshold</button>
+            </div>
+          </div>
+          <div class="col-md-8">
+            <div id="preprocessPreviewViewport" class="preprocess-preview-pane detect-params-viewport border rounded">
+              <div id="preprocessPreviewTransform" class="preprocess-preview-transform">
+                <img id="preprocessPreviewImg" alt="section preview" draggable="false" />
+                <svg id="preprocessPreviewOverlay" aria-hidden="true"></svg>
+              </div>
+            </div>
+            <p id="preprocessPreviewStatus" class="small text-muted mt-2">
+              Choose a section, then run raw detection. Drag to pan and scroll to zoom.
+            </p>
+          </div>
+        </div>
+
+        <div class="mt-3" id="rawDetectBar">
+          <div class="progress detect-params-progress mb-2">
+            <div
+              id="rawDetectProgress"
+              class="progress-bar progress-bar-striped progress-bar-animated"
+              role="progressbar"
+              aria-valuenow="0"
+              aria-valuemin="0"
+              aria-valuemax="100"
+            ></div>
+          </div>
+          <p id="rawDetectProgressText" class="small text-muted mb-2"></p>
+          <button type="button" class="btn btn-outline-danger d-none" id="rawDetectCancel">Cancel</button>
+        </div>
+
+        <button type="button" class="btn btn-outline-primary mt-3" id="suggestIntensity">
+          Suggest intensity for every section
+        </button>
+        <div id="paramBanner" class="border rounded p-2 mt-3 small" aria-live="polite"></div>
+        <div class="d-flex flex-wrap gap-2 mt-2">
+          <button type="button" class="btn btn-outline-primary" id="saveSectionParams">
+            Save parameters for this section
+          </button>
+          <button type="button" class="btn btn-outline-primary" id="calcAverages">
+            Calculate averages of saved parameters
+          </button>
+        </div>
+        <div class="mt-2 mb-2">
+          <label class="form-label" for="paramPolicy">Parameter selection</label>
+          <select id="paramPolicy" class="form-select"></select>
+        </div>
+        <a class="btn btn-outline-secondary" id="step1Back" href="./detect_start.html">Back</a>
+        <button type="button" class="btn btn-primary ms-2" id="saveAndRun">Save and run detection</button>
+      </div>
+
+      <div id="step2" class="d-none">
+        <p id="processMessage" class="text-muted">Running cell detection…</p>
+        <div class="progress detect-params-progress mb-3">
+          <div
+            id="processProgress"
+            class="progress-bar progress-bar-striped progress-bar-animated"
+            role="progressbar"
+            aria-valuenow="0"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          ></div>
+        </div>
+        <pre id="wizardLog" class="wizard-log small text-muted mb-3"></pre>
+        <button type="button" class="btn btn-outline-secondary" id="step2Back">Back</button>
+        <button type="button" class="btn btn-outline-danger d-none" id="step2Cancel">Cancel</button>
+      </div>
+
+      <div id="step3" class="d-none">
+        <div id="summaryAlert" class="alert text-start"></div>
+        <div id="qcGallery" class="detect-qc-gallery mb-3"></div>
+        <div id="qcAnalysisSummary" class="text-start mb-3"></div>
+        <button type="button" class="btn btn-outline-secondary" id="backToExplore">Back to explore</button>
+        <a class="btn btn-primary ms-2" id="backToWorkspace" href="./workspace_menu.html">Back to workspace</a>
+      </div>
+    </div>
+    <script src="../js/run.js" data-entry="detect_params_wizard.js"></script>
+  </body>
+</html>

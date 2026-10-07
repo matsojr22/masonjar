@@ -595,6 +595,27 @@ def run_repair_jobs(
     return changed, bytes_total, failed, total_files
 
 
+def _transform_paths_for_ledger(jobs: list[tuple[str, list, list[Path]]]) -> list[Path]:
+    paths: list[Path] = []
+    for _slice_id, _ops, targets in jobs:
+        paths.extend(targets)
+    return paths
+
+
+def _repair_paths_for_ledger(bundle_root: Path, cfg: dict) -> list[Path]:
+    from czi_common import dapi_preview_path, orient_dapi_preview_path
+
+    paths: list[Path] = []
+    for slice_id, _ops, tpath, strategy, branch in collect_repair_jobs(bundle_root, cfg):
+        paths.append(tpath)
+        rel = str(tpath).replace("\\", "/").lower()
+        is_dapi = branch == "dapi" or "/00_dapi/" in rel or rel.endswith("_dapi.png")
+        if strategy == "derivatives_from_original" and is_dapi and slice_id:
+            paths.append(dapi_preview_path(bundle_root, slice_id))
+            paths.append(orient_dapi_preview_path(bundle_root, slice_id))
+    return paths
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Apply geometry to CZI import outputs")
     parser.add_argument("-b", "--bundle", required=True)
@@ -634,7 +655,14 @@ def main() -> int:
             "repair_mode": "geometry",
         }
         write_last_result(bundle_root, {**result, "geometry_hash": geometry_hash, "config_fingerprint": config_fingerprint})
-        if result["ok"]:
+        if result["ok"] and changed:
+            from image_operations import record_geometry
+
+            record_geometry(
+                bundle_root,
+                _repair_paths_for_ledger(bundle_root, cfg),
+                apply_source,
+            )
             append_geometry_history(
                 bundle_root,
                 {
@@ -722,6 +750,10 @@ def main() -> int:
         bundle_root,
         {**result, "geometry_hash": geometry_hash, "config_fingerprint": config_fingerprint},
     )
+    if result["ok"] and changed:
+        from image_operations import record_geometry
+
+        record_geometry(bundle_root, _transform_paths_for_ledger(jobs), apply_source)
     if result["ok"]:
         clear_progress(bundle_root)
         append_geometry_history(

@@ -19,42 +19,18 @@
       content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net/; font-src 'self' https://fonts.gstatic.com;"
     />
     <title>User guide — Mason Jar</title>
-    <style>
-      .user-guide-body {
-        max-width: 52rem;
-      }
-      .user-guide-body h1 {
-        font-size: 1.75rem;
-      }
-      .user-guide-body h2 {
-        font-size: 1.35rem;
-        margin-top: 2rem;
-      }
-      .user-guide-body h3 {
-        font-size: 1.1rem;
-        margin-top: 1.25rem;
-      }
-      .user-guide-toc ol {
-        columns: 2;
-        padding-left: 1.2rem;
-      }
-      .user-guide-code {
-        white-space: pre-wrap;
-        background: var(--mj-surface-2, #f7f5ee);
-        border: 1px solid var(--mj-border, #ccc);
-        border-radius: 0.375rem;
-        padding: 0.75rem;
-        font-size: 0.85rem;
-      }
-    </style>
   </head>
-  <body>
+  <body class="guide-page">
+    <div class="guide-chrome">
+      <a class="btn btn-outline-primary btn-sm" href="#guide-toc" id="guideContents">Contents</a>
+      <a class="btn btn-primary btn-sm" href="./menu.html">Back to app</a>
+    </div>
     <div id="parent" class="container py-4">
       <div id="guide-root" class="user-guide-body text-start"></div>
       <p id="guide-error" class="text-danger d-none"></p>
       <div class="row mt-4">
-        <div class="col d-grid" style="max-width: 52rem">
-          <a role="button" class="btn btn-primary" href="./menu.html">Back</a>
+        <div class="col d-grid guide-exit">
+          <a role="button" class="btn btn-primary" href="./menu.html">Back to app</a>
         </div>
       </div>
     </div>

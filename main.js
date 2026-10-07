@@ -1167,6 +1167,11 @@ const PIPELINE_RUN_CHANNELS = new Set([
     "runTissueCleanupGuided",
     "runTissueCleanupApply",
     "runDetection",
+    "runDetectRaw",
+    "runDetectDisplayImage",
+    "runDetectIntensityEstimate",
+    "runDetectAdjustPreview",
+    "runDetectAdjustApply",
     "runCziProbe",
     "runCziImport",
     "runApplyGeometry",
@@ -2834,6 +2839,14 @@ ipcMain.on("runDetection", function (event, data) {
     if (data.length > 11 && Number(data[11]) > 0) {
         custom_args.push("--intensity-min", String(data[11]));
     }
+    if (data.length > 12 && String(data[12] || "").trim()) {
+        appendFlagPathArg(custom_args, "--slice-params", String(data[12]));
+    }
+    const qcOnly = data.length > 13 &&
+        (data[13] === true || data[13] === 1 || data[13] === "true");
+    if (qcOnly) {
+        custom_args.push("--qc-only");
+    }
     const { job, pyshell, releaseJob } = startPyJobShell("find_neurons.py", custom_args, "detect", "killDetect");
     var total = 0;
     var current = 0;
@@ -2846,7 +2859,26 @@ ipcMain.on("runDetection", function (event, data) {
         detectFinished = true;
         releaseJob();
         const pyFail = (0, python_job_1.describePythonShellFailure)(err, code, signal);
-        if (pyFail) {
+        if (qcOnly) {
+            if (pyFail) {
+                reportPythonFailure(pyFail);
+                event.sender.send("detectQcScoutResult", {
+                    ok: false,
+                    error: pyFail,
+                    outputAbs: String(data[1] || ""),
+                });
+            }
+            else {
+                console.log("The exit code was: " + code);
+                console.log("The exit signal was: " + signal);
+                event.sender.send("updateLoad", [100, "Intensity suggestions ready"]);
+                event.sender.send("detectQcScoutResult", {
+                    ok: true,
+                    outputAbs: String(data[1] || ""),
+                });
+            }
+        }
+        else if (pyFail) {
             reportPythonFailure(pyFail);
             event.sender.send("detectError", [pyFail]);
         }
@@ -2911,6 +2943,131 @@ ipcMain.on("runDetection", function (event, data) {
         }
         finishDetect(err, code, signal);
     });
+});
+function resolveDetectModelPath(method, customModel) {
+    const models = {
+        somata: "models/chaosdruid.pt",
+        nuclei: "models/ankou.pt",
+    };
+    const custom = String(customModel || "").trim();
+    if (method === "custom" && custom) {
+        return custom;
+    }
+    const rel = models[method] || models.somata;
+    return path.join(homeDir, rel);
+}
+function spawnLineResultScript(event, scriptName, args, resultChannel, killChannel, resultPrefix) {
+    const { job, pyshell } = startPyJobShell(scriptName, args, undefined, killChannel);
+    let sent = false;
+    let lastPct = 0;
+    function send(payload) {
+        if (sent) {
+            return;
+        }
+        sent = true;
+        event.sender.send(resultChannel, payload);
+    }
+    pyshell.on("message", (message) => {
+        const trimmed = String(message || "").trim();
+        if (!trimmed) {
+            return;
+        }
+        if (trimmed.startsWith("PROGRESS:")) {
+            const body = trimmed.slice("PROGRESS:".length);
+            const colon = body.indexOf(":");
+            if (colon >= 0) {
+                const pct = Number(body.slice(0, colon));
+                const text = body.slice(colon + 1) || "Working…";
+                if (!Number.isNaN(pct)) {
+                    lastPct = pct;
+                    event.sender.send("updateLoad", [pct, text]);
+                }
+            }
+            console.log(trimmed);
+            return;
+        }
+        if (trimmed.startsWith(resultPrefix)) {
+            try {
+                const parsed = JSON.parse(trimmed.slice(resultPrefix.length));
+                console.log(resultPrefix +
+                    " ok=" +
+                    String(parsed && parsed.ok) +
+                    " count=" +
+                    String(parsed && parsed.count) +
+                    " display=" +
+                    String(parsed && parsed.displayPath ? parsed.displayPath : ""));
+                send(parsed);
+            }
+            catch (err) {
+                console.warn(resultPrefix + " parse failed:", err);
+                send({ ok: false, error: "Could not read detection result" });
+            }
+            return;
+        }
+        if (trimmed.startsWith("LOG:")) {
+            queueLogLineForUi(trimmed);
+        }
+        console.log(trimmed);
+        event.sender.send("updateLoad", [lastPct, trimmed.slice(0, 180)]);
+    });
+    void job.end().then(({ err, code, signal }) => {
+        const pyFail = (0, python_job_1.describePythonShellFailure)(err, code, signal);
+        if (pyFail) {
+            reportPythonFailure(pyFail);
+            send({ ok: false, error: pyFail });
+        }
+        else if (!sent) {
+            send({ ok: false, error: "Detection finished without a result" });
+        }
+    });
+}
+ipcMain.on("runDetectRaw", function (event, data) {
+    const method = String(data[1] || "somata");
+    const custom = String(data[2] || "");
+    const modelPath = resolveDetectModelPath(method, custom);
+    const args = [];
+    appendFlagPathArg(args, "--image", String(data[0] || ""));
+    appendFlagPathArg(args, "--model", modelPath);
+    args.push("--method", method);
+    args.push("--custom-model", custom.trim());
+    args.push("--tile", String(data[3] || 640));
+    appendFlagPathArg(args, "--cache", String(data[4] || ""));
+    args.push("--slice-id", String(data[5] || ""));
+    event.sender.send("updateLoad", [0, "Launching raw detection…"]);
+    spawnLineResultScript(event, "detect_param_raw.py", args, "detectRawResult", "killDetectRaw", "RAW_DETECT_JSON:");
+});
+ipcMain.on("runDetectDisplayImage", function (event, data) {
+    const args = ["--write-display"];
+    appendFlagPathArg(args, "--image", String(data[0] || ""));
+    appendFlagPathArg(args, "--cache", String(data[1] || ""));
+    const maxSide = Number(data[2] || 0);
+    if (maxSide > 0) {
+        args.push("--max-side", String(Math.round(maxSide)));
+    }
+    spawnLineResultScript(event, "detect_param_raw.py", args, "detectDisplayImageResult", "killDetectDisplayImage", "RAW_DETECT_JSON:");
+});
+ipcMain.on("runDetectIntensityEstimate", function (event, data) {
+    var _a, _b, _c;
+    const args = ["--estimate"];
+    appendFlagPathArg(args, "--cache", String(data[0] || ""));
+    args.push("--confidence", String((_a = data[1]) !== null && _a !== void 0 ? _a : 0.5), "--area", String((_b = data[2]) !== null && _b !== void 0 ? _b : 200), "--eccentricity", String((_c = data[3]) !== null && _c !== void 0 ? _c : 0.2));
+    spawnJsonResultScript(event, "detect_param_raw.py", args, "detectIntensityEstimateResult", "killDetectIntensityEstimate");
+});
+ipcMain.on("runDetectAdjustPreview", function (event, data) {
+    const args = ["--preview"];
+    appendFlagPathArg(args, "--image", String(data[0] || ""));
+    appendFlagPathArg(args, "--pkl", String(data[1] || ""));
+    appendFlagPathArg(args, "--display", String(data[2] || ""));
+    const maxSide = Number(data[3] || 0);
+    if (maxSide > 0) {
+        args.push("--max-side", String(Math.round(maxSide)));
+    }
+    spawnLineResultScript(event, "detect_adjust.py", args, "detectAdjustPreviewResult", "killDetectAdjustPreview", "ADJUST_JSON:");
+});
+ipcMain.on("runDetectAdjustApply", function (event, data) {
+    const args = ["--apply"];
+    appendFlagPathArg(args, "--request", String(data[0] || ""));
+    spawnLineResultScript(event, "detect_adjust.py", args, "detectAdjustApplyResult", "killDetectAdjustApply", "ADJUST_JSON:");
 });
 function mapStartupProgressPct(startupPct) {
     return 3 + Math.round(Math.min(100, Math.max(0, startupPct)) * 0.15);
