@@ -110,8 +110,8 @@
           </label>
         </div>
         <p class="small text-muted mb-2">
-          When enabled, Update Now copies the whole install folder next to itself
-          (name ends with <code>.backup-&lt;oldVersion&gt;</code>) before replacing files.
+          When enabled, Update Now keeps the previous install folder next to itself
+          (name ends with <code>.backup-&lt;oldVersion&gt;</code>).
           Off by default — backups use a lot of disk.
         </p>
         <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
@@ -130,7 +130,7 @@
         <ul class="mb-0 ps-3">
           <li>On Windows, use <strong>Update Now</strong> to download and install in one step. macOS users can download the DMG from GitHub.</li>
           <li>Mason Jar must restart to finish installing. Finish or cancel long Python jobs first. Close other copies of Mason Jar first.</li>
-          <li>You can keep the app in any folder name (including Explorer’s versioned unzip folder). Updates replace files in place.</li>
+          <li>You can keep the app in any folder name (including Explorer’s versioned unzip folder). Updates replace files in that folder. A flagged version removes leftover application files the first time it opens, including when an older Mason Jar installed it. Settings, models, and projects stay in your Mason Jar home folder and project bundles.</li>
           <li>Installs on read-only or network paths may fail — use <strong>Open release page</strong> and install manually if needed.</li>
           <li>Pre-releases and version backups are off by default.</li>
         </ul>

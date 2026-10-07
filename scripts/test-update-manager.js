@@ -273,6 +273,11 @@ function testApplyScriptContent() {
 			"clears lock before relaunch",
 		);
 		assert(ps1.indexOf("$KeepBackup = $false") >= 0, "backup off by default");
+		assert(ps1.indexOf("$CleanInstall = $false") >= 0, "clean install off by default");
+		assert(
+			ps1.indexOf("$CleanInstall = $true") < 0,
+			"default script does not clean-replace",
+		);
 		assert(
 			ps1.indexOf("Skipping version backup") >= 0,
 			"skip backup log when off",
@@ -322,8 +327,111 @@ function testApplyScriptContent() {
 		const ps1b = fs.readFileSync(withBackup, "utf8");
 		assert(ps1b.indexOf("$KeepBackup = $true") >= 0, "backup on when requested");
 		assert(ps1b.indexOf("Backing up to") >= 0, "backup robocopy path");
+		assert(ps1b.indexOf("$CleanInstall = $false") >= 0, "backup script still merges");
+
+		const cleanScript = mgr.writeApplyScript(
+			installRoot,
+			staging,
+			"6.0.0",
+			"8.0.0",
+			false,
+			true,
+			0,
+			1,
+		);
+		const ps1c = fs.readFileSync(cleanScript, "utf8");
+		assert(ps1c.indexOf("$CleanInstall = $true") >= 0, "clean install flag on");
+		assert(ps1c.indexOf("$InstalledEpoch = 0") >= 0, "installed epoch 0");
+		assert(ps1c.indexOf("$StagedEpoch = 1") >= 0, "staged epoch 1");
+		assert(
+			ps1c.indexOf("replacing install folder") >= 0,
+			"clean install log line",
+		);
+		assert(ps1c.indexOf(".clean-aside") >= 0, "aside folder name");
+		assert(ps1c.indexOf("Move-Item") >= 0, "moves install children aside");
+		assert(
+			ps1c.indexOf("restoring previous install folder") >= 0,
+			"restores aside on failure",
+		);
+		assert(ps1c.indexOf("/XJ") >= 0, "clean copy skips junctions");
+		assert(ps1c.indexOf("Merge-WithRetries") >= 0, "merge path remains for other updates");
+
+		const cleanBackup = mgr.writeApplyScript(
+			installRoot,
+			staging,
+			"6.0.0",
+			"8.0.0",
+			true,
+			true,
+			0,
+			1,
+		);
+		const ps1d = fs.readFileSync(cleanBackup, "utf8");
+		assert(
+			ps1d.indexOf("Keeping previous install as") >= 0,
+			"clean install keeps aside as version backup",
+		);
 	} finally {
 		fs.rmSync(tmpHome, { recursive: true, force: true });
+	}
+}
+
+function testCleanInstallEpoch() {
+	const os = require("os");
+	const fs = require("fs");
+	assert(updateManager.normalizeCleanInstallEpoch(undefined) === 0, "missing is 0");
+	assert(updateManager.normalizeCleanInstallEpoch(0) === 0, "zero is 0");
+	assert(updateManager.normalizeCleanInstallEpoch(-3) === 0, "negative is 0");
+	assert(updateManager.normalizeCleanInstallEpoch(1.9) === 1, "floor positive");
+	assert(updateManager.normalizeCleanInstallEpoch("2") === 2, "numeric string");
+	assert(updateManager.normalizeCleanInstallEpoch("nope") === 0, "bad string is 0");
+	assert(
+		updateManager.cleanInstallEpochFromPackage({}) === 0,
+		"missing field is 0",
+	);
+	assert(
+		updateManager.cleanInstallEpochFromPackage({ masonjarCleanInstallEpoch: 4 }) === 4,
+		"reads field",
+	);
+	assert(!updateManager.shouldCleanInstall(0, 0), "equal epochs do not wipe");
+	assert(!updateManager.shouldCleanInstall(1, 1), "same flag does not wipe");
+	assert(updateManager.shouldCleanInstall(0, 1), "missing install epoch wipes once");
+	assert(updateManager.shouldCleanInstall(1, 2), "greater epoch wipes");
+	assert(!updateManager.shouldCleanInstall(2, 1), "older staged epoch does not wipe");
+
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mj-update-epoch-"));
+	const installRoot = path.join(tmp, "install");
+	const appPkg = path.join(installRoot, "resources", "app", "package.json");
+	const rootPkg = path.join(installRoot, "package.json");
+	fs.mkdirSync(path.dirname(appPkg), { recursive: true });
+	try {
+		assert(
+			updateManager.readInstallCleanInstallEpoch(installRoot) === 0,
+			"no package.json is epoch 0",
+		);
+		fs.writeFileSync(
+			rootPkg,
+			JSON.stringify({ version: "7.0.0", masonjarCleanInstallEpoch: 5 }),
+		);
+		assert(
+			updateManager.readInstallCleanInstallEpoch(installRoot) === 5,
+			"root shim used when app package.json is absent",
+		);
+		fs.writeFileSync(
+			appPkg,
+			JSON.stringify({ version: "7.0.0", masonjarCleanInstallEpoch: 2 }),
+		);
+		assert(
+			updateManager.readInstallCleanInstallEpoch(installRoot) === 2,
+			"resources/app/package.json wins over root shim",
+		);
+		fs.writeFileSync(appPkg, JSON.stringify({ version: "7.0.0" }));
+		assert(
+			updateManager.readInstallCleanInstallEpoch(installRoot) === 0,
+			"present app package.json without the field is 0",
+		);
+	} finally {
+		fs.rmSync(tmp, { recursive: true, force: true });
 	}
 }
 
@@ -356,6 +464,126 @@ function testVersionBackupHelpers() {
 			"none left",
 		);
 		assert(fs.existsSync(decoy), "unrelated decoy kept");
+	} finally {
+		fs.rmSync(tmp, { recursive: true, force: true });
+	}
+}
+
+function writePruneFixture(root, epoch) {
+	const fs = require("fs");
+	const path = require("path");
+	fs.mkdirSync(path.join(root, "resources", "app"), { recursive: true });
+	fs.writeFileSync(
+		path.join(root, "resources", "app", "package.json"),
+		JSON.stringify({ version: "7.9.0", masonjarCleanInstallEpoch: epoch }),
+	);
+	fs.writeFileSync(path.join(root, "masonjar.exe"), "exe");
+	fs.mkdirSync(path.join(root, "py"), { recursive: true });
+	fs.writeFileSync(path.join(root, "py", "keep.py"), "keep");
+	fs.writeFileSync(path.join(root, "py", "ancient.py"), "old");
+	fs.mkdirSync(path.join(root, "oldtool"), { recursive: true });
+	fs.writeFileSync(path.join(root, "oldtool", "dev.js"), "dev");
+}
+
+function testCleanInstallPrune() {
+	const os = require("os");
+	const fs = require("fs");
+	const path = require("path");
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mj-clean-prune-"));
+	const installRoot = path.join(tmp, "install");
+	const homeDir = path.join(tmp, "home");
+	fs.mkdirSync(homeDir, { recursive: true });
+	try {
+		writePruneFixture(installRoot, 1);
+		const missing = updateManager.runPackagedCleanInstallPrune({
+			isPackaged: true,
+			platform: "win32",
+			installRoot: installRoot,
+			homeDir: homeDir,
+		});
+		assert(missing.reason === "manifest-missing", "missing manifest skips");
+		assert(!missing.markerWritten, "missing manifest does not set marker");
+		assert(fs.existsSync(path.join(installRoot, "py", "ancient.py")), "extras kept without manifest");
+		assert(
+			updateManager.readCleanInstallEpochMarker(homeDir) === 0,
+			"marker still 0",
+		);
+
+		fs.writeFileSync(
+			path.join(installRoot, "clean-install-manifest.json"),
+			JSON.stringify({
+				files: [
+					"masonjar.exe",
+					"resources/app/package.json",
+					"py",
+					"py/keep.py",
+					"clean-install-manifest.json",
+				],
+			}),
+		);
+		const pruned = updateManager.runPackagedCleanInstallPrune({
+			isPackaged: true,
+			platform: "win32",
+			installRoot: installRoot,
+			homeDir: homeDir,
+		});
+		assert(pruned.ran && pruned.markerWritten, "higher epoch prunes and marks");
+		assert(!fs.existsSync(path.join(installRoot, "py", "ancient.py")), "ancient script removed");
+		assert(!fs.existsSync(path.join(installRoot, "oldtool")), "empty leftover folder removed");
+		assert(fs.existsSync(path.join(installRoot, "py", "keep.py")), "manifest file kept");
+		assert(fs.existsSync(path.join(installRoot, "masonjar.exe")), "exe kept");
+		assert(updateManager.readCleanInstallEpochMarker(homeDir) === 1, "marker is 1");
+
+		fs.writeFileSync(path.join(installRoot, "py", "later.py"), "later");
+		const again = updateManager.runPackagedCleanInstallPrune({
+			isPackaged: true,
+			platform: "win32",
+			installRoot: installRoot,
+			homeDir: homeDir,
+		});
+		assert(again.reason === "epoch-not-higher", "equal epoch does not prune");
+		assert(fs.existsSync(path.join(installRoot, "py", "later.py")), "later file kept");
+
+		const dev = updateManager.runPackagedCleanInstallPrune({
+			isPackaged: false,
+			platform: "win32",
+			installRoot: installRoot,
+			homeDir: homeDir,
+		});
+		assert(dev.reason === "not-packaged-windows", "unpackaged skipped");
+	} finally {
+		fs.rmSync(tmp, { recursive: true, force: true });
+	}
+}
+
+function testCleanInstallManifestWriter() {
+	const os = require("os");
+	const fs = require("fs");
+	const path = require("path");
+	const buildRelease = require("./build-release");
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mj-clean-manifest-"));
+	try {
+		const appFolder = path.join(tmp, "masonjar-win32-x64");
+		fs.mkdirSync(path.join(appFolder, "resources", "app"), { recursive: true });
+		fs.writeFileSync(path.join(appFolder, "masonjar.exe"), "exe");
+		fs.writeFileSync(
+			path.join(appFolder, "resources", "app", "package.json"),
+			"{}",
+		);
+		buildRelease.writeCleanInstallManifest(appFolder);
+		const manifest = JSON.parse(
+			fs.readFileSync(path.join(appFolder, "clean-install-manifest.json"), "utf8"),
+		);
+		assert(Array.isArray(manifest.files), "manifest files array");
+		assert(manifest.files.indexOf("masonjar.exe") >= 0, "lists exe");
+		assert(
+			manifest.files.indexOf("resources/app/package.json") >= 0,
+			"lists package.json",
+		);
+		assert(
+			manifest.files.indexOf("clean-install-manifest.json") >= 0,
+			"lists itself",
+		);
 	} finally {
 		fs.rmSync(tmp, { recursive: true, force: true });
 	}
@@ -495,6 +723,9 @@ function run() {
 	testAppendUpdateLogLine();
 	testUpdateLockLifecycle();
 	testApplyScriptContent();
+	testCleanInstallEpoch();
+	testCleanInstallPrune();
+	testCleanInstallManifestWriter();
 	testVersionBackupHelpers();
 	testIsMandatoryUpdateRequired();
 	testCountOtherMasonJarInstancesFromList();

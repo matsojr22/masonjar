@@ -12,7 +12,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UpdateManager = exports.buildCheckResult = exports.expectedWindowsZipName = exports.resolveInstallRoot = exports.isUpdateInProgress = exports.isApplyScriptRunning = exports.buildApplySpawnCommand = exports.CLOSE_OTHER_INSTANCES_MESSAGE = exports.deleteInstallVersionBackups = exports.listInstallVersionBackups = exports.versionBackupDirName = exports.refreshUpdateLockState = exports.writeUpdateLock = exports.releaseUpdateLock = exports.clearOrphanUpdateLock = exports.clearStaleUpdateLock = exports.pathsEqualIgnoreCase = exports.isActiveUpdateLock = exports.isProcessAlive = exports.readUpdateLock = exports.isUpdateLockStale = exports.appendUpdateLogLine = exports.UPDATE_LOCK_STALE_MS = exports.updateFallbackLogPath = exports.updateLogPath = exports.updateLockPath = exports.masonJarTempRoot = exports.countOtherMasonJarInstances = exports.listMasonJarProcesses = exports.countOtherMasonJarInstancesFromList = exports.isElectronHelperProcess = exports.isMandatoryUpdateRequired = exports.compareUpdateAvailable = exports.pickBestRelease = exports.releaseSemver = exports.pickWindowsZipAsset = exports.releaseNotesExcerpt = exports.saveUpdatePreferences = exports.loadUpdatePreferences = exports.updatePreferencesPath = exports.GITHUB_REPO = void 0;
+exports.pruneInstallToManifest = exports.readCleanInstallManifest = exports.writeCleanInstallEpochMarker = exports.readCleanInstallEpochMarker = exports.cleanInstallEpochMarkerPath = exports.CLEAN_INSTALL_MANIFEST_NAME = exports.shouldCleanInstall = exports.readInstallCleanInstallEpoch = exports.cleanInstallEpochFromPackage = exports.normalizeCleanInstallEpoch = exports.buildCheckResult = exports.expectedWindowsZipName = exports.resolveInstallRoot = exports.isUpdateInProgress = exports.isApplyScriptRunning = exports.buildApplySpawnCommand = exports.CLOSE_OTHER_INSTANCES_MESSAGE = exports.deleteInstallVersionBackups = exports.listInstallVersionBackups = exports.versionBackupDirName = exports.refreshUpdateLockState = exports.writeUpdateLock = exports.releaseUpdateLock = exports.clearOrphanUpdateLock = exports.clearStaleUpdateLock = exports.pathsEqualIgnoreCase = exports.isActiveUpdateLock = exports.isProcessAlive = exports.readUpdateLock = exports.isUpdateLockStale = exports.appendUpdateLogLine = exports.UPDATE_LOCK_STALE_MS = exports.updateFallbackLogPath = exports.updateLogPath = exports.updateLockPath = exports.masonJarTempRoot = exports.countOtherMasonJarInstances = exports.listMasonJarProcesses = exports.countOtherMasonJarInstancesFromList = exports.isElectronHelperProcess = exports.isMandatoryUpdateRequired = exports.compareUpdateAvailable = exports.pickBestRelease = exports.releaseSemver = exports.pickWindowsZipAsset = exports.releaseNotesExcerpt = exports.saveUpdatePreferences = exports.loadUpdatePreferences = exports.updatePreferencesPath = exports.GITHUB_REPO = void 0;
+exports.UpdateManager = exports.runPackagedCleanInstallPrune = void 0;
 const fs_1 = __importDefault(require("fs"));
 const os_1 = __importDefault(require("os"));
 const path_1 = __importDefault(require("path"));
@@ -606,6 +607,233 @@ function buildCheckResult(currentVersion, release) {
     };
 }
 exports.buildCheckResult = buildCheckResult;
+/** Missing, invalid, or non-positive values count as epoch 0 (never clean-install). */
+function normalizeCleanInstallEpoch(value) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+        return Math.floor(value);
+    }
+    if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+        const parsed = parseInt(value.trim(), 10);
+        if (Number.isFinite(parsed) && parsed > 0) {
+            return parsed;
+        }
+    }
+    return 0;
+}
+exports.normalizeCleanInstallEpoch = normalizeCleanInstallEpoch;
+function cleanInstallEpochFromPackage(raw) {
+    if (!raw || typeof raw !== "object") {
+        return 0;
+    }
+    return normalizeCleanInstallEpoch(raw.masonjarCleanInstallEpoch);
+}
+exports.cleanInstallEpochFromPackage = cleanInstallEpochFromPackage;
+/** Prefer Electron's resources/app/package.json, then the root shim. */
+function readInstallCleanInstallEpoch(root) {
+    if (!root) {
+        return 0;
+    }
+    const candidates = [
+        path_1.default.join(root, "resources", "app", "package.json"),
+        path_1.default.join(root, "package.json"),
+    ];
+    for (const candidate of candidates) {
+        if (!fs_1.default.existsSync(candidate)) {
+            continue;
+        }
+        try {
+            const raw = JSON.parse(fs_1.default.readFileSync(candidate, "utf8"));
+            return cleanInstallEpochFromPackage(raw);
+        }
+        catch (_a) {
+            return 0;
+        }
+    }
+    return 0;
+}
+exports.readInstallCleanInstallEpoch = readInstallCleanInstallEpoch;
+/** True when the staged release flag is newer than the install being replaced. */
+function shouldCleanInstall(installedEpoch, stagedEpoch) {
+    return (normalizeCleanInstallEpoch(stagedEpoch) >
+        normalizeCleanInstallEpoch(installedEpoch));
+}
+exports.shouldCleanInstall = shouldCleanInstall;
+exports.CLEAN_INSTALL_MANIFEST_NAME = "clean-install-manifest.json";
+function cleanInstallEpochMarkerPath(homeDir) {
+    return path_1.default.join(homeDir, "clean_install_epoch.json");
+}
+exports.cleanInstallEpochMarkerPath = cleanInstallEpochMarkerPath;
+function readCleanInstallEpochMarker(homeDir) {
+    try {
+        const filePath = cleanInstallEpochMarkerPath(homeDir);
+        if (!fs_1.default.existsSync(filePath)) {
+            return 0;
+        }
+        const raw = JSON.parse(fs_1.default.readFileSync(filePath, "utf8"));
+        return normalizeCleanInstallEpoch(raw && raw.epoch);
+    }
+    catch (_a) {
+        return 0;
+    }
+}
+exports.readCleanInstallEpochMarker = readCleanInstallEpochMarker;
+function writeCleanInstallEpochMarker(homeDir, epoch) {
+    fs_1.default.mkdirSync(homeDir, { recursive: true });
+    fs_1.default.writeFileSync(cleanInstallEpochMarkerPath(homeDir), JSON.stringify({ epoch: normalizeCleanInstallEpoch(epoch) }, null, 2), "utf8");
+}
+exports.writeCleanInstallEpochMarker = writeCleanInstallEpochMarker;
+function cleanInstallRelKey(rel) {
+    return rel.replace(/\\/g, "/").replace(/^\.?\//, "").toLowerCase();
+}
+/** null when the manifest file is missing or unreadable. */
+function readCleanInstallManifest(installRoot) {
+    const manifestPath = path_1.default.join(installRoot, exports.CLEAN_INSTALL_MANIFEST_NAME);
+    if (!fs_1.default.existsSync(manifestPath)) {
+        return null;
+    }
+    try {
+        const raw = JSON.parse(fs_1.default.readFileSync(manifestPath, "utf8"));
+        const files = raw && Array.isArray(raw.files) ? raw.files : null;
+        if (!files) {
+            return null;
+        }
+        const set = new Set();
+        for (const entry of files) {
+            if (typeof entry === "string" && entry.trim()) {
+                set.add(cleanInstallRelKey(entry));
+            }
+        }
+        set.add(cleanInstallRelKey(exports.CLEAN_INSTALL_MANIFEST_NAME));
+        return set;
+    }
+    catch (_a) {
+        return null;
+    }
+}
+exports.readCleanInstallManifest = readCleanInstallManifest;
+function listInstallEntries(installRoot) {
+    const entries = [];
+    const errors = [];
+    const walk = (dir) => {
+        let children;
+        try {
+            children = fs_1.default.readdirSync(dir, { withFileTypes: true });
+        }
+        catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            errors.push(`${dir}: ${msg}`);
+            return;
+        }
+        for (const ent of children) {
+            const full = path_1.default.join(dir, ent.name);
+            const rel = path_1.default.relative(installRoot, full).split(path_1.default.sep).join("/");
+            let link = false;
+            try {
+                link = fs_1.default.lstatSync(full).isSymbolicLink();
+            }
+            catch (_a) {
+                link = ent.isSymbolicLink();
+            }
+            if (link) {
+                entries.push({ rel, full, kind: "link" });
+                continue;
+            }
+            if (ent.isDirectory()) {
+                entries.push({ rel, full, kind: "dir" });
+                walk(full);
+            }
+            else {
+                entries.push({ rel, full, kind: "file" });
+            }
+        }
+    };
+    walk(installRoot);
+    return { entries, errors };
+}
+function pruneInstallToManifest(installRoot, manifest) {
+    const removed = [];
+    const listed = listInstallEntries(installRoot);
+    const errors = listed.errors.slice();
+    const keep = (rel) => manifest.has(cleanInstallRelKey(rel));
+    for (const entry of listed.entries) {
+        if (entry.kind === "dir" || keep(entry.rel)) {
+            continue;
+        }
+        try {
+            fs_1.default.rmSync(entry.full, { recursive: false, force: false });
+            removed.push(entry.rel);
+        }
+        catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            errors.push(`${entry.rel}: ${msg}`);
+        }
+    }
+    const dirs = listed.entries
+        .filter((entry) => entry.kind === "dir")
+        .sort((a, b) => b.rel.length - a.rel.length);
+    for (const entry of dirs) {
+        if (keep(entry.rel)) {
+            continue;
+        }
+        try {
+            if (!fs_1.default.existsSync(entry.full)) {
+                continue;
+            }
+            const left = fs_1.default.readdirSync(entry.full);
+            if (left.length === 0) {
+                fs_1.default.rmdirSync(entry.full);
+                removed.push(entry.rel + "/");
+            }
+        }
+        catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            errors.push(`${entry.rel}: ${msg}`);
+        }
+    }
+    return { removed, errors };
+}
+exports.pruneInstallToManifest = pruneInstallToManifest;
+/**
+ * Packaged Windows only. When the install epoch is newer than the home-folder
+ * marker, delete install paths that are not in clean-install-manifest.json.
+ * A missing manifest deletes nothing and leaves the marker unset.
+ */
+function runPackagedCleanInstallPrune(opts) {
+    const empty = (reason, extra) => (Object.assign({ ran: false, markerWritten: false, removed: [], errors: [], reason }, extra));
+    if (!opts.isPackaged || opts.platform !== "win32" || !opts.installRoot) {
+        return empty("not-packaged-windows");
+    }
+    const epoch = readInstallCleanInstallEpoch(opts.installRoot);
+    const marker = readCleanInstallEpochMarker(opts.homeDir);
+    if (!(epoch > marker)) {
+        return empty("epoch-not-higher");
+    }
+    const manifest = readCleanInstallManifest(opts.installRoot);
+    if (!manifest) {
+        appendUpdateLogLine(opts.homeDir, "Clean install prune skipped: clean-install-manifest.json missing");
+        return empty("manifest-missing");
+    }
+    const { removed, errors } = pruneInstallToManifest(opts.installRoot, manifest);
+    if (errors.length) {
+        appendUpdateLogLine(opts.homeDir, `Clean install prune removed ${removed.length} leftover path(s); ${errors.length} delete(s) failed. Marker left unset.`);
+        for (const err of errors.slice(0, 40)) {
+            appendUpdateLogLine(opts.homeDir, `Clean install prune error: ${err}`);
+        }
+        return {
+            ran: true,
+            markerWritten: false,
+            removed,
+            errors,
+            reason: "delete-failed",
+        };
+    }
+    writeCleanInstallEpochMarker(opts.homeDir, epoch);
+    appendUpdateLogLine(opts.homeDir, removed.length
+        ? `Clean install epoch ${marker} -> ${epoch}; removed ${removed.length} leftover path(s).`
+        : `Clean install epoch ${marker} -> ${epoch}; no leftover files.`);
+    return { ran: true, markerWritten: true, removed, errors };
+}
+exports.runPackagedCleanInstallPrune = runPackagedCleanInstallPrune;
 class UpdateManager {
     constructor(homeDir, currentVersion, isPackaged) {
         this.homeDir = homeDir;
@@ -890,17 +1118,21 @@ class UpdateManager {
             });
         });
     }
-    writeApplyScript(installRoot, stagingDir, oldVersion, newVersion, keepBackup = false) {
+    writeApplyScript(installRoot, stagingDir, oldVersion, newVersion, keepBackup = false, cleanInstall = false, installedEpoch = 0, stagedEpoch = 0) {
         const scriptPath = path_1.default.join(masonJarTempRoot(), "apply-update.ps1");
         const logPath = updateLogPath(this.homeDir);
         const fallbackLogPath = updateFallbackLogPath();
         const backupDir = versionBackupDirName(installRoot, oldVersion);
+        const asideDir = `${installRoot}.clean-aside`;
         const exePath = path_1.default.join(installRoot, "masonjar.exe");
         const lockPath = updateLockPath();
         // Electron packaged layout: package.json lives under resources/app (app.getAppPath()).
         // Root package.json is only a compatibility shim for older apply scripts / odd layouts.
         const stagingExe = path_1.default.join(stagingDir, "masonjar.exe");
         const keepBackupLiteral = keepBackup ? "$true" : "$false";
+        const cleanInstallLiteral = cleanInstall ? "$true" : "$false";
+        const installedEpochLiteral = String(normalizeCleanInstallEpoch(installedEpoch));
+        const stagedEpochLiteral = String(normalizeCleanInstallEpoch(stagedEpoch));
         const ps1 = `
 $ErrorActionPreference = 'Stop'
 $LogPath = '${logPath.replace(/'/g, "''")}'
@@ -913,6 +1145,12 @@ $ExePath = '${exePath.replace(/'/g, "''")}'
 $LockPath = '${lockPath.replace(/'/g, "''")}'
 $TargetVersion = '${newVersion.replace(/'/g, "''")}'
 $KeepBackup = ${keepBackupLiteral}
+$CleanInstall = ${cleanInstallLiteral}
+$InstalledEpoch = ${installedEpochLiteral}
+$StagedEpoch = ${stagedEpochLiteral}
+$AsideDir = '${asideDir.replace(/'/g, "''")}'
+$script:AsideMoveStarted = $false
+$script:CleanCopyStarted = $false
 $Elevated = $args -contains '-Elevated'
 
 function Write-Log([string]$Message) {
@@ -989,13 +1227,72 @@ function Assert-UpdatePaths {
   }
 }
 
-function Invoke-RobocopyChecked([string]$Source, [string]$Dest, [string]$Label) {
-  cmd /c robocopy "$Source" "$Dest" /E /R:2 /W:2 /NFL /NDL /NJH /NJS /NP
+function Invoke-RobocopyChecked([string]$Source, [string]$Dest, [string]$Label, [string]$ExtraArgs = "") {
+  if ($ExtraArgs) {
+    cmd /c robocopy "$Source" "$Dest" /E /R:2 /W:2 /NFL /NDL /NJH /NJS /NP $ExtraArgs
+  } else {
+    cmd /c robocopy "$Source" "$Dest" /E /R:2 /W:2 /NFL /NDL /NJH /NJS /NP
+  }
   $rc = $LASTEXITCODE
   Write-Log "$Label robocopy exit code $rc"
   if ($rc -ge 8) {
     throw "$Label robocopy failed with exit code $rc"
   }
+}
+
+function Clear-InstallChildren {
+  Get-ChildItem -LiteralPath $InstallRoot -Force -ErrorAction SilentlyContinue | ForEach-Object {
+    Remove-Item -LiteralPath $_.FullName -Recurse -Force
+  }
+}
+
+function Restore-InstallFromAside([bool]$ReplaceInstall) {
+  if (-not (Test-Path -LiteralPath $AsideDir)) {
+    Write-Log "WARN: aside folder missing; cannot restore $AsideDir"
+    return
+  }
+  if ($ReplaceInstall) {
+    Clear-InstallChildren
+  }
+  Get-ChildItem -LiteralPath $AsideDir -Force | ForEach-Object {
+    $dest = Join-Path $InstallRoot $_.Name
+    if (Test-Path -LiteralPath $dest) {
+      Remove-Item -LiteralPath $dest -Recurse -Force
+    }
+    Move-Item -LiteralPath $_.FullName -Destination $dest
+  }
+  Remove-Item -LiteralPath $AsideDir -Recurse -Force -ErrorAction SilentlyContinue
+  Write-Log "Restored install folder from aside"
+}
+
+function Complete-AsideCleanup {
+  if (-not (Test-Path -LiteralPath $AsideDir)) {
+    return
+  }
+  if ($KeepBackup) {
+    if (Test-Path -LiteralPath $BackupDir) {
+      Remove-Item -LiteralPath $BackupDir -Recurse -Force
+    }
+    Write-Log "Keeping previous install as $BackupDir"
+    Rename-Item -LiteralPath $AsideDir -NewName (Split-Path -Leaf $BackupDir)
+  } else {
+    Write-Log "Removing previous install aside $AsideDir"
+    Remove-Item -LiteralPath $AsideDir -Recurse -Force
+  }
+}
+
+function Test-InstallHasTargetVersion {
+  $appPkg = Join-Path $InstallRoot 'resources\\app\\package.json'
+  $rootPkg = Join-Path $InstallRoot 'package.json'
+  $candidate = $null
+  if (Test-Path -LiteralPath $appPkg) {
+    $candidate = $appPkg
+  } elseif (Test-Path -LiteralPath $rootPkg) {
+    $candidate = $rootPkg
+  }
+  if (-not $candidate) { return $false }
+  $text = Get-Content -LiteralPath $candidate -Raw
+  return $text -match ('"version"\\s*:\\s*"' + [regex]::Escape($TargetVersion) + '"')
 }
 
 function Merge-WithRetries {
@@ -1043,44 +1340,84 @@ try {
   }
 
   Assert-UpdatePaths
-  if ($KeepBackup) {
-    if (Test-Path -LiteralPath $BackupDir) {
-      Remove-Item -LiteralPath $BackupDir -Recurse -Force
-    }
-    Write-Log "Backing up to $BackupDir"
-    Invoke-RobocopyChecked -Source $InstallRoot -Dest $BackupDir -Label "backup"
-  } else {
-    Write-Log 'Skipping version backup (keep_version_backups=false)'
-  }
-
-  Merge-WithRetries
-
-  $appPkg = Join-Path $InstallRoot 'resources\\app\\package.json'
-  $rootPkg = Join-Path $InstallRoot 'package.json'
-  $PkgPath = $null
-  if (Test-Path -LiteralPath $appPkg) {
-    $PkgPath = $appPkg
-  } elseif (Test-Path -LiteralPath $rootPkg) {
-    $PkgPath = $rootPkg
-  }
-
-  $mergeOk = $false
-  if ($PkgPath) {
-    $pkgText = Get-Content -LiteralPath $PkgPath -Raw
-    if ($pkgText -notmatch ('"version"\\s*:\\s*"' + [regex]::Escape($TargetVersion) + '"')) {
-      Write-Log "ERROR: package.json at $PkgPath after merge does not report version $TargetVersion; not relaunching"
-      throw "package.json version mismatch after merge"
+  $script:CleanAlreadyApplied = $false
+  if ($CleanInstall -and (Test-Path -LiteralPath $AsideDir)) {
+    if (Test-InstallHasTargetVersion) {
+      Write-Log "Install already at $TargetVersion after an interrupted clean install; finishing aside cleanup"
+      Complete-AsideCleanup
+      $script:CleanAlreadyApplied = $true
     } else {
-      Write-Log "Verified package.json version $TargetVersion at $PkgPath"
-      $mergeOk = $true
+      Write-Log "Previous clean install was interrupted; restoring previous install folder"
+      Restore-InstallFromAside -ReplaceInstall $true
     }
-  } else {
-    Write-Log 'ERROR: package.json missing after merge (checked resources\\app\\package.json and root); not relaunching'
-    throw "package.json missing after merge"
   }
 
-  if (-not $mergeOk) {
-    throw "Merge verification failed"
+  if ($CleanInstall -and -not $script:CleanAlreadyApplied) {
+    Write-Log "Clean install epoch $InstalledEpoch -> $StagedEpoch; replacing install folder"
+    if (Test-Path -LiteralPath $AsideDir) {
+      Remove-Item -LiteralPath $AsideDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $AsideDir | Out-Null
+    Write-Log "Moving install folder contents aside to $AsideDir"
+    $script:AsideMoveStarted = $true
+    Get-ChildItem -LiteralPath $InstallRoot -Force | ForEach-Object {
+      Move-Item -LiteralPath $_.FullName -Destination (Join-Path $AsideDir $_.Name)
+    }
+    $script:CleanCopyStarted = $true
+    Assert-UpdatePaths
+    Write-Log "Copying staged update into $InstallRoot"
+    Invoke-RobocopyChecked -Source $StagingDir -Dest $InstallRoot -Label "clean-install" -ExtraArgs '/XJ'
+  } elseif (-not $CleanInstall) {
+    if ($KeepBackup) {
+      if (Test-Path -LiteralPath $BackupDir) {
+        Remove-Item -LiteralPath $BackupDir -Recurse -Force
+      }
+      Write-Log "Backing up to $BackupDir"
+      Invoke-RobocopyChecked -Source $InstallRoot -Dest $BackupDir -Label "backup"
+    } else {
+      Write-Log 'Skipping version backup (keep_version_backups=false)'
+    }
+    Merge-WithRetries
+  }
+
+  if (-not $script:CleanAlreadyApplied) {
+    $appPkg = Join-Path $InstallRoot 'resources\\app\\package.json'
+    $rootPkg = Join-Path $InstallRoot 'package.json'
+    $PkgPath = $null
+    if (Test-Path -LiteralPath $appPkg) {
+      $PkgPath = $appPkg
+    } elseif (Test-Path -LiteralPath $rootPkg) {
+      $PkgPath = $rootPkg
+    }
+
+    $mergeOk = $false
+    if ($PkgPath) {
+      $pkgText = Get-Content -LiteralPath $PkgPath -Raw
+      if ($pkgText -notmatch ('"version"\\s*:\\s*"' + [regex]::Escape($TargetVersion) + '"')) {
+        Write-Log "ERROR: package.json at $PkgPath after merge does not report version $TargetVersion; not relaunching"
+        throw "package.json version mismatch after merge"
+      } else {
+        Write-Log "Verified package.json version $TargetVersion at $PkgPath"
+        $mergeOk = $true
+      }
+    } else {
+      Write-Log 'ERROR: package.json missing after merge (checked resources\\app\\package.json and root); not relaunching'
+      throw "package.json missing after merge"
+    }
+
+    if (-not $mergeOk) {
+      throw "Merge verification failed"
+    }
+  }
+
+  if ($CleanInstall -and $script:CleanCopyStarted) {
+    try {
+      Complete-AsideCleanup
+    } catch {
+      Write-Log "WARN: could not finish aside cleanup: $($_.Exception.Message)"
+    }
+    $script:CleanCopyStarted = $false
+    $script:AsideMoveStarted = $false
   }
 
   if (Test-Path -LiteralPath $LockPath) {
@@ -1099,6 +1436,20 @@ try {
   }
   Write-Log 'Apply update finished successfully'
 } catch {
+  if ($script:CleanCopyStarted -or $script:AsideMoveStarted) {
+    try {
+      Write-Log "Clean install failed; restoring previous install folder"
+      if ($script:CleanCopyStarted) {
+        Restore-InstallFromAside -ReplaceInstall $true
+      } else {
+        Restore-InstallFromAside -ReplaceInstall $false
+      }
+    } catch {
+      Write-Log "ERROR: could not restore the previous install folder: $($_.Exception.Message)"
+    }
+    $script:CleanCopyStarted = $false
+    $script:AsideMoveStarted = $false
+  }
   Write-Log "Apply update failed: $($_.Exception.Message)"
   Write-Log "See update log for details. Re-open Mason Jar and try Update Now, or install the zip manually from GitHub."
   exit 1
@@ -1121,6 +1472,20 @@ try {
             return { ok: false, error: exports.CLOSE_OTHER_INSTANCES_MESSAGE };
         }
         return { ok: true };
+    }
+    cleanInstallDecision() {
+        const installRoot = resolveInstallRoot(this.isPackaged);
+        const installedEpoch = installRoot
+            ? readInstallCleanInstallEpoch(installRoot)
+            : 0;
+        const stagedEpoch = this.stagedExtractDir
+            ? readInstallCleanInstallEpoch(this.stagedExtractDir)
+            : 0;
+        return {
+            cleanInstall: shouldCleanInstall(installedEpoch, stagedEpoch),
+            installedEpoch,
+            stagedEpoch,
+        };
     }
     prepareWindowsApply() {
         if (!this.isPackaged || process.platform !== "win32") {
@@ -1151,8 +1516,17 @@ try {
             return { ok: false, error: "Staged update is missing masonjar.exe." };
         }
         const prefs = this.getPreferences();
-        const scriptPath = this.writeApplyScript(installRoot, this.stagedExtractDir, this.currentVersion, this.stagedVersion, !!prefs.keep_version_backups);
-        return { ok: true, scriptPath, stagedVersion: this.stagedVersion };
+        const decision = this.cleanInstallDecision();
+        if (decision.cleanInstall) {
+            appendUpdateLogLine(this.homeDir, `Clean install epoch ${decision.installedEpoch} -> ${decision.stagedEpoch}; replacing install folder`);
+        }
+        const scriptPath = this.writeApplyScript(installRoot, this.stagedExtractDir, this.currentVersion, this.stagedVersion, !!prefs.keep_version_backups, decision.cleanInstall, decision.installedEpoch, decision.stagedEpoch);
+        return {
+            ok: true,
+            scriptPath,
+            stagedVersion: this.stagedVersion,
+            cleanInstall: decision.cleanInstall,
+        };
     }
     launchApplyAndQuit(scriptPath, stagedVersion, quit) {
         const installRoot = resolveInstallRoot(this.isPackaged);
@@ -1237,7 +1611,10 @@ try {
             else {
                 onProgress(100, "Using downloaded update…");
             }
-            onProgress(100, "Installing update…");
+            const decision = this.cleanInstallDecision();
+            onProgress(100, decision.cleanInstall
+                ? "This update replaces the application folder. Settings and models are kept."
+                : "Installing update…");
             const prepared = this.prepareWindowsApply();
             if (!prepared.ok) {
                 releaseUpdateLock();

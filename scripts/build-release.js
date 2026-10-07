@@ -291,6 +291,43 @@ function createWindowsZipFromFolder(folderPath, zipPath) {
 	}
 }
 
+function writeCleanInstallManifest(appFolder) {
+	const files = [];
+	const walk = (dir) => {
+		const entries = fs.readdirSync(dir, { withFileTypes: true });
+		for (const ent of entries) {
+			const full = path.join(dir, ent.name);
+			const rel = path.relative(appFolder, full).split(path.sep).join("/");
+			let link = false;
+			try {
+				link = fs.lstatSync(full).isSymbolicLink();
+			} catch (_err) {
+				link = ent.isSymbolicLink();
+			}
+			if (link) {
+				files.push(rel);
+				continue;
+			}
+			if (ent.isDirectory()) {
+				files.push(rel);
+				walk(full);
+			} else if (ent.isFile()) {
+				files.push(rel);
+			}
+		}
+	};
+	walk(appFolder);
+	files.push("clean-install-manifest.json");
+	files.sort();
+	fs.writeFileSync(
+		path.join(appFolder, "clean-install-manifest.json"),
+		JSON.stringify({ files: files }, null, 2),
+	);
+	console.log(
+		"Wrote clean-install-manifest.json (" + files.length + " paths)",
+	);
+}
+
 function ensureWindowsZipRootPackageJson(appFolder) {
 	const appPkg = path.join(appFolder, "resources", "app", "package.json");
 	const rootPkg = path.join(appFolder, "package.json");
@@ -337,6 +374,7 @@ function wrapWindowsReleaseZipFile(zipPath, version) {
 				"WARN: resources/app/package.json missing; skipped root package.json shim",
 			);
 		}
+		writeCleanInstallManifest(appFolder);
 
 		const outTmp = zipPath.replace(/\.zip$/i, "") + ".wrap-tmp.zip";
 		createWindowsZipFromFolder(appFolder, outTmp);
@@ -371,8 +409,9 @@ function writeManifest(version, targets, artifacts) {
 		"1. Add human copy: `~/.masonjar/RELEASE_NOTES.md` section `## v" + version + "`.",
 		"2. Suggested commit: `node scripts/release-message.js`",
 		"3. Tag: `v" + version + "` (must match package.json).",
-		"4. Publish: `node scripts/publish-release.js` (Windows zip) or `--all-platforms` for macOS DMGs too.",
-		"5. Artifacts: `masonjar-win32-x64-" + version + ".zip`, `masonjar-" + version + "-x64.dmg`, `masonjar-" + version + "-arm64.dmg`",
+		"4. Windows clean install: bump `package.json` `masonjarCleanInstallEpoch` when this release must replace the Windows install folder (typical for a major version). Leave it unchanged for a normal file merge.",
+		"5. Publish: `node scripts/publish-release.js` (Windows zip) or `--all-platforms` for macOS DMGs too.",
+		"6. Artifacts: `masonjar-win32-x64-" + version + ".zip`, `masonjar-" + version + "-x64.dmg`, `masonjar-" + version + "-arm64.dmg`",
 		"",
 		"## Targets built",
 		"",
@@ -555,6 +594,7 @@ if (require.main === module) {
 module.exports = {
 	wrapWindowsReleaseZips,
 	wrapWindowsReleaseZipFile,
+	writeCleanInstallManifest,
 	windowsZipParentFolderName,
 	isWindowsReleaseZip,
 	OUT_MAKE,

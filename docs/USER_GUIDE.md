@@ -1044,6 +1044,8 @@ Settings is on the start screen. It does not process images. It changes how the 
 3. On Windows, **Update Now** when it appears. On macOS, **Download for macOS** or **Open release page**, then install that build yourself.
 4. Turn on **Allow pre-release versions** only when you mean to test a beta. A newer stable release is still preferred.
 
+On Windows, an ordinary update copies new files into the application folder and leaves that folder's name as it is. A flagged version removes leftover application files the first time it opens, including when an older Mason Jar installed it. The folder path stays the same. Settings, models, and the Python environment stay in the Mason Jar home folder (`~/.masonjar`). Project bundles stay where they are.
+
 **If something goes wrong.** **Update Now** stays disabled when no newer build was found or the download failed. Read the status line, then **Check again**. A required update shows a banner and starts downloading.
 
 ### Application log

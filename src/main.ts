@@ -55,6 +55,7 @@ import {
   deleteInstallVersionBackups,
   CLOSE_OTHER_INSTANCES_MESSAGE,
   appendUpdateLogLine,
+  runPackagedCleanInstallPrune,
 } from "./update_manager";
 const { promisify } = require("util");
 const tar = require("tar");
@@ -1259,6 +1260,16 @@ function beginAppBootstrap(targetWin: typeof BrowserWindow) {
 }
 
 app.on("ready", () => {
+  try {
+    runPackagedCleanInstallPrune({
+      isPackaged: app.isPackaged,
+      platform: process.platform,
+      installRoot: resolveInstallRoot(app.isPackaged),
+      homeDir,
+    });
+  } catch (error) {
+    console.warn("Clean install prune failed:", error);
+  }
   logUiQueue = [];
   if (logUiFlushTimer) {
     clearTimeout(logUiFlushTimer);

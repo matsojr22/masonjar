@@ -1074,6 +1074,17 @@ function beginAppBootstrap(targetWin) {
     });
 }
 app.on("ready", () => {
+    try {
+        (0, update_manager_1.runPackagedCleanInstallPrune)({
+            isPackaged: app.isPackaged,
+            platform: process.platform,
+            installRoot: (0, update_manager_1.resolveInstallRoot)(app.isPackaged),
+            homeDir,
+        });
+    }
+    catch (error) {
+        console.warn("Clean install prune failed:", error);
+    }
     logUiQueue = [];
     if (logUiFlushTimer) {
         clearTimeout(logUiFlushTimer);
