@@ -6,6 +6,7 @@ var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
+var indexCommit = require("./index_commit");
 var importHandoff = require("./import_handoff");
 var projectIndexBusy = require("./project_index_busy");
 var run = document.getElementById("run");
@@ -84,7 +85,7 @@ ipc.on("maxResult", function (event, response) {
 	loadbar.style.width = "0";
 	if (project.isActive() && lastRunRel) {
 		pipelineRuns.setActiveRunRel("max", lastRunRel);
-		project.refreshProjectIndex().catch(function () {});
+		indexCommit.commitProjectChannel("runMax", lastRunRel);
 	}
 });
 

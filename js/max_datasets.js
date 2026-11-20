@@ -138,7 +138,46 @@ function listSignalBranches(bundleRoot) {
 	return branches;
 }
 
+function datasetsFromIndex(bundleRoot, branch) {
+	var fileIndex;
+	try {
+		fileIndex = require("./file_index");
+	} catch (_err) {
+		return null;
+	}
+	var index = fileIndex.readFileIndex(bundleRoot, path.join(bundleRoot, ".masonjar"));
+	if (!index || index.version < 2 || !Array.isArray(index.leaves)) {
+		return null;
+	}
+	var out = [];
+	for (var i = 0; i < index.leaves.length; i++) {
+		var leaf = index.leaves[i];
+		if (!leaf || leaf.role !== "max" || leaf.qcScout) {
+			continue;
+		}
+		var rel = String(leaf.leafRel || "");
+		if (branch && rel.indexOf(branch + "/") !== 0 && leaf.signalBranch !== branch) {
+			continue;
+		}
+		out.push({
+			kind: leaf.kind || "max",
+			rel: rel,
+			abs: path.join(bundleRoot, "data", "counting", "03_max", rel.split("/").join(path.sep)),
+			mtime: leaf.mtime || 0,
+			label: rel,
+		});
+	}
+	out.sort(function (a, b) {
+		return (b.mtime || 0) - (a.mtime || 0);
+	});
+	return out;
+}
+
 function listDatasetsForBranch(bundleRoot, branch) {
+	var indexed = datasetsFromIndex(bundleRoot, branch);
+	if (indexed) {
+		return indexed;
+	}
 	var root = branchRootAbs(bundleRoot, branch);
 	if (!root || !fs.existsSync(root)) {
 		return [];

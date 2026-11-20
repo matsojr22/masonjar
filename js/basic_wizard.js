@@ -6,6 +6,7 @@ var { ipcRenderer } = require("electron");
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRuns = require("./pipeline_runs");
+var indexCommit = require("./index_commit");
 var maxDatasets = require("./max_datasets");
 var projectIndexBusy = require("./project_index_busy");
 var preprocessWizard = require("./preprocess_wizard");
@@ -750,8 +751,26 @@ function updateProjectTracking(ok) {
 	}
 	project.saveProjectJson();
 	try {
-		project.refreshProjectIndex(bundleRoot());
-	} catch (_e) {}
+		var basicRel = "";
+		var signalOutCommit = (state.lastOutputs || []).find(function (o) {
+			return o.role === "signal";
+		});
+		if (signalOutCommit && signalOutCommit.output_abs) {
+			var basicBase = pipelineRuns.resolveRoleBaseAbsForBundle(
+				bundleRoot(),
+				projectRoles(),
+				"max",
+			);
+			basicRel = basicBase
+				? path.relative(basicBase, signalOutCommit.output_abs).split(path.sep).join("/")
+				: "";
+		}
+		if (basicRel) {
+			indexCommit.commitProjectChannel("runBasic", basicRel);
+		}
+	} catch (commitErr) {
+		console.warn("[BasicWizard] index commit:", commitErr);
+	}
 }
 
 function onRunFinished(result) {

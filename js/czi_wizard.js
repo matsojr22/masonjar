@@ -12,6 +12,7 @@ var orientGeometry = require("./orient_geometry");
 var geometryState = require("./geometry_state");
 var geometryHistory = require("./geometry_history");
 var branding = require("./branding");
+var indexCommit = require("./index_commit");
 var reextractPicker = require("./czi_reextract_picker");
 
 var ipc = require("electron").ipcRenderer;
@@ -1890,6 +1891,7 @@ async function syncProjectIndexAfterExtract() {
 		return { matchedCount: 0, expected: 0, dapiOrphans: 0, maxOrphans: 0 };
 	}
 	setActiveMaxRuns();
+	indexCommit.commitChannel("runCziImport", { bundleRoot: wizardState.bundleRoot });
 	await project.refreshProjectIndex(wizardState.bundleRoot);
 	var index = project.readProjectFileIndex(wizardState.bundleRoot);
 	var report = project.computeMatchReport(index, ["dapi", "max"]);
@@ -2710,6 +2712,7 @@ async function runApplyGeometry() {
 
 async function finishWizard(geometryPayload) {
 	setActiveMaxRuns();
+	indexCommit.commitProjectChannel("runApplyGeometry", "");
 	await project.refreshProjectIndex(wizardState.bundleRoot);
 	var status = qs("finishStatus");
 	var report = project.computeMatchReport(

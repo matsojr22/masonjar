@@ -5,6 +5,7 @@ var workspace = require("./workspace");
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRuns = require("./pipeline_runs");
+var indexCommit = require("./index_commit");
 var projectIndexBusy = require("./project_index_busy");
 var run = document.getElementById("run");
 var indir = document.getElementById("indir");
@@ -76,7 +77,7 @@ ipc.on("exportDualTifResult", function (_event, errDetail) {
 	loadbar.style.width = "0";
 	if (project.isActive() && lastRunRel) {
 		pipelineRuns.setActiveRunRel("dual", lastRunRel);
-		project.refreshProjectIndex().catch(function () {});
+		indexCommit.commitProjectChannel("runExportDualTif", lastRunRel);
 	}
 	if (errDetail) {
 		loadmessage.textContent = String(errDetail);

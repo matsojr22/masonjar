@@ -1,4 +1,5 @@
 var ipc = require("electron").ipcRenderer;
+var indexCommit = require("./index_commit");
 var workspace = require("./workspace");
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
@@ -61,6 +62,12 @@ ipc.on("adjustResult", function (event, response) {
 	loadbar.style.width = "0";
 	if (response && response.cancelled) {
 		loadmessage.textContent = "Viewer/Editor closed.";
+		return;
+	}
+	try {
+		indexCommit.commitProjectChannel("runAdjust", "");
+	} catch (commitErr) {
+		loadmessage.textContent = "Annotations saved, but the index was not updated: " + (commitErr.message || commitErr);
 		return;
 	}
 	loadmessage.innerHTML = "";

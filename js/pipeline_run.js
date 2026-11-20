@@ -210,7 +210,9 @@ function prepareAdjustSession() {
 	if (!index) {
 		return { sliceListPath: "", summary: "", sliceIds: [] };
 	}
-	var report = fileIndex.computeMatchReport(index, ["dapi", "slices"]);
+	var report = fileIndex.computeMatchReport(index, ["dapi", "slices"], {
+		activeRuns: (proj.processing && proj.processing.active_runs) || {},
+	});
 	var ids = fileIndex.getProcessingSliceIds(bundleRoot, proj, index, report, {
 		stepId: "adjust",
 	});

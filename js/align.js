@@ -6,6 +6,7 @@ var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
+var indexCommit = require("./index_commit");
 var alignIpc = require("./align_ipc");
 var projectIndexBusy = require("./project_index_busy");
 var run = document.getElementById("run");
@@ -318,7 +319,7 @@ ipc.on("alignResult", function (event, response) {
 		pipelineRuns.setActiveRunRel("align", lastRunRel);
 		var alignLeaf = pipelineRuns.resolveActiveRunLeafAbs("slices");
 		project.mergeAlignWarpReport(project.getBundleRoot(), alignLeaf);
-		project.refreshProjectIndex().catch(function () {});
+		indexCommit.commitProjectChannel("runAlign", lastRunRel);
 		project.notifyProcessingStateChanged();
 	}
 

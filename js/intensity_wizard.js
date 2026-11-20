@@ -7,6 +7,7 @@ var ipc = require("electron").ipcRenderer;
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRuns = require("./pipeline_runs");
+var indexCommit = require("./index_commit");
 var branding = require("./branding");
 var structureCatalog = require("./structure_catalog");
 var atlasStyle = require("./atlas_region_style");
@@ -674,7 +675,7 @@ if (!setup || !setup.indir || !setup.annodir) {
 		lastResult.pkls = countPklsInOutput(lastResult.outputDir);
 		if (project.isActive() && lastRunRel) {
 			pipelineRuns.setActiveRunRel("intensity", lastRunRel);
-			project.refreshProjectIndex().catch(function () {});
+			indexCommit.commitProjectChannel("runIntensity", lastRunRel);
 		}
 		try {
 			sessionStorage.removeItem(SETUP_KEY);

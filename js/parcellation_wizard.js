@@ -11,6 +11,7 @@ var atlasStyle = require("./atlas_region_style");
 var wizardBusy = require("./wizard_busy");
 var regionDualList = require("./region_dual_list");
 var projectIndexBusy = require("./project_index_busy");
+var indexCommit = require("./index_commit");
 
 var PLAN_KEY = "masonjar.parcellationPlan";
 var CONFIG_FILENAME = "parcellation_run_config.json";
@@ -460,6 +461,9 @@ function finishRun(success) {
 			),
 			"utf8",
 		);
+		if (success) {
+			indexCommit.commitProjectChannel("runParcellation", "");
+		}
 	} catch (_e) {
 		/* ignore */
 	}

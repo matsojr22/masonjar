@@ -227,7 +227,15 @@ function testSlicesRoleIndexesActiveRunOnly() {
 			activeRuns: activeRuns,
 		})
 		.then(function (index) {
-			var report = fileIndex.computeMatchReport(index, ["dapi", "slices"]);
+			var report = fileIndex.computeMatchReport(index, ["dapi", "slices"], {
+				activeRuns: activeRuns,
+			});
+			assert.ok(
+				index.files.some(function (row) {
+					return row.role === "slices" && row.leafRel === "align/run_b";
+				}),
+				"the full index keeps the sibling align leaf",
+			);
 			assert.ok(
 				report.matchedSliceIds.indexOf("M528_s027") >= 0,
 				"active run slice should index",
@@ -268,7 +276,9 @@ function testSlicesRoleIgnoresWarpedTiffs() {
 			});
 			assert.strictEqual(sliceRows.length, 1, "only annotation PKLs should index");
 			assert.strictEqual(sliceRows[0].sliceId, "M457_s001");
-			var report = fileIndex.computeMatchReport(index, ["dapi", "slices"]);
+			var report = fileIndex.computeMatchReport(index, ["dapi", "slices"], {
+				activeRuns: activeRuns,
+			});
 			assert.deepStrictEqual(report.matchedSliceIds, ["M457_s001"]);
 			helpers.rmDir(bundle);
 		});
@@ -299,6 +309,68 @@ function testOutputExistsSharpenTophat() {
 	helpers.rmDir(bundle);
 }
 
+function testFullIndexKeepsEveryMaxLeaf() {
+	var bundle = helpers.tmpDir("mj-all-max-");
+	var roles = pipelineRuns.CANONICAL_ROLES;
+	var runA = path.join(bundle, roles.max, "somata", "max", "runA");
+	var runB = path.join(bundle, roles.max, "m2achr", "sharpen", "runEq");
+	fs.mkdirSync(runA, { recursive: true });
+	fs.mkdirSync(runB, { recursive: true });
+	helpers.touchImage(runA, "M466_s005.tif");
+	helpers.touchImage(runB, "M466_s005.tif");
+	fs.writeFileSync(
+		path.join(runB, "run_manifest.json"),
+		JSON.stringify({ radius: 3, amount: 2, equalize: true, input_dir: runA }),
+	);
+	var pred = path.join(bundle, roles.predictions, "somata", "det");
+	fs.mkdirSync(pred, { recursive: true });
+	fs.writeFileSync(path.join(pred, "Predictions_M466_s005.pkl"), "p");
+	fs.writeFileSync(
+		path.join(pred, "run_manifest.json"),
+		JSON.stringify({ input_dir: runB, confidence: "0.5", tile: "640" }),
+	);
+	return fileIndex.buildFileIndex(bundle, roles, {}).then(function (index) {
+		var leaves = index.leaves.filter(function (leaf) {
+			return leaf.role === "max";
+		});
+		assert.strictEqual(leaves.length, 2);
+		var sharpen = fileIndex.leafRecord(index, "max", "m2achr/sharpen/runEq");
+		assert.ok(sharpen);
+		assert.strictEqual(sharpen.parameters.radius, 3);
+		var detection = fileIndex.leafRecord(index, "predictions", "somata/det");
+		assert.ok(detection);
+		assert.ok(detection.sourceLeafRel.indexOf("m2achr/sharpen/runEq") >= 0);
+		var image = fileIndex.fileForSlice(index, detection.sourceLeafRel, "M466_s005");
+		assert.ok(image);
+		assert.ok(image.relPath.indexOf("m2achr/sharpen/runEq") >= 0);
+		assert.ok(image.relPath.indexOf("somata/max") < 0);
+		fileIndex.recordLeaf(bundle, path.join(bundle, ".masonjar"), {
+			absDir: runA,
+			role: "max",
+			leafRel: "somata/max/runA",
+		});
+		var written = fileIndex.readFileIndex(bundle, path.join(bundle, ".masonjar"));
+		assert.ok(fileIndex.leafRecord(written, "max", "somata/max/runA"));
+		fileIndex.recordLeaf(bundle, path.join(bundle, ".masonjar"), {
+			absDir: runB,
+			role: "max",
+			leafRel: "m2achr/sharpen/runEq",
+		});
+		written = fileIndex.readFileIndex(bundle, path.join(bundle, ".masonjar"));
+		assert.ok(fileIndex.leafRecord(written, "max", "somata/max/runA"));
+		assert.ok(fileIndex.leafRecord(written, "max", "m2achr/sharpen/runEq"));
+		fileIndex.removeLeaf(bundle, path.join(bundle, ".masonjar"), "max", "somata/max/runA");
+		written = fileIndex.readFileIndex(bundle, path.join(bundle, ".masonjar"));
+		assert.ok(!fileIndex.leafRecord(written, "max", "somata/max/runA"));
+		assert.ok(fileIndex.leafRecord(written, "max", "m2achr/sharpen/runEq"));
+		var activeRuns = pipelineRuns.defaultActiveRuns();
+		activeRuns.max = "somata/max/runA";
+		var report = fileIndex.computeMatchReport(index, ["dapi", "max"], { activeRuns: activeRuns });
+		assert.ok(report.matchedSliceIds.indexOf("M466_s005") < 0 || report.bySlice.M466_s005.roles.max.leafRel === "somata/max/runA");
+		helpers.rmDir(bundle);
+	});
+}
+
 var tests = [
 	testSliceIdFromFilename,
 	testListImageFiles,
@@ -310,6 +382,7 @@ var tests = [
 	testOutputExistsSharpenTophat,
 	testSlicesRoleIndexesActiveRunOnly,
 	testSlicesRoleIgnoresWarpedTiffs,
+	testFullIndexKeepsEveryMaxLeaf,
 ];
 
 function runAll() {

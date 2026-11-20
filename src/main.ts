@@ -3528,6 +3528,11 @@ ipcMain.on("runDetection", function (event: any, data: any[]) {
   if (qcOnly) {
     custom_args.push("--qc-only");
   }
+  const inputDatasetRel =
+    data.length > 14 ? String(data[14] || "").trim() : "";
+  if (inputDatasetRel) {
+    custom_args.push("--input-dataset-rel", inputDatasetRel);
+  }
 
   const { job, pyshell, releaseJob } = startPyJobShell(
     "find_neurons.py",

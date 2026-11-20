@@ -799,6 +799,18 @@ function applyPostStepSideEffects(proj, stepId, outputAbs, _branch, plan, paths)
     catch (_err) {
         /* ignore */
     }
+    try {
+        const indexCommit = require("./js/index_commit");
+        indexCommit.commitBatchStep(proj.path, stepId, outputAbs, rel);
+    }
+    catch (commitErr) {
+        throw new Error("Index was not updated after " +
+            stepId +
+            ": " +
+            (commitErr && commitErr.message
+                ? commitErr.message
+                : String(commitErr)));
+    }
     return rel;
 }
 function finalizeBatchApplyGeometry(proj, resultPayload) {
@@ -850,7 +862,7 @@ function readProjectMeta(projPath) {
         return { roles: {}, processing: undefined };
     }
 }
-function buildDetectLikeArgs(deps, params, indir, finalOut, sliceListPath, qcOnly, intensityMinOverride) {
+function buildDetectLikeArgs(deps, params, indir, finalOut, sliceListPath, qcOnly, intensityMinOverride, inputDatasetRel) {
     var _a, _b, _c, _d, _e;
     const models = {
         somata: "models/chaosdruid.pt",
@@ -898,6 +910,13 @@ function buildDetectLikeArgs(deps, params, indir, finalOut, sliceListPath, qcOnl
     }
     if (qcOnly) {
         args.push("--qc-only");
+    }
+    const datasetRel = String(inputDatasetRel || "")
+        .trim()
+        .replace(/\\/g, "/")
+        .replace(/^\/+|\/+$/g, "");
+    if (datasetRel && datasetRel.split("/").indexOf("..") < 0) {
+        args.push("--input-dataset-rel", datasetRel);
     }
     return args;
 }
@@ -1137,7 +1156,7 @@ function buildJob(deps, proj, stepId, plan, sliceListPath, onLine, preflight) {
             branch = branchName;
         }
         fs.mkdirSync(finalOut, { recursive: true });
-        const args = buildDetectLikeArgs(deps, params, paths.indir || "", finalOut, sliceListPath, stepId === "detect_qc", resolvedIntensity);
+        const args = buildDetectLikeArgs(deps, params, paths.indir || "", finalOut, sliceListPath, stepId === "detect_qc", resolvedIntensity, inputDatasetRel);
         return {
             scriptName: "find_neurons.py",
             args,
@@ -1645,8 +1664,17 @@ function runBatchQueue(deps, plan, callbacks) {
                 }
                 let outputLeafRel;
                 if (status === "ok") {
-                    outputLeafRel = applyPostStepSideEffects(proj, stepId, job.finalOutAbs, job.branch, plan, job.paths);
-                    if (stepId === "apply_geometry") {
+                    try {
+                        outputLeafRel = applyPostStepSideEffects(proj, stepId, job.finalOutAbs, job.branch, plan, job.paths);
+                    }
+                    catch (commitErr) {
+                        status = "failed";
+                        reason =
+                            commitErr && commitErr.message
+                                ? commitErr.message
+                                : String(commitErr);
+                    }
+                    if (status === "ok" && stepId === "apply_geometry") {
                         finalizeBatchApplyGeometry(proj, result.resultPayload);
                     }
                 }

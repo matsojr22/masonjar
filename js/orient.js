@@ -15,6 +15,7 @@ var orientSlicePlan = require("./orient_slice_plan");
 var geometryState = require("./geometry_state");
 var branding = require("./branding");
 var projectIndexBusy = require("./project_index_busy");
+var indexCommit = require("./index_commit");
 
 var geometryRunning = false;
 var previewRepairRunning = false;
@@ -654,6 +655,11 @@ function runApplyGeometry() {
 				updateOrientPreviewBanner();
 				reject(new Error(errMsg));
 				return;
+			}
+			try {
+				indexCommit.commitProjectChannel("runApplyGeometry", "");
+			} catch (commitErr) {
+				verboseLog("ERROR: index was not updated: " + (commitErr.message || commitErr));
 			}
 			var summary =
 				"Geometry applied — " +

@@ -5,6 +5,7 @@ var path = require("path");
 var ipc = require("electron").ipcRenderer;
 var branding = require("./branding");
 var project = require("./project");
+var indexCommit = require("./index_commit");
 var fileIndex = require("./file_index");
 var cziImport = require("./czi_import");
 var tissuePaths = require("../js/bundle_slice_paths");
@@ -479,9 +480,11 @@ function finishApply(result) {
 			slices: result.slices || {},
 		};
 		project.saveProjectJson(root, pj);
-		project.refreshProjectIndex(root).catch(function (err) {
-			console.warn("[TissueCleanup] refreshProjectIndex:", err);
-		});
+		try {
+			indexCommit.commitProjectChannel("runTissueCleanupApply", "");
+		} catch (commitErr) {
+			console.warn("[TissueCleanup] index commit:", commitErr);
+		}
 		try {
 			fs.rmSync(draftDir(), { recursive: true, force: true });
 		} catch (_err) {}

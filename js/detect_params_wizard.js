@@ -6,6 +6,7 @@ var ipc = require("electron").ipcRenderer;
 var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRuns = require("./pipeline_runs");
+var indexCommit = require("./index_commit");
 var maxDatasets = require("./max_datasets");
 var detectCommon = require("./detect_common");
 var detectParams = require("./detect_params");
@@ -902,6 +903,7 @@ function startScout() {
 		"Suggesting intensity with the default cutoffs (confidence 0.50, area 200, eccentricity 0.20)…",
 	);
 	var method = detectionMethod();
+	var scoutRel = pipelineRuns.relFromRoleBase("max", dataset.abs) || "";
 	ipc.send("runDetection", [
 		dataset.abs,
 		outDir,
@@ -917,6 +919,7 @@ function startScout() {
 		0,
 		"",
 		true,
+		scoutRel,
 	]);
 }
 
@@ -944,6 +947,19 @@ function onScoutResult(_event, payload) {
 	}
 	var store = detectParams.mergeIntensitySuggestions(currentStore(), perSlice);
 	saveStore(store);
+	try {
+		indexCommit.commitChannel("runDetection", {
+			bundleRoot: project.getBundleRoot(),
+			outputAbs: payload.outputAbs || state.scoutOut || "",
+			leafRel: payload.outputAbs
+				? pipelineRuns.relFromRoleBase("detect", payload.outputAbs)
+				: "",
+			qcScout: true,
+		});
+	} catch (commitErr) {
+		setRawProgress(0, "Suggestions were saved, but the index was not updated: " + (commitErr.message || commitErr));
+		return;
+	}
 	renderBanner();
 	applyStoredSliders();
 	drawBoxes();
@@ -1332,7 +1348,7 @@ ipc.on("detectResult", function () {
 	state.fullRunning = false;
 	if (project.isActive() && state.runRel) {
 		pipelineRuns.setActiveRunRel("detect", state.runRel);
-		project.refreshProjectIndex().catch(function () {});
+		indexCommit.commitProjectChannel("runDetection", state.runRel);
 	}
 	showSummary(true, "Cell detection finished.");
 });

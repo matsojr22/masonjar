@@ -3,6 +3,7 @@ var path = require("path");
 var ipc = require("electron").ipcRenderer;
 var workspace = require("./workspace");
 var project = require("./project");
+var indexCommit = require("./index_commit");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var projectIndexBusy = require("./project_index_busy");
@@ -203,8 +204,7 @@ ipc.on("dapiCleanupResult", function () {
 	loadmessage.innerHTML = "";
 	loadbar.style.width = "0";
 	if (project.isActive()) {
-		var bundleRoot = project.getBundleRoot();
-		project.refreshProjectIndex(bundleRoot).catch(function () {});
+		indexCommit.commitProjectChannel("runDapiCleanup", "");
 	}
 });
 

@@ -14,6 +14,181 @@ function sliceStemFromImageBasename(basename) {
 	return dot >= 0 ? stem.slice(0, dot) : stem;
 }
 
+function normalizeDatasetRel(rel) {
+	var norm = String(rel || "")
+		.replace(/\\/g, "/")
+		.replace(/^\/+|\/+$/g, "");
+	if (!norm || norm.split("/").indexOf("..") >= 0) {
+		return "";
+	}
+	return norm;
+}
+
+function joinUnderBase(base, rel) {
+	var norm = normalizeDatasetRel(rel);
+	if (!base || !norm) {
+		return "";
+	}
+	return path.join(base, norm.split("/").join(path.sep));
+}
+
+function isInsideDir(root, target) {
+	if (!root || !target) {
+		return false;
+	}
+	var rel = path.relative(path.resolve(root), path.resolve(target));
+	return rel === "" || (rel.indexOf("..") !== 0 && !path.isAbsolute(rel));
+}
+
+function suffixAfterMarker(absPath, marker) {
+	var norm = String(absPath || "").replace(/\\/g, "/");
+	var idx = norm.toLowerCase().lastIndexOf(String(marker || "").toLowerCase());
+	if (idx < 0) {
+		return "";
+	}
+	return norm
+		.slice(idx + marker.length)
+		.replace(/^\/+|\/+$/g, "");
+}
+
+function datasetSuffixFromAbsolute(absPath) {
+	var afterMax = suffixAfterMarker(absPath, "03_max/");
+	if (afterMax) {
+		return normalizeDatasetRel(afterMax);
+	}
+	var afterCounting = suffixAfterMarker(absPath, "data/counting/");
+	var norm = normalizeDatasetRel(afterCounting);
+	if (!norm) {
+		return "";
+	}
+	var lower = norm.toLowerCase();
+	if (lower === "03_max") {
+		return "";
+	}
+	if (lower.indexOf("03_max/") === 0) {
+		return normalizeDatasetRel(norm.slice("03_max/".length));
+	}
+	return "";
+}
+
+function matchCatalogRel(catalog, suffix) {
+	var want = normalizeDatasetRel(suffix).toLowerCase();
+	if (!want) {
+		return "";
+	}
+	var rows = catalog || [];
+	for (var i = 0; i < rows.length; i++) {
+		var item = rows[i];
+		var rel = normalizeDatasetRel(item && item.rel != null ? item.rel : item);
+		if (rel.toLowerCase() === want) {
+			return rel;
+		}
+	}
+	return "";
+}
+
+function findSliceImageInDir(dir, sliceId) {
+	if (!dir || !sliceId || !fs.existsSync(dir)) {
+		return "";
+	}
+	var want = String(sliceId).toLowerCase();
+	var entries;
+	try {
+		entries = fs.readdirSync(dir, { withFileTypes: true });
+	} catch (_err) {
+		return "";
+	}
+	for (var i = 0; i < entries.length; i++) {
+		if (!entries[i].isFile()) {
+			continue;
+		}
+		var name = entries[i].name;
+		if (!(IMAGE_EXT_RE.test(name) || name.toLowerCase().indexOf(".ome.") !== -1)) {
+			continue;
+		}
+		if (sliceStemFromImageBasename(name).toLowerCase() === want) {
+			return path.join(dir, name);
+		}
+	}
+	return "";
+}
+
+function missingSourceMessage(sliceId, located) {
+	var id = sliceId || "this section";
+	if (located && located.dir) {
+		return "Could not find the source image for " + id + " in " + located.dir + ".";
+	}
+	if (!located || !located.recorded) {
+		return (
+			"Could not find the source image for " +
+			id +
+			". This detection run has no recorded input folder."
+		);
+	}
+	if (!located.recordedExists) {
+		return (
+			"Could not find the source image for " +
+			id +
+			". The recorded input folder is missing: " +
+			located.recorded +
+			"."
+		);
+	}
+	return "Could not find the source image for " + id + " in " + located.recorded + ".";
+}
+
+function resolveDetectSourceImage(options) {
+	options = options || {};
+	var sliceId = String(options.sliceId || "");
+	var manifest = options.manifest || {};
+	var bundleRoot = options.bundleRoot || "";
+	var maxBase = options.maxBaseAbs || "";
+	var recorded = String(manifest.input_dir || "").trim();
+	var storedRel = normalizeDatasetRel(manifest.input_dataset_rel);
+	var recordedExists = !!(recorded && fs.existsSync(recorded));
+	var dir = "";
+
+	if (storedRel && maxBase) {
+		var fromRel = joinUnderBase(maxBase, storedRel);
+		if (fromRel && fs.existsSync(fromRel)) {
+			dir = fromRel;
+		}
+	}
+	if (!dir && recorded && bundleRoot && isInsideDir(bundleRoot, recorded)) {
+		var rejoined = path.resolve(recorded);
+		if (fs.existsSync(rejoined)) {
+			dir = rejoined;
+		}
+	}
+	if (!dir && recorded && maxBase) {
+		var matched = matchCatalogRel(
+			options.catalogRels,
+			datasetSuffixFromAbsolute(recorded),
+		);
+		if (matched) {
+			var fromCat = joinUnderBase(maxBase, matched);
+			if (fromCat && fs.existsSync(fromCat)) {
+				dir = fromCat;
+			}
+		}
+	}
+	if (!dir && recordedExists) {
+		dir = recorded;
+	}
+
+	var located = {
+		image: dir ? findSliceImageInDir(dir, sliceId) : "",
+		dir: dir,
+		recorded: recorded,
+		recordedExists: recordedExists,
+		message: "",
+	};
+	if (!located.image) {
+		located.message = missingSourceMessage(sliceId, located);
+	}
+	return located;
+}
+
 function listInputSliceStems(indirPath) {
 	if (!indirPath || !fs.existsSync(indirPath)) {
 		return [];
@@ -238,9 +413,9 @@ function buildRunPayload(options) {
 				!!(form.perSliceQc && form.perSliceQc.checked),
 				params.intensityMin,
 			];
-			if (options.sliceParamsPath) {
-				args.push(options.sliceParamsPath);
-			}
+			args.push(options.sliceParamsPath || "");
+			args.push(false);
+			args.push(inputDatasetRel || "");
 			return args;
 		})(),
 	};
@@ -248,6 +423,7 @@ function buildRunPayload(options) {
 
 module.exports = {
 	sliceStemFromImageBasename: sliceStemFromImageBasename,
+	resolveDetectSourceImage: resolveDetectSourceImage,
 	listInputSliceStems: listInputSliceStems,
 	modelBranchForSlug: modelBranchForSlug,
 	parseDetectParams: parseDetectParams,

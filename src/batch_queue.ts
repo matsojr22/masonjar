@@ -1166,6 +1166,19 @@ function applyPostStepSideEffects(
   } catch (_err) {
     /* ignore */
   }
+  try {
+    const indexCommit = require("./js/index_commit");
+    indexCommit.commitBatchStep(proj.path, stepId, outputAbs, rel);
+  } catch (commitErr) {
+    throw new Error(
+      "Index was not updated after " +
+        stepId +
+        ": " +
+        (commitErr && (commitErr as Error).message
+          ? (commitErr as Error).message
+          : String(commitErr)),
+    );
+  }
   return rel;
 }
 
@@ -1242,6 +1255,7 @@ function buildDetectLikeArgs(
   sliceListPath: string,
   qcOnly: boolean,
   intensityMinOverride?: number,
+  inputDatasetRel?: string,
 ): string[] {
   const models: Record<string, string> = {
     somata: "models/chaosdruid.pt",
@@ -1291,6 +1305,13 @@ function buildDetectLikeArgs(
   }
   if (qcOnly) {
     args.push("--qc-only");
+  }
+  const datasetRel = String(inputDatasetRel || "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\/+|\/+$/g, "");
+  if (datasetRel && datasetRel.split("/").indexOf("..") < 0) {
+    args.push("--input-dataset-rel", datasetRel);
   }
   return args;
 }
@@ -1610,6 +1631,7 @@ function buildJob(
       sliceListPath,
       stepId === "detect_qc",
       resolvedIntensity,
+      inputDatasetRel,
     );
     return {
       scriptName: "find_neurons.py",
@@ -2292,15 +2314,23 @@ export async function runBatchQueue(
 
       let outputLeafRel: string | undefined;
       if (status === "ok") {
-        outputLeafRel = applyPostStepSideEffects(
-          proj,
-          stepId,
-          job.finalOutAbs,
-          job.branch,
-          plan,
-          job.paths,
-        );
-        if (stepId === "apply_geometry") {
+        try {
+          outputLeafRel = applyPostStepSideEffects(
+            proj,
+            stepId,
+            job.finalOutAbs,
+            job.branch,
+            plan,
+            job.paths,
+          );
+        } catch (commitErr) {
+          status = "failed";
+          reason =
+            commitErr && (commitErr as Error).message
+              ? (commitErr as Error).message
+              : String(commitErr);
+        }
+        if (status === "ok" && stepId === "apply_geometry") {
           finalizeBatchApplyGeometry(proj, result.resultPayload);
         }
       }

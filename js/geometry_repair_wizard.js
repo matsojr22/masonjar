@@ -13,6 +13,7 @@ var cziImport = require("./czi_import");
 var orientGeometry = require("./orient_geometry");
 var geometryState = require("./geometry_state");
 var branding = require("./branding");
+var indexCommit = require("./index_commit");
 
 project.tryRestoreActiveProject();
 pipelineGate.assertPipelineAccess();
@@ -441,6 +442,11 @@ function sendApplyGeometryJob(cfgPath, label) {
 			if (!payload || payload.ok === false) {
 				reject(new Error((payload && payload.error) || label + " failed"));
 				return;
+			}
+			try {
+				indexCommit.commitProjectChannel("runApplyGeometry", "");
+			} catch (commitErr) {
+				appendLog("repairLog", "Index was not updated: " + (commitErr.message || commitErr));
 			}
 			resolve(payload);
 		}

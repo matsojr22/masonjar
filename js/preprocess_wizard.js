@@ -9,6 +9,7 @@ var branding = require("./branding");
 var project = require("./project");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
+var indexCommit = require("./index_commit");
 var maxDatasets = require("./max_datasets");
 var cziImport = require("./czi_import");
 var fileIndex = require("./file_index");
@@ -1335,8 +1336,9 @@ function wirePreprocessWizard(opts) {
 		if (setActiveCheckbox && setActiveCheckbox.checked && state.lastRunRel) {
 			pipelineRuns.setActiveRunRel("max", state.lastRunRel);
 		}
-		if (project.isActive()) {
-			project.refreshProjectIndex().catch(function () {});
+		if (project.isActive() && state.lastRunRel) {
+			var commitChannel = stepId === "tophat" ? "runTophat" : "runSharpen";
+			indexCommit.commitProjectChannel(commitChannel, state.lastRunRel);
 		}
 		setStep(3);
 	}

@@ -264,6 +264,11 @@ if __name__ == "__main__":
         default="",
     )
     parser.add_argument(
+        "--input-dataset-rel",
+        default="",
+        help="source leaf relative to the max role base (03_max)",
+    )
+    parser.add_argument(
         "--per-slice-qc",
         help="write per-slice QC histogram PNGs under detect_qc_slices/",
         action="store_true",
@@ -346,6 +351,11 @@ if __name__ == "__main__":
     if allowed is not None:
         files = [f for f in files if slice_id_allowed(_image_slice_id(f), allowed)]
 
+    input_dataset_rel = str(args.input_dataset_rel or "").strip().replace("\\", "/")
+    input_dataset_rel = input_dataset_rel.strip("/")
+    if not input_dataset_rel or ".." in input_dataset_rel.split("/"):
+        input_dataset_rel = ""
+
     manifest = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "input_dir": str(input_dir),
@@ -363,6 +373,8 @@ if __name__ == "__main__":
         "per_slice_qc": bool(args.per_slice_qc),
         "slice_params": "detect_slice_params.json" if slice_spec is not None else None,
     }
+    if input_dataset_rel:
+        manifest["input_dataset_rel"] = input_dataset_rel
     with open(output_dir / "run_manifest.json", "w", encoding="utf-8") as mf:
         json.dump(manifest, mf, indent=2)
 

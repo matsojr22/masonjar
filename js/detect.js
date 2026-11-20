@@ -8,6 +8,7 @@ var project = require("./project");
 var pipelineGate = require("./pipeline_gate");
 var pipelineRun = require("./pipeline_run");
 var pipelineRuns = require("./pipeline_runs");
+var indexCommit = require("./index_commit");
 var maxDatasets = require("./max_datasets");
 var maxDatasetPicker = require("./max_dataset_picker");
 var projectIndexBusy = require("./project_index_busy");
@@ -258,6 +259,10 @@ run.addEventListener("click", function () {
 			e,
 			plan.sliceListPath || "",
 			!!(perSliceQc && perSliceQc.checked),
+			0,
+			"",
+			false,
+			inputDatasetRel || "",
 		]);
 	}
 });
@@ -286,7 +291,7 @@ ipc.on("detectResult", function (event, response) {
 	loadbar.style.width = "0";
 	if (project.isActive() && lastDetectionRunRel) {
 		pipelineRuns.setActiveRunRel("detect", lastDetectionRunRel);
-		project.refreshProjectIndex().catch(function () {});
+		indexCommit.commitProjectChannel("runDetection", lastDetectionRunRel);
 	}
 });
 

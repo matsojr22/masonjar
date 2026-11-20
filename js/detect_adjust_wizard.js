@@ -11,6 +11,7 @@ var detectParams = require("./detect_params");
 var preprocess = require("./preprocess_wizard");
 var projectIndexBusy = require("./project_index_busy");
 var dialogs = require("./dialogs");
+var indexCommit = require("./index_commit");
 
 var previewToken = 0;
 
@@ -548,23 +549,49 @@ function paramsForSlice(sliceId) {
 	};
 }
 
-function findImage(sliceId) {
-	var inputDir = state.manifest && state.manifest.input_dir;
-	if (!inputDir || !fs.existsSync(inputDir)) {
-		return "";
-	}
-	var names;
+function locateSource(sliceId) {
+	var bundleRoot = "";
 	try {
-		names = fs.readdirSync(inputDir);
-	} catch (_err) {
-		return "";
-	}
-	for (var i = 0; i < names.length; i++) {
-		if (detectCommon.sliceStemFromImageBasename(names[i]) === sliceId) {
-			return path.join(inputDir, names[i]);
+		if (project.isActive()) {
+			bundleRoot = project.getBundleRoot() || "";
 		}
+	} catch (_err) {}
+	var fileIndex = require("./file_index");
+	var index = bundleRoot ? project.readProjectFileIndex(bundleRoot) : null;
+	var leaf = index ? fileIndex.leafRecord(index, "predictions", state.runRel) : null;
+	if (!leaf) {
+		return {
+			image: "",
+			dir: "",
+			message: "The index has no record for detection run " + (state.runRel || "this run") + ".",
+		};
 	}
-	return "";
+	if (!leaf.sourceLeafRel) {
+		return {
+			image: "",
+			dir: "",
+			message: "The index has no source leaf for " + (state.runRel || "this run") + ".",
+		};
+	}
+	var row = fileIndex.fileForSlice(index, leaf.sourceLeafRel, sliceId);
+	if (!row || !row.relPath) {
+		return {
+			image: "",
+			dir: "",
+			message:
+				"The index has no file for " +
+				sliceId +
+				" in " +
+				leaf.sourceLeafRel +
+				".",
+		};
+	}
+	var image = path.join(bundleRoot, row.relPath.split("/").join(path.sep));
+	return { image: image, dir: path.dirname(image), message: "" };
+}
+
+function findImage(sliceId) {
+	return locateSource(sliceId).image || "";
 }
 
 function listSlices(runAbs) {
@@ -619,14 +646,15 @@ function requestPreview(maxSide) {
 	if (!slice) {
 		return;
 	}
-	var image = findImage(slice.id);
+	var located = locateSource(slice.id);
+	var image = located.image || "";
 	state.sourceImageAbs = image;
 	if (!image) {
 		state.loadedPending = false;
 		renderThresholdHints();
 		var status = qs("preprocessPreviewStatus");
 		if (status) {
-			status.textContent = "Could not find the source image for " + slice.id + ".";
+			status.textContent = located.message;
 		}
 		return;
 	}
@@ -742,11 +770,12 @@ function saveCurrent() {
 	if (!slice || state.busy) {
 		return;
 	}
-	var image = state.sourceImageAbs || findImage(slice.id);
+	var locatedSave = locateSource(slice.id);
+	var image = state.sourceImageAbs || locatedSave.image || "";
 	if (!image) {
 		state.pendingIndex = null;
 		state.pendingRun = null;
-		alert("Could not find the source image for this section.");
+		alert(locatedSave.message);
 		return;
 	}
 	var bboxes = path.join(state.runAbs, "BBoxes_" + slice.id + ".png");
@@ -881,9 +910,10 @@ function loadRaw() {
 	if (!slice || state.busy) {
 		return;
 	}
-	var image = findImage(slice.id);
+	var locatedRaw = locateSource(slice.id);
+	var image = locatedRaw.image || "";
 	if (!image) {
-		alert("Could not find the source image for this section.");
+		alert(locatedRaw.message);
 		return;
 	}
 	var cache = rawCachePath(slice.id);
@@ -1101,6 +1131,11 @@ ipc.on("detectAdjustApplyResult", function (_event, payload) {
 		revert.disabled = false;
 	}
 	setProgress(100, "Saved " + (payload.count != null ? payload.count : "") + " boxes.");
+	try {
+		indexCommit.commitProjectChannel("runDetectAdjustApply", state.runRel);
+	} catch (commitErr) {
+		setProgress(100, "Saved, but the index was not updated: " + (commitErr.message || commitErr));
+	}
 	if (state.pendingRun) {
 		var nextRun = state.pendingRun;
 		state.pendingRun = null;

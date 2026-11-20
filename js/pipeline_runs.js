@@ -970,7 +970,45 @@ function discoverOutputRuns(roleDir, stepId, maxDepth) {
 	});
 }
 
+function indexedRunChoices(role) {
+	var project = projectModule();
+	if (!project.isActive || !project.isActive()) {
+		return null;
+	}
+	var bundleRoot = project.getBundleRoot();
+	if (!bundleRoot) {
+		return null;
+	}
+	var fileIndex;
+	try {
+		fileIndex = require("./file_index");
+	} catch (_err) {
+		return null;
+	}
+	var index = fileIndex.readFileIndex(bundleRoot, path.join(bundleRoot, ".masonjar"));
+	if (!index || index.version < 2 || !Array.isArray(index.leaves)) {
+		return null;
+	}
+	var choices = [];
+	for (var i = 0; i < index.leaves.length; i++) {
+		var leaf = index.leaves[i];
+		if (!leaf || leaf.role !== role || leaf.qcScout) {
+			continue;
+		}
+		choices.push({
+			rel: leaf.leafRel,
+			label: leaf.leafRel,
+			mtime: leaf.mtime || 0,
+		});
+	}
+	return choices;
+}
+
 function listRunChoicesForRole(role) {
+	var indexed = indexedRunChoices(role);
+	if (indexed) {
+		return indexed;
+	}
 	var stepId = STEP_BY_OUTPUT_ROLE[role];
 	if (!stepId) {
 		return [];
@@ -1177,19 +1215,251 @@ function listOrphanMaxFamilyLeaves(roleBase) {
 	return orphans;
 }
 
-function migrateOrphanMaxFamilyLeaves(bundleRoot, roles, processing, settings) {
+function storedMaxSuffix(value) {
+	var norm = String(value || "")
+		.trim()
+		.replace(/\\/g, "/");
+	if (!norm) {
+		return "";
+	}
+	var lower = norm.toLowerCase();
+	var marker = "03_max/";
+	var idx = lower.lastIndexOf(marker);
+	if (idx >= 0) {
+		return norm.slice(idx + marker.length).replace(/^\/+|\/+$/g, "");
+	}
+	if (norm.indexOf(":") >= 0 || lower.indexOf("//") === 0) {
+		return "";
+	}
+	return norm.replace(/^\/+|\/+$/g, "");
+}
+
+function orphanRelParts(suffix) {
+	var rel = normalizeRelPath(suffix);
+	var parts = rel ? rel.split("/") : [];
+	if (parts.length !== 2 || MAX_KIND_DIRS.indexOf(parts[0]) < 0 || !parts[1]) {
+		return null;
+	}
+	return {
+		kind: parts[0],
+		slug: parts[1],
+		orphanRel: parts[0] + "/" + parts[1],
+	};
+}
+
+function rewriteOrphanString(original, orphanRel, destRel) {
+	var norm = String(original).replace(/\\/g, "/");
+	var useBackslash = String(original).indexOf("\\") >= 0;
+	var lower = norm.toLowerCase();
+	var needle = String(orphanRel || "").toLowerCase();
+	if (!needle || lower.slice(lower.length - needle.length) !== needle) {
+		return "";
+	}
+	if (
+		lower.length !== needle.length &&
+		norm.charAt(lower.length - needle.length - 1) !== "/"
+	) {
+		return "";
+	}
+	var next = norm.slice(0, norm.length - orphanRel.length) + destRel;
+	if (useBackslash) {
+		next = next.replace(/\//g, "\\");
+	}
+	return next === original ? "" : next;
+}
+
+function listManifestJsonFiles(bundleRoot) {
+	var found = [];
+	function walk(dir, depth) {
+		if (!dir || depth > 10) {
+			return;
+		}
+		var entries;
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch (_err) {
+			return;
+		}
+		for (var i = 0; i < entries.length; i++) {
+			var name = entries[i].name;
+			if (name === "node_modules" || name === ".git") {
+				continue;
+			}
+			var full = path.join(dir, name);
+			if (entries[i].isDirectory()) {
+				walk(full, depth + 1);
+				continue;
+			}
+			if (name === "run_manifest.json" || name === "qc_scout_manifest.json") {
+				found.push(full);
+			}
+		}
+	}
+	walk(bundleRoot, 0);
+	return found;
+}
+
+function tryRewritePointer(value, roleBase, branch) {
+	var orphan = orphanRelParts(storedMaxSuffix(value));
+	if (!orphan || !branch || !roleBase) {
+		return null;
+	}
+	var oldAbs = path.join(roleBase, orphan.kind, orphan.slug);
+	var destRel = branch + "/" + orphan.orphanRel;
+	var destAbs = path.join(roleBase, destRel.split("/").join(path.sep));
+	if (fs.existsSync(oldAbs)) {
+		return null;
+	}
+	if (!fs.existsSync(destAbs)) {
+		return {
+			missing: true,
+			orphanRel: orphan.orphanRel,
+			destRel: destRel,
+		};
+	}
+	var next = rewriteOrphanString(value, orphan.orphanRel, destRel);
+	if (!next) {
+		return null;
+	}
+	return { value: next, destAbs: destAbs, destRel: destRel };
+}
+
+function rewriteOrphanPointers(bundleRoot, roleBase, branch, runs, processing, settings, dryRun) {
+	var messages = [];
+	var changed = false;
+	function note(line) {
+		messages.push(line);
+		if (!dryRun) {
+			console.log(line);
+		}
+	}
+	function applyField(holder, key, label) {
+		if (!holder || holder[key] == null || holder[key] === "") {
+			return;
+		}
+		var result = tryRewritePointer(holder[key], roleBase, branch);
+		if (!result) {
+			return;
+		}
+		if (result.missing) {
+			note(
+				"[pipeline_runs] Left " +
+					(label || key) +
+					" pointing at missing " +
+					result.orphanRel +
+					" (no " +
+					result.destRel +
+					")",
+			);
+			return;
+		}
+		if (!dryRun) {
+			holder[key] = result.value;
+		}
+		changed = true;
+		note("[pipeline_runs] Rewrote " + (label || key) + " → " + result.destRel);
+	}
+	if (runs) {
+		applyField(runs, "max", "active_runs.max");
+	}
+	if (processing && processing.detect_qc) {
+		applyField(processing.detect_qc, "signal_dataset_rel", "detect_qc.signal_dataset_rel");
+	}
+	var czi = settings && settings.czi_import;
+	if (czi && czi.max_runs && typeof czi.max_runs === "object") {
+		var runKeys = Object.keys(czi.max_runs);
+		for (var k = 0; k < runKeys.length; k++) {
+			applyField(czi.max_runs, runKeys[k], "max_runs." + runKeys[k]);
+		}
+	}
+	var manifests = listManifestJsonFiles(bundleRoot);
+	for (var i = 0; i < manifests.length; i++) {
+		var mfPath = manifests[i];
+		var data;
+		try {
+			data = JSON.parse(fs.readFileSync(mfPath, "utf8"));
+		} catch (_err) {
+			continue;
+		}
+		if (!data || typeof data !== "object") {
+			continue;
+		}
+		var fileChanged = false;
+		var fields = ["input_dir", "output_dir"];
+		for (var f = 0; f < fields.length; f++) {
+			var field = fields[f];
+			if (!data[field]) {
+				continue;
+			}
+			var result = tryRewritePointer(data[field], roleBase, branch);
+			if (!result) {
+				continue;
+			}
+			var leafName = path.basename(path.dirname(mfPath));
+			if (result.missing) {
+				note(
+					"[pipeline_runs] Left " +
+						leafName +
+						" " +
+						field +
+						" pointing at missing " +
+						result.orphanRel,
+				);
+				continue;
+			}
+			if (!dryRun) {
+				data[field] = result.value;
+			}
+			fileChanged = true;
+			changed = true;
+			note(
+				"[pipeline_runs] Rewrote " +
+					field +
+					" in " +
+					leafName +
+					" → " +
+					result.destRel,
+			);
+		}
+		var relToMax = "";
+		try {
+			relToMax = path.relative(roleBase, path.dirname(mfPath)).split(path.sep).join("/");
+		} catch (_relErr) {
+			relToMax = "";
+		}
+		if (
+			relToMax &&
+			relToMax.indexOf("..") !== 0 &&
+			branch &&
+			relToMax.indexOf(branch + "/") === 0
+		) {
+			var parts = relToMax.split("/");
+			if (
+				parts.length >= 3 &&
+				MAX_KIND_DIRS.indexOf(parts[1]) >= 0 &&
+				!data.signal_branch
+			) {
+				if (!dryRun) {
+					data.signal_branch = branch;
+				}
+				fileChanged = true;
+				changed = true;
+				note("[pipeline_runs] Set signal_branch=" + branch + " on " + relToMax);
+			}
+		}
+		if (fileChanged && !dryRun) {
+			fs.writeFileSync(mfPath, JSON.stringify(data, null, 2), "utf8");
+		}
+	}
+	return { changed: changed, messages: messages };
+}
+
+function migrateOrphanMaxFamilyLeaves(bundleRoot, roles, processing, settings, options) {
+	options = options || {};
+	var dryRun = !!options.dryRun;
 	var runs = migrateActiveRuns(processing || null);
 	var roleBase = resolveRoleBaseAbsForBundle(bundleRoot, roles, "max");
 	var orphans = listOrphanMaxFamilyLeaves(roleBase);
-	if (!orphans.length) {
-		return {
-			changed: false,
-			moved: [],
-			skippedReason: "",
-			active_runs: runs,
-			messages: [],
-		};
-	}
 	var pick = pickOrphanMigrateBranch(bundleRoot, roles, runs, settings);
 	if (!pick.branch) {
 		var skipMsg =
@@ -1233,6 +1503,12 @@ function migrateOrphanMaxFamilyLeaves(bundleRoot, roles, processing, settings) {
 			messages.push(clash);
 			continue;
 		}
+		if (dryRun) {
+			messages.push("[pipeline_runs] Would move " + o.orphanRel + " → " + destRel);
+			moved.push({ from: o.orphanRel, to: destRel });
+			changed = true;
+			continue;
+		}
 		try {
 			fs.mkdirSync(destParent, { recursive: true });
 			fs.renameSync(o.abs, destAbs);
@@ -1259,16 +1535,32 @@ function migrateOrphanMaxFamilyLeaves(bundleRoot, roles, processing, settings) {
 			runs.max = destRel;
 		}
 	}
-	// Remove empty orphan kind dirs when possible
-	for (var ki = 0; ki < MAX_KIND_DIRS.length; ki++) {
-		var emptyKind = path.join(roleBase, MAX_KIND_DIRS[ki]);
-		try {
-			if (fs.existsSync(emptyKind) && fs.readdirSync(emptyKind).length === 0) {
-				fs.rmdirSync(emptyKind);
+	if (!dryRun) {
+		for (var ki = 0; ki < MAX_KIND_DIRS.length; ki++) {
+			var emptyKind = path.join(roleBase, MAX_KIND_DIRS[ki]);
+			try {
+				if (fs.existsSync(emptyKind) && fs.readdirSync(emptyKind).length === 0) {
+					fs.rmdirSync(emptyKind);
+				}
+			} catch (_rm) {
+				/* ignore */
 			}
-		} catch (_rm) {
-			/* ignore */
 		}
+	}
+	if (pick.branch && roleBase) {
+		var repaired = rewriteOrphanPointers(
+			bundleRoot,
+			roleBase,
+			pick.branch,
+			runs,
+			processing,
+			settings,
+			dryRun,
+		);
+		if (repaired.changed) {
+			changed = true;
+		}
+		messages = messages.concat(repaired.messages);
 	}
 	return {
 		changed: changed,
@@ -1505,6 +1797,19 @@ function removeRunForRole(role, rel, options) {
 	}
 	if (metaPath) {
 		writeRunsCatalog(bundleRoot, metaPath, roles);
+	}
+	try {
+		var fileIndex = require("./file_index");
+		var metaForIndex = path.join(bundleRoot, ".masonjar");
+		for (var di = 0; di < deletedRels.length; di++) {
+			fileIndex.removeLeaf(bundleRoot, metaForIndex, role, deletedRels[di]);
+		}
+	} catch (indexErr) {
+		return {
+			ok: false,
+			error: "Deleted the folder but could not update the index: " + String(indexErr.message || indexErr),
+			deleted: deletedRels,
+		};
 	}
 	return { ok: true, deleted: deletedRels, targets: targets };
 }

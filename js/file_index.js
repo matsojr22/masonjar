@@ -6,7 +6,7 @@ var { ipcRenderer } = require("electron");
 var homeDir = require("./home_dir");
 var pipelineRuns = require("./pipeline_runs");
 
-var FILE_INDEX_VERSION = 1;
+var FILE_INDEX_VERSION = 2;
 var MANIFEST_V2 = 2;
 
 var SCAN_ROLES = [
@@ -399,6 +399,11 @@ function outputExistsForSlice(bundleRoot, stepId, sliceId, roles, activeRuns) {
 		return false;
 	}
 	activeRuns = activeRuns || null;
+	var activeRel = activeRuns && activeRuns[cfg.role] ? String(activeRuns[cfg.role]) : "";
+	var indexed = indexedSliceOnLeaf(bundleRoot, cfg.role, activeRel, sliceId);
+	if (indexed != null) {
+		return indexed;
+	}
 	var dir = resolveOutputLeafDir(bundleRoot, stepId, roles, activeRuns);
 	if (!dir || !fs.existsSync(dir)) {
 		return false;
@@ -672,6 +677,9 @@ function computeMatchReport(index, activeRoles, options) {
 		if (activeRoles.indexOf(rec.role) < 0) {
 			continue;
 		}
+		if (!fileOnActiveLeaf(rec, options.activeRuns)) {
+			continue;
+		}
 		if (!bySlice[rec.sliceId]) {
 			bySlice[rec.sliceId] = { sliceId: rec.sliceId, roles: {} };
 		}
@@ -825,112 +833,443 @@ function buildPreviewIndexFromSources(sources, options) {
 	});
 }
 
-function buildFileIndex(bundleRoot, roles, options) {
-	options = options || {};
-	var activeRuns = options.activeRuns || pipelineRuns.defaultActiveRuns();
-	var files = [];
-	var pathsForMeta = [];
-	var roleDirs = {};
-	for (var r = 0; r < SCAN_ROLES.length; r++) {
-		var role = SCAN_ROLES[r];
+function fileOnActiveLeaf(rec, activeRuns) {
+	if (!activeRuns || !rec || !rec.leafRel) {
+		return true;
+	}
+	var active = String(activeRuns[rec.role] || "").replace(/\\/g, "/");
+	if (!active) {
+		return true;
+	}
+	return String(rec.leafRel).replace(/\\/g, "/") === active;
+}
+
+function listImageFilesRecursive(dir, maxDepth) {
+	var out = [];
+	function walk(current, depth) {
+		if (!current || depth > maxDepth) {
+			return;
+		}
+		var entries;
+		try {
+			entries = fs.readdirSync(current, { withFileTypes: true });
+		} catch (_err) {
+			return;
+		}
+		for (var i = 0; i < entries.length; i++) {
+			var full = path.join(current, entries[i].name);
+			if (entries[i].isDirectory()) {
+				if (entries[i].name === ".masonjar" || entries[i].name === ".belljar") {
+					continue;
+				}
+				walk(full, depth + 1);
+				continue;
+			}
+			if (!entries[i].isFile()) {
+				continue;
+			}
+			var name = entries[i].name;
+			if (IMAGE_EXT_RE.test(name) || name.toLowerCase().indexOf(".ome.") !== -1) {
+				out.push(full);
+			}
+		}
+	}
+	walk(dir, 0);
+	return out;
+}
+
+function leafIdentity(role, leafRel) {
+	var rel = String(leafRel || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+	var parts = rel ? rel.split("/") : [];
+	var kind = "";
+	var signalBranch = "";
+	var slug = parts.length ? parts[parts.length - 1] : "";
+	if (role === "max") {
+		var maxKinds = ["max", "sharpen", "tophat", "basic"];
+		for (var i = 0; i < parts.length; i++) {
+			if (maxKinds.indexOf(parts[i]) >= 0) {
+				kind = parts[i];
+				signalBranch = i > 0 ? parts[0] : "";
+				break;
+			}
+		}
+		if (!kind && parts.length) {
+			kind = parts[0];
+		}
+	} else if (parts.length >= 2) {
+		kind = parts[0];
+		signalBranch = parts[0];
+	} else {
+		kind = parts[0] || role;
+	}
+	return { kind: kind, signalBranch: signalBranch, slug: slug };
+}
+
+var LEAF_PARAM_KEYS = [
+	"radius",
+	"amount",
+	"equalize",
+	"confidence",
+	"tile",
+	"area",
+	"eccentricity",
+	"intensity_min",
+	"source_kind",
+	"source_run_rel",
+	"input_dataset_rel",
+	"signal_branch",
+];
+
+function readLeafManifest(absDir) {
+	var mf = path.join(absDir, "run_manifest.json");
+	if (!fs.existsSync(mf)) {
+		mf = path.join(absDir, "qc_scout_manifest.json");
+	}
+	if (!fs.existsSync(mf)) {
+		return null;
+	}
+	try {
+		return JSON.parse(fs.readFileSync(mf, "utf8"));
+	} catch (_err) {
+		return null;
+	}
+}
+
+function parametersFromManifest(manifest) {
+	var params = {};
+	if (!manifest) {
+		return params;
+	}
+	for (var i = 0; i < LEAF_PARAM_KEYS.length; i++) {
+		var key = LEAF_PARAM_KEYS[i];
+		if (manifest[key] != null && manifest[key] !== "") {
+			params[key] = manifest[key];
+		}
+	}
+	return params;
+}
+
+function sourceLeafFromManifest(manifest) {
+	if (!manifest) {
+		return "";
+	}
+	var stored = String(manifest.input_dataset_rel || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+	if (stored && stored.split("/").indexOf("..") < 0) {
+		return stored;
+	}
+	var input = String(manifest.input_dir || "").replace(/\\/g, "/");
+	var marker = "03_max/";
+	var idx = input.toLowerCase().lastIndexOf(marker);
+	if (idx < 0) {
+		return "";
+	}
+	var suffix = input.slice(idx + marker.length).replace(/^\/+|\/+$/g, "");
+	if (!suffix || suffix.split("/").indexOf("..") >= 0) {
+		return "";
+	}
+	return suffix;
+}
+
+function discoverQcScoutLeaves(predBase) {
+	var found = [];
+	function walk(dir, relParts, depth) {
+		if (!dir || depth > 4 || !fs.existsSync(dir)) {
+			return;
+		}
+		var entries;
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch (_err) {
+			return;
+		}
+		for (var i = 0; i < entries.length; i++) {
+			if (!entries[i].isDirectory()) {
+				continue;
+			}
+			var name = entries[i].name;
+			var nextRel = relParts.concat(name);
+			var full = path.join(dir, name);
+			if (name === "qc_scout") {
+				var kids;
+				try {
+					kids = fs.readdirSync(full, { withFileTypes: true });
+				} catch (_e2) {
+					kids = [];
+				}
+				var direct = false;
+				for (var k = 0; k < kids.length; k++) {
+					if (kids[k].isDirectory()) {
+						var child = path.join(full, kids[k].name);
+						if (pipelineRuns.hasRunMarkers(child, "detect")) {
+							found.push({
+								rel: nextRel.concat(kids[k].name).join("/"),
+								abs: child,
+							});
+						}
+					} else if (/^predictions_.*\.pkl$/i.test(kids[k].name)) {
+						direct = true;
+					}
+				}
+				if (direct) {
+					found.push({ rel: nextRel.join("/"), abs: full });
+				}
+				continue;
+			}
+			walk(full, nextRel, depth + 1);
+		}
+	}
+	walk(predBase, [], 0);
+	return found;
+}
+
+function collectIndexLeaves(bundleRoot, roles) {
+	var leaves = [];
+	for (var i = 0; i < OUTPUT_ROLES_FOR_INDEX.length; i++) {
+		var role = OUTPUT_ROLES_FOR_INDEX[i];
 		var rel = roles[role];
 		if (!rel) {
 			continue;
 		}
-		var dir = resolveIndexLeafDir(bundleRoot, roles, role, activeRuns);
-		roleDirs[role] = dir;
-		if (role === "predictions" || role === "slices") {
+		var base = path.isAbsolute(rel) ? rel : path.join(bundleRoot, rel);
+		var stepId = null;
+		var cfgKeys = Object.keys(pipelineRuns.RUN_STEP_CONFIG);
+		for (var c = 0; c < cfgKeys.length; c++) {
+			if (pipelineRuns.RUN_STEP_CONFIG[cfgKeys[c]].outputRole === role) {
+				stepId = cfgKeys[c];
+				break;
+			}
+		}
+		if (!stepId || !fs.existsSync(base)) {
 			continue;
 		}
-		if (FLAT_INDEX_ROLES.indexOf(role) >= 0 || role === "dapi") {
-			var flatImgs = listImageFiles(dir);
-			for (var df = 0; df < flatImgs.length; df++) {
-				pathsForMeta.push(flatImgs[df]);
+		var discovered = pipelineRuns.discoverOutputRuns(
+			base,
+			stepId,
+			pipelineRuns.discoveryMaxDepth(stepId),
+		);
+		for (var d = 0; d < discovered.length; d++) {
+			var item = discovered[d];
+			if (!item.rel) {
+				continue;
 			}
-		} else {
-			var imgs = listImageFiles(dir);
-			for (var f = 0; f < imgs.length; f++) {
-				pathsForMeta.push(imgs[f]);
+			var ident = leafIdentity(role, item.rel);
+			leaves.push({
+				role: role,
+				leafRel: item.rel,
+				abs: path.join(base, item.rel.split("/").join(path.sep)),
+				qcScout: false,
+				kind: ident.kind,
+				signalBranch: ident.signalBranch,
+				slug: ident.slug,
+				mtime: item.mtime || 0,
+			});
+		}
+		if (role === "predictions") {
+			var scouts = discoverQcScoutLeaves(base);
+			for (var s = 0; s < scouts.length; s++) {
+				var scoutIdent = leafIdentity(role, scouts[s].rel);
+				leaves.push({
+					role: role,
+					leafRel: scouts[s].rel,
+					abs: scouts[s].abs,
+					qcScout: true,
+					kind: "detect",
+					signalBranch: scoutIdent.signalBranch,
+					slug: scoutIdent.slug,
+					mtime: 0,
+				});
+			}
+		}
+	}
+	return leaves;
+}
+
+var OUTPUT_ROLES_FOR_INDEX = [
+	"max",
+	"slices",
+	"predictions",
+	"quantification",
+	"pkls",
+	"dual",
+];
+
+function filesInLeafDir(absDir, role) {
+	var out = [];
+	if (!absDir || !fs.existsSync(absDir)) {
+		return out;
+	}
+	var entries;
+	try {
+		entries = fs.readdirSync(absDir, { withFileTypes: true });
+	} catch (_err) {
+		return out;
+	}
+	for (var i = 0; i < entries.length; i++) {
+		if (!entries[i].isFile()) {
+			continue;
+		}
+		var name = entries[i].name;
+		var image =
+			role !== "slices" &&
+			(IMAGE_EXT_RE.test(name) || name.toLowerCase().indexOf(".ome.") !== -1);
+		var prediction = role === "predictions" && /^predictions_.*\.pkl$/i.test(name);
+		var annotation = role === "slices" && /\.pkl$/i.test(name) && !/^predictions_/i.test(name);
+		var intensity = role === "pkls" && /\.pkl$/i.test(name);
+		var countCsv = role === "quantification" && name === "count_results.csv";
+		var dual = role === "dual" && /_dual\.tif$/i.test(name);
+		if (image || prediction || annotation || intensity || countCsv || dual) {
+			out.push(path.join(absDir, name));
+		}
+	}
+	return out;
+}
+
+function sliceIdForIndexedFile(role, basename) {
+	if (role === "predictions") {
+		return sliceStemFromPredictionPklBasename(basename);
+	}
+	if (role === "slices" && /\.pkl$/i.test(basename)) {
+		return sliceStemFromAnnotationPklBasename(basename);
+	}
+	if (role === "quantification") {
+		return "";
+	}
+	return sliceIdFromFilename(basename);
+}
+
+function buildFileIndex(bundleRoot, roles, options) {
+	options = options || {};
+	roles = roles || {};
+	var leaves = collectIndexLeaves(bundleRoot, roles);
+	var flatRoles = ["dapi", "original_scans"];
+	var pathsForMeta = [];
+	var flatFiles = [];
+	for (var fr = 0; fr < flatRoles.length; fr++) {
+		var flatRole = flatRoles[fr];
+		var flatRel = roles[flatRole];
+		if (!flatRel) {
+			continue;
+		}
+		var flatBase = path.isAbsolute(flatRel) ? flatRel : path.join(bundleRoot, flatRel);
+		var flatImgs =
+			flatRole === "original_scans"
+				? listImageFilesRecursive(flatBase, 4)
+				: listImageFiles(flatBase);
+		for (var fi = 0; fi < flatImgs.length; fi++) {
+			pathsForMeta.push(flatImgs[fi]);
+			var parentRel = path
+				.relative(flatBase, path.dirname(flatImgs[fi]))
+				.split(path.sep)
+				.join("/");
+			if (parentRel === ".") {
+				parentRel = "";
+			}
+			flatFiles.push({
+				role: flatRole,
+				abs: flatImgs[fi],
+				leafRel: parentRel,
+			});
+		}
+	}
+	var previewDir = path.join(bundleRoot, "data", "counting", "_previews");
+	if (fs.existsSync(previewDir)) {
+		var previews = listImageFiles(previewDir);
+		for (var pv = 0; pv < previews.length; pv++) {
+			pathsForMeta.push(previews[pv]);
+			flatFiles.push({ role: "previews", abs: previews[pv], leafRel: "" });
+		}
+	}
+	for (var li = 0; li < leaves.length; li++) {
+		var leafFiles = filesInLeafDir(leaves[li].abs, leaves[li].role);
+		for (var lf = 0; lf < leafFiles.length; lf++) {
+			if (IMAGE_EXT_RE.test(leafFiles[lf]) || leafFiles[lf].toLowerCase().indexOf(".ome.") !== -1) {
+				pathsForMeta.push(leafFiles[lf]);
 			}
 		}
 	}
 	return fetchMetadataBatch(pathsForMeta, options.appRoot).then(function (metaMap) {
-		for (var ri = 0; ri < SCAN_ROLES.length; ri++) {
-			var scanRole = SCAN_ROLES[ri];
-			var scanDir = roleDirs[scanRole];
-			if (!scanDir) {
-				continue;
-			}
-			if (scanRole === "predictions") {
-				var predRows = listPredictionPklRecords(scanDir, bundleRoot, 0);
-				for (var pi = 0; pi < predRows.length; pi++) {
-					files.push(predRows[pi]);
+		var files = [];
+		var leafRecords = [];
+		for (var n = 0; n < leaves.length; n++) {
+			var leaf = leaves[n];
+			var manifest = readLeafManifest(leaf.abs);
+			var params = parametersFromManifest(manifest);
+			var sourceLeafRel = sourceLeafFromManifest(manifest);
+			var sectionFiles = {};
+			var absFiles = filesInLeafDir(leaf.abs, leaf.role);
+			for (var a = 0; a < absFiles.length; a++) {
+				var abs = absFiles[a];
+				var baseName = path.basename(abs);
+				var sliceId = sliceIdForIndexedFile(leaf.role, baseName);
+				var st;
+				try {
+					st = fs.statSync(abs);
+				} catch (_st) {
+					continue;
 				}
-				continue;
-			}
-			if (scanRole === "slices") {
-				var slicesFiles = listSlicesRoleFilePaths(scanDir, 0);
-				for (var pi = 0; pi < slicesFiles.pkls.length; pi++) {
-					var pklAbs = slicesFiles.pkls[pi];
-					var pklBase = path.basename(pklAbs);
-					var pklSliceId = sliceStemFromAnnotationPklBasename(pklBase);
-					var stPkl = fs.statSync(pklAbs);
-					var relPkl = path
-						.relative(bundleRoot, pklAbs)
-						.split(path.sep)
-						.join("/");
-					files.push({
-						sliceId: pklSliceId,
-						role: "slices",
-						relPath: relPkl,
-						basename: pklBase,
-						size: stPkl.size,
-						mtime: stPkl.mtime.toISOString(),
-						metadata: {},
-						orientation: {
-							aspectRatio: null,
-							landscape: null,
-							exifOrientation: null,
-						},
-						outputs: {
-							slices: {
-								relPath: relPkl,
-								exists: true,
-								mtime: stPkl.mtime.toISOString(),
-							},
-						},
-					});
-				}
-				continue;
-			}
-			var scannedOther = scanImageFiles(scanDir, { metadataMap: metaMap });
-			for (var sj = 0; sj < scannedOther.length; sj++) {
-				var rowOther = scannedOther[sj];
-				var sliceIdOther = sliceIdFromFilename(rowOther.basename);
-				var relPathOther = path
-					.relative(bundleRoot, rowOther.absPath)
-					.split(path.sep)
-					.join("/");
+				var relPath = path.relative(bundleRoot, abs).split(path.sep).join("/");
+				var meta = metaMap[abs] || {};
 				files.push({
-					sliceId: sliceIdOther,
-					role: scanRole,
-					relPath: relPathOther,
-					basename: rowOther.basename,
-					size: rowOther.size,
-					mtime: rowOther.mtime,
-					metadata: rowOther.metadata,
-					orientation: rowOther.orientation,
+					sliceId: sliceId,
+					role: leaf.role,
+					leafRel: leaf.leafRel,
+					relPath: relPath,
+					basename: baseName,
+					size: st.size,
+					mtime: st.mtime.toISOString(),
+					metadata: meta,
+					orientation: orientationFromMeta(meta),
 					outputs: {},
+					qcScout: !!leaf.qcScout,
 				});
+				if (sliceId && !sectionFiles[sliceId]) {
+					sectionFiles[sliceId] = relPath;
+				}
 			}
+			leafRecords.push({
+				role: leaf.role,
+				leafRel: leaf.leafRel,
+				kind: leaf.kind,
+				signalBranch: params.signal_branch || leaf.signalBranch,
+				slug: leaf.slug,
+				qcScout: !!leaf.qcScout,
+				parameters: params,
+				sourceLeafRel: sourceLeafRel,
+				files: sectionFiles,
+				mtime: leaf.mtime || 0,
+			});
 		}
-		var index = {
+		for (var ff = 0; ff < flatFiles.length; ff++) {
+			var flat = flatFiles[ff];
+			var flatSt;
+			try {
+				flatSt = fs.statSync(flat.abs);
+			} catch (_fst) {
+				continue;
+			}
+			var flatBaseName = path.basename(flat.abs);
+			var flatRelPath = path.relative(bundleRoot, flat.abs).split(path.sep).join("/");
+			var flatMeta = metaMap[flat.abs] || {};
+			files.push({
+				sliceId: sliceIdFromFilename(flatBaseName),
+				role: flat.role,
+				leafRel: flat.leafRel,
+				relPath: flatRelPath,
+				basename: flatBaseName,
+				size: flatSt.size,
+				mtime: flatSt.mtime.toISOString(),
+				metadata: flatMeta,
+				orientation: orientationFromMeta(flatMeta),
+				outputs: {},
+			});
+		}
+		return {
 			version: FILE_INDEX_VERSION,
 			generated_at: new Date().toISOString(),
 			bundle_root: bundleRoot,
 			files: files,
+			leaves: leafRecords,
 		};
-		return index;
 	});
 }
 
@@ -1030,6 +1369,262 @@ function writeRunSliceList(metaDirPath, sliceIds) {
 	return runPath;
 }
 
+function emptyIndex(bundleRoot) {
+	return {
+		version: FILE_INDEX_VERSION,
+		generated_at: new Date().toISOString(),
+		bundle_root: bundleRoot,
+		files: [],
+		leaves: [],
+	};
+}
+
+function loadOrEmptyIndex(bundleRoot, metaDirPath) {
+	var index = readFileIndex(bundleRoot, metaDirPath);
+	if (!index || !Array.isArray(index.files)) {
+		index = emptyIndex(bundleRoot);
+	}
+	if (!Array.isArray(index.leaves)) {
+		index.leaves = [];
+	}
+	index.version = FILE_INDEX_VERSION;
+	return index;
+}
+
+function indexedSliceOnLeaf(bundleRoot, role, leafRel, sliceId) {
+	if (!bundleRoot || !leafRel) {
+		return null;
+	}
+	var index = readFileIndex(bundleRoot, path.join(bundleRoot, ".masonjar"));
+	if (!index || index.version < 2 || !Array.isArray(index.files)) {
+		return null;
+	}
+	var wantLeaf = String(leafRel).replace(/\\/g, "/");
+	var wantId = String(sliceId || "");
+	for (var i = 0; i < index.files.length; i++) {
+		var row = index.files[i];
+		if (row.role !== role) {
+			continue;
+		}
+		if (String(row.leafRel || "").replace(/\\/g, "/") !== wantLeaf) {
+			continue;
+		}
+		if (row.sliceId === wantId) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function fileForSlice(index, leafRel, sliceId) {
+	if (!index || !leafRel || !sliceId) {
+		return null;
+	}
+	var wantLeaf = String(leafRel).replace(/\\/g, "/");
+	var wantId = String(sliceId);
+	var fallback = null;
+	for (var i = 0; i < (index.files || []).length; i++) {
+		var row = index.files[i];
+		if (String(row.leafRel || "").replace(/\\/g, "/") !== wantLeaf) {
+			continue;
+		}
+		if (String(row.sliceId || "") !== wantId) {
+			continue;
+		}
+		if (IMAGE_EXT_RE.test(row.basename || "") || String(row.basename || "").toLowerCase().indexOf(".ome.") !== -1) {
+			return row;
+		}
+		fallback = fallback || row;
+	}
+	return fallback;
+}
+
+function leafRecord(index, role, leafRel) {
+	if (!index || !leafRel) {
+		return null;
+	}
+	var want = String(leafRel).replace(/\\/g, "/");
+	var leaves = index.leaves || [];
+	for (var i = 0; i < leaves.length; i++) {
+		if (leaves[i].role === role && String(leaves[i].leafRel || "").replace(/\\/g, "/") === want) {
+			return leaves[i];
+		}
+	}
+	return null;
+}
+
+function saveIndex(bundleRoot, metaDirPath, index) {
+	index.version = FILE_INDEX_VERSION;
+	index.generated_at = new Date().toISOString();
+	index.bundle_root = bundleRoot;
+	writeFileIndex(bundleRoot, metaDirPath, index);
+	return index;
+}
+
+function recordLeaf(bundleRoot, metaDirPath, spec) {
+	spec = spec || {};
+	var absDir = spec.absDir;
+	var role = spec.role;
+	var leafRel = String(spec.leafRel || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+	if (!bundleRoot || !metaDirPath || !absDir || !role || !leafRel) {
+		throw new Error("recordLeaf needs a bundle, a leaf directory, a role, and a leaf rel");
+	}
+	if (!fs.existsSync(absDir)) {
+		throw new Error("recordLeaf directory is missing: " + absDir);
+	}
+	var index = loadOrEmptyIndex(bundleRoot, metaDirPath);
+	index.files = (index.files || []).filter(function (row) {
+		return !(row.role === role && String(row.leafRel || "").replace(/\\/g, "/") === leafRel);
+	});
+	index.leaves = (index.leaves || []).filter(function (row) {
+		return !(row.role === role && String(row.leafRel || "").replace(/\\/g, "/") === leafRel);
+	});
+	var manifest = readLeafManifest(absDir);
+	var ident = leafIdentity(role, leafRel);
+	var params = parametersFromManifest(manifest);
+	var sectionFiles = {};
+	var absFiles = filesInLeafDir(absDir, role);
+	for (var i = 0; i < absFiles.length; i++) {
+		var abs = absFiles[i];
+		var baseName = path.basename(abs);
+		var sliceId = sliceIdForIndexedFile(role, baseName);
+		var st = fs.statSync(abs);
+		var relPath = path.relative(bundleRoot, abs).split(path.sep).join("/");
+		index.files.push({
+			sliceId: sliceId,
+			role: role,
+			leafRel: leafRel,
+			relPath: relPath,
+			basename: baseName,
+			size: st.size,
+			mtime: st.mtime.toISOString(),
+			metadata: {},
+			orientation: { aspectRatio: null, landscape: null, exifOrientation: null },
+			outputs: {},
+			qcScout: !!spec.qcScout,
+		});
+		if (sliceId && !sectionFiles[sliceId]) {
+			sectionFiles[sliceId] = relPath;
+		}
+	}
+	index.leaves.push({
+		role: role,
+		leafRel: leafRel,
+		kind: ident.kind,
+		signalBranch: (params && params.signal_branch) || ident.signalBranch,
+		slug: ident.slug,
+		qcScout: !!spec.qcScout,
+		parameters: params,
+		sourceLeafRel: sourceLeafFromManifest(manifest),
+		files: sectionFiles,
+		mtime: Date.now(),
+	});
+	return saveIndex(bundleRoot, metaDirPath, index);
+}
+
+function updateFiles(bundleRoot, metaDirPath, absPaths) {
+	var index = loadOrEmptyIndex(bundleRoot, metaDirPath);
+	var byRel = {};
+	for (var i = 0; i < index.files.length; i++) {
+		byRel[String(index.files[i].relPath || "").replace(/\\/g, "/")] = index.files[i];
+	}
+	var paths = absPaths || [];
+	for (var p = 0; p < paths.length; p++) {
+		var abs = paths[p];
+		if (!abs || !fs.existsSync(abs)) {
+			continue;
+		}
+		var relPath = path.relative(bundleRoot, abs).split(path.sep).join("/");
+		var st = fs.statSync(abs);
+		var row = byRel[relPath];
+		if (row) {
+			row.size = st.size;
+			row.mtime = st.mtime.toISOString();
+			continue;
+		}
+		index.files.push({
+			sliceId: sliceIdFromFilename(path.basename(abs)),
+			role: roleForBundleRel(relPath),
+			leafRel: leafRelForBundleRel(relPath),
+			relPath: relPath,
+			basename: path.basename(abs),
+			size: st.size,
+			mtime: st.mtime.toISOString(),
+			metadata: {},
+			orientation: { aspectRatio: null, landscape: null, exifOrientation: null },
+			outputs: {},
+		});
+	}
+	return saveIndex(bundleRoot, metaDirPath, index);
+}
+
+function roleForBundleRel(relPath) {
+	var rel = String(relPath || "").replace(/\\/g, "/");
+	if (rel.indexOf("data/counting/03_max/") === 0) {
+		return "max";
+	}
+	if (rel.indexOf("data/counting/05_predictions/") === 0) {
+		return "predictions";
+	}
+	if (rel.indexOf("data/counting/01_slices/") === 0) {
+		return "slices";
+	}
+	if (rel.indexOf("data/counting/00_dapi/") === 0) {
+		return "dapi";
+	}
+	if (rel.indexOf("data/original_scans/") === 0) {
+		return "original_scans";
+	}
+	if (rel.indexOf("data/counting/_previews/") === 0) {
+		return "previews";
+	}
+	if (rel.indexOf("data/counting/06_quantification/") === 0) {
+		return "quantification";
+	}
+	if (rel.indexOf("data/counting/07_pkls/") === 0) {
+		return "pkls";
+	}
+	if (rel.indexOf("data/counting/08_dual/") === 0) {
+		return "dual";
+	}
+	return "";
+}
+
+function leafRelForBundleRel(relPath) {
+	var rel = String(relPath || "").replace(/\\/g, "/");
+	var role = roleForBundleRel(rel);
+	var bases = {
+		max: "data/counting/03_max/",
+		predictions: "data/counting/05_predictions/",
+		slices: "data/counting/01_slices/",
+		dapi: "data/counting/00_dapi/",
+		original_scans: "data/original_scans/",
+		previews: "data/counting/_previews/",
+		quantification: "data/counting/06_quantification/",
+		pkls: "data/counting/07_pkls/",
+		dual: "data/counting/08_dual/",
+	};
+	var base = bases[role];
+	if (!base || rel.indexOf(base) !== 0) {
+		return "";
+	}
+	var rest = rel.slice(base.length);
+	var slash = rest.lastIndexOf("/");
+	return slash >= 0 ? rest.slice(0, slash) : "";
+}
+
+function removeLeaf(bundleRoot, metaDirPath, role, leafRel) {
+	var want = String(leafRel || "").replace(/\\/g, "/");
+	var index = loadOrEmptyIndex(bundleRoot, metaDirPath);
+	index.files = (index.files || []).filter(function (row) {
+		return !(row.role === role && String(row.leafRel || "").replace(/\\/g, "/") === want);
+	});
+	index.leaves = (index.leaves || []).filter(function (row) {
+		return !(row.role === role && String(row.leafRel || "").replace(/\\/g, "/") === want);
+	});
+	return saveIndex(bundleRoot, metaDirPath, index);
+}
+
 module.exports = {
 	FILE_INDEX_VERSION: FILE_INDEX_VERSION,
 	MANIFEST_V2: MANIFEST_V2,
@@ -1059,4 +1654,10 @@ module.exports = {
 	resolveIndexLeafDir: resolveIndexLeafDir,
 	resolveOutputLeafDir: resolveOutputLeafDir,
 	listPredictionPklRecords: listPredictionPklRecords,
+	recordLeaf: recordLeaf,
+	updateFiles: updateFiles,
+	removeLeaf: removeLeaf,
+	fileForSlice: fileForSlice,
+	leafRecord: leafRecord,
+	sourceLeafFromManifest: sourceLeafFromManifest,
 };

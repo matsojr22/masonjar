@@ -114,9 +114,16 @@ function testActiveRunScoping() {
 			activeRuns: activeRuns,
 		})
 		.then(function (index) {
-			var report = fileIndex.computeMatchReport(index, ["dapi", "slices"]);
+			var report = fileIndex.computeMatchReport(index, ["dapi", "slices"], {
+				activeRuns: activeRuns,
+			});
 			assert.deepStrictEqual(report.matchedSliceIds, ["M528_s027"]);
 			assert.ok(report.matchedSliceIds.indexOf("M528_s028") < 0);
+			assert.ok(
+				index.files.some(function (row) {
+					return row.leafRel === "align/run_b" && row.sliceId === "M528_s028";
+				}),
+			);
 			helpers.rmDir(bundle);
 		});
 }
@@ -519,6 +526,153 @@ function testRemoveRunForRoleClearsActive() {
 	helpers.rmDir(bundle);
 }
 
+function testMigrateRewritesStoredPointers() {
+	var bundle = helpers.tmpDir("mj-orphan-ptr-");
+	try {
+		fs.mkdirSync(path.join(bundle, ".masonjar"), { recursive: true });
+		var roleBase = path.join(bundle, "data", "counting", "03_max");
+		var somataMax = path.join(roleBase, "somata", "max", "runMax");
+		fs.mkdirSync(somataMax, { recursive: true });
+		fs.writeFileSync(path.join(somataMax, "s001.tif"), "max");
+		var orphan = path.join(roleBase, "sharpen", "runEq");
+		fs.mkdirSync(orphan, { recursive: true });
+		fs.writeFileSync(path.join(orphan, "s001.tif"), "sharp");
+		fs.writeFileSync(
+			path.join(orphan, "run_manifest.json"),
+			JSON.stringify({
+				output_dir: path.join(roleBase, "sharpen", "runEq"),
+				signal_branch: "",
+			}),
+		);
+		var pred = path.join(
+			bundle,
+			"data",
+			"counting",
+			"05_predictions",
+			"somata",
+			"detRun",
+		);
+		fs.mkdirSync(pred, { recursive: true });
+		var oldInput = path.join(roleBase, "sharpen", "runEq");
+		fs.writeFileSync(
+			path.join(pred, "run_manifest.json"),
+			JSON.stringify({
+				input_dir: oldInput,
+				output_dir: pred,
+			}),
+		);
+		var other = path.join(roleBase, "somata", "max", "runMax");
+		fs.writeFileSync(
+			path.join(bundle, "data", "counting", "05_predictions", "somata", "other.json"),
+			"{}",
+		);
+		var processing = {
+			active_runs: { max: "sharpen/runEq" },
+			detect_qc: { signal_dataset_rel: "sharpen/runEq" },
+		};
+		var settings = {
+			czi_import: {
+				max_runs: { signal_somata: "somata/max/runMax" },
+				primary_signal_role: "signal_somata",
+			},
+		};
+		var result = pipelineRuns.migrateOrphanMaxFamilyLeaves(
+			bundle,
+			pipelineRuns.CANONICAL_ROLES,
+			processing,
+			settings,
+		);
+		assert.strictEqual(result.active_runs.max, "somata/sharpen/runEq");
+		assert.strictEqual(processing.detect_qc.signal_dataset_rel, "somata/sharpen/runEq");
+		assert.strictEqual(settings.czi_import.max_runs.signal_somata, "somata/max/runMax");
+		var predManifest = JSON.parse(fs.readFileSync(path.join(pred, "run_manifest.json"), "utf8"));
+		assert.ok(String(predManifest.input_dir).indexOf("somata") >= 0);
+		assert.ok(String(predManifest.input_dir).indexOf("sharpen") >= 0);
+		assert.ok(String(predManifest.input_dir).indexOf("runEq") >= 0);
+		assert.ok(!fs.existsSync(orphan));
+		var movedManifest = JSON.parse(
+			fs.readFileSync(
+				path.join(roleBase, "somata", "sharpen", "runEq", "run_manifest.json"),
+				"utf8",
+			),
+		);
+		assert.strictEqual(movedManifest.signal_branch, "somata");
+		assert.ok(String(movedManifest.output_dir).indexOf(path.join("somata", "sharpen", "runEq")) >= 0);
+	} finally {
+		helpers.rmDir(bundle);
+	}
+}
+
+function testMigrateRepairsAlreadyMovedPointers() {
+	var bundle = helpers.tmpDir("mj-orphan-already-");
+	try {
+		fs.mkdirSync(path.join(bundle, ".masonjar"), { recursive: true });
+		var roleBase = path.join(bundle, "data", "counting", "03_max");
+		var dest = path.join(roleBase, "somata", "sharpen", "runEq");
+		fs.mkdirSync(dest, { recursive: true });
+		fs.writeFileSync(path.join(dest, "s001.tif"), "sharp");
+		fs.mkdirSync(path.join(roleBase, "somata", "max", "runMax"), { recursive: true });
+		fs.writeFileSync(path.join(roleBase, "somata", "max", "runMax", "s001.tif"), "max");
+		var pred = path.join(bundle, "data", "counting", "05_predictions", "somata", "det");
+		fs.mkdirSync(pred, { recursive: true });
+		fs.writeFileSync(
+			path.join(pred, "run_manifest.json"),
+			JSON.stringify({ input_dir: path.join(roleBase, "sharpen", "runEq"), output_dir: pred }),
+		);
+		var processing = {
+			active_runs: { max: "somata/sharpen/runEq" },
+			detect_qc: { signal_dataset_rel: "sharpen/runEq" },
+		};
+		var first = pipelineRuns.migrateOrphanMaxFamilyLeaves(
+			bundle,
+			pipelineRuns.CANONICAL_ROLES,
+			processing,
+			{},
+		);
+		assert.strictEqual(first.moved.length, 0);
+		assert.strictEqual(processing.detect_qc.signal_dataset_rel, "somata/sharpen/runEq");
+		assert.ok(fs.existsSync(dest));
+		var again = pipelineRuns.migrateOrphanMaxFamilyLeaves(
+			bundle,
+			pipelineRuns.CANONICAL_ROLES,
+			processing,
+			{},
+		);
+		assert.ok(!again.changed);
+	} finally {
+		helpers.rmDir(bundle);
+	}
+}
+
+function testMigrateAmbiguousBranchRewritesNothing() {
+	var bundle = helpers.tmpDir("mj-orphan-ambig-");
+	try {
+		var roleBase = path.join(bundle, "data", "counting", "03_max");
+		fs.mkdirSync(path.join(roleBase, "somata", "max", "a"), { recursive: true });
+		fs.writeFileSync(path.join(roleBase, "somata", "max", "a", "s.tif"), "a");
+		fs.mkdirSync(path.join(roleBase, "axons", "max", "b"), { recursive: true });
+		fs.writeFileSync(path.join(roleBase, "axons", "max", "b", "s.tif"), "b");
+		var orphan = path.join(roleBase, "sharpen", "runEq");
+		fs.mkdirSync(orphan, { recursive: true });
+		fs.writeFileSync(path.join(orphan, "s.tif"), "s");
+		var processing = {
+			active_runs: { max: "sharpen/runEq" },
+			detect_qc: { signal_dataset_rel: "sharpen/runEq" },
+		};
+		var result = pipelineRuns.migrateOrphanMaxFamilyLeaves(
+			bundle,
+			pipelineRuns.CANONICAL_ROLES,
+			processing,
+			{},
+		);
+		assert.ok(!result.changed);
+		assert.strictEqual(processing.detect_qc.signal_dataset_rel, "sharpen/runEq");
+		assert.ok(fs.existsSync(orphan));
+	} finally {
+		helpers.rmDir(bundle);
+	}
+}
+
 var tests = [
 	testBuildRunSlugStability,
 	testBuildRunSlugAlignAuto,
@@ -543,6 +697,9 @@ var tests = [
 	testCollectRunDeleteTargetsDoubled,
 	testRemoveRunForRoleClearsActive,
 	testMigrateOrphanMaxFamilyLeaves,
+	testMigrateRewritesStoredPointers,
+	testMigrateRepairsAlreadyMovedPointers,
+	testMigrateAmbiguousBranchRewritesNothing,
 ];
 
 function testMigrateOrphanMaxFamilyLeaves() {
